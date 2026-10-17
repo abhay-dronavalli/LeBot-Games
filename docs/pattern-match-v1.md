@@ -2,14 +2,19 @@
 
 Roblox game for the SwampHacks project. Operator at the leader arm moves real blocks on a printed grid. Roblox player sees the target pattern and the live table, and calls out moves by voice. The operator never sees the Roblox screen.
 
-Depends on the core only through `StateStore.blocks` (fields from plan.md: `id, color, x, y, level, held, visible, zone`) and `Events.fire(name, intensity, duration)`.
+Depends on the core only through `StateStore.blocks` (fields from plan.md: `id, color, x, y, z, yaw, level, held, visible, zone`) and `Events.fire(name, intensity, duration)`.
 
 ## 1. Grid
 
-- 4 columns x 3 rows. Columns A-D run left to right as the operator sees them from the follower (white) arm. Rows 1-3 run from the arm toward the tripod. Row 1 is nearest the arm.
+- Matches the printed grid sheet: 3 rows x 4 columns. Rows are letters A-C: row A is on the arm side (nearest tags 0 and 1), row C toward the tripod. Columns are numbers 1-4: column 1 nearest tag 0, column 4 nearest tag 1. Cells are named letter + number, "A1".."C4".
+- Table frame (plan.md): cm, x from tag 0 toward tag 1 (along the columns), y from tag 0 toward tag 3 (along the rows), z up. Cell A1's outer corner is at `Config.gridOriginCm` = (2.540, 2.223); cells are `Config.cellSizeCm` = 5.715 cm square.
 - All of this lives in `Config`, so size and origin can change without touching game code.
-- Cell lookup: block `(x, y)` in cm -> `(col, row)` using `Config.gridOriginCm`, `Config.cellSizeCm`. A block counts as in a cell only if it sits inside the middle 70% of that cell. Anything else is "off grid" and ignored.
-- `level` must be 0. Held blocks (`held == true`) are ignored.
+- Cell lookup: block `(x, y)` in cm -> `(row, col)` using `Config.gridOriginCm`, `Config.cellSizeCm`. A block counts as in a cell only if it sits inside the middle 70% of that cell. Anything else is "off grid" and ignored.
+- `Config.flipX = true` mirrors columns (1 <-> 4) and `Config.flipY = true` mirrors rows (A <-> C) in the cell lookup, in case the sheet or the tags turn out reversed at the venue. Both default to false. The boards don't change.
+- Held blocks (`held == true`) are ignored. Blocks in an ignored zone (`Config.ignoreZones`, default the tray) are ignored. `visible == false` blocks still count (the core keeps tracking a hidden marker at its last pose).
+- A block sitting on the table (`level == 0`) is the block that cell holds. Stack rule: a block with `level > 0` whose `(x, y)` falls in a cell counts as an extra block for that cell, so a stack can never clear a round.
+- Doubles rule: if 2+ counted `level == 0` blocks land in the same cell, that cell can never count as correct. `Target.compare` reports it in a `doubled` list and returns `clear = false`.
+- Roblox boards: row A is the edge where the arm twin sits, and column 1 is on the same side as tag 0. Seen from the row A edge, a board is the table as the operator sees it, not a mirror image.
 
 ## 2. Colors
 
@@ -76,18 +81,21 @@ Lives in `ReplicatedStorage.ArmTwin` so every game can clone it. Six parts joine
 ```
 Workspace.PatternCabinet
   Island, Entry (ProximityPrompt "Play Pattern Match")
-  TargetBoard (Model): Base, Cells A1..D3
-  LiveBoard (Model): Base, Cells A1..D3, Blocks (Folder)
+  TargetBoard (Model): Base, Cells A1..C4
+  LiveBoard (Model): Base, Cells A1..C4, Blocks (Folder)
   ArmTwin (clone)
   Sign (SurfaceGui): mode, round, timer, score, event banner
 ReplicatedStorage
   PatternMatch.Config (ModuleScript)
   PatternMatch.Grid (ModuleScript)        cm -> cell, cell -> world position
   PatternMatch.Target (ModuleScript)      generate, compare
+  PatternMatch.LiveBoard (ModuleScript)   pooled block parts on the LiveBoard
+  PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Round, Intermission, Results
+  PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
   ArmTwin (Model), TwinDriver (ModuleScript)
   Remotes: PatternUI (server -> client), PatternPick (client -> server)
 ServerScriptService
-  PatternMode (Script)                     state machine: ModeSelect, Round, Intermission, Results
+  PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
   PatternEvents (ModuleScript)             scheduler + the event implementations
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
@@ -98,10 +106,15 @@ StarterGui
 
 ```lua
 return {
-  gridCols = 4, gridRows = 3,
-  gridOriginCm = Vector2.new(0, 0),   -- set with core guy: A1 corner nearest the arm, in table cm
-  cellSizeCm = 6,                      -- set after measuring the printed grid
-  cellTolerance = 0.7,
+  useFakeState = true,                 -- Core.StateStore stand-in invents blocks; set false once the real core is in
+  gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)
+  gridOriginCm = Vector2.new(2.540, 2.223), -- table cm of cell A1's outer corner (the corner nearest tag 0)
+  cellSizeCm = 5.715,                  -- measured on the printed sheet
+  flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
+  flipY = false,                       -- true mirrors rows (A <-> C)
+  cellTolerance = 0.7,                 -- a block counts only inside the middle 70% of a cell
+                                       -- stacked blocks (level > 0) count as extra; 2+ table blocks in a cell = doubled
+  ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
   colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
              orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
   blocksPerRound = { 3, 4, 5 },

@@ -1,7 +1,8 @@
 -- ReplicatedStorage.PatternMatch.Target
 -- Random target patterns and checking the live grid against them.
 --
--- A target and a live grid are both maps of cell -> color name, e.g. { A1 = "red", C2 = "teal" }.
+-- A target maps cell -> color name, e.g. { A1 = "red", C2 = "teal" }.
+-- A live grid comes from Grid.liveGridFrom: cell -> { colors = {...}, stacked = n }.
 -- vanished is a set of cells, e.g. { B3 = true }.
 
 local Config = require(script.Parent.Config)
@@ -47,33 +48,37 @@ function Target.generate(n, rng)
 	return target
 end
 
--- Returns { clear, missing, wrong, extra, blocked }, each list a sorted array of cells:
---   missing: target cell with no block
---   wrong:   target cell with a block of the wrong color
---   extra:   non-target cell with a block
---   blocked: vanished cell with a block (reported here instead of in extra)
--- clear is true only when all four are empty. Holding it for Config.holdToClear is the caller's job.
+-- Returns { clear, missing, wrong, extra, blocked, doubled }, each list a sorted array of cells:
+--   missing: target cell with no block on the table
+--   wrong:   target cell whose block is the wrong color
+--   extra:   block on a non-target cell, or a stacked block (level > 0) on any cell
+--   blocked: any block on a vanished cell (reported here instead of the lists above)
+--   doubled: 2+ blocks on the table in one cell; that cell can never count as correct
+-- clear is true only when all lists are empty. Holding it for Config.holdToClear is the caller's job.
 function Target.compare(target, liveGrid, vanished)
 	vanished = vanished or {}
-	local missing, wrong, extra, blocked = {}, {}, {}, {}
+	local missing, wrong, extra, blocked, doubled = {}, {}, {}, {}, {}
 
-	for cell, want in pairs(target) do
-		local got = liveGrid[cell]
-		if vanished[cell] and got ~= nil then
+	for cell, entry in pairs(liveGrid) do
+		if vanished[cell] then
 			blocked[cell] = true
-		elseif got == nil then
-			missing[cell] = true
-		elseif got ~= want then
-			wrong[cell] = true
+		else
+			if #entry.colors >= 2 then
+				doubled[cell] = true
+			end
+			if entry.stacked > 0 or target[cell] == nil then
+				extra[cell] = true
+			end
 		end
 	end
 
-	for cell in pairs(liveGrid) do
-		if target[cell] == nil then
-			if vanished[cell] then
-				blocked[cell] = true
-			else
-				extra[cell] = true
+	for cell, want in pairs(target) do
+		local entry = liveGrid[cell]
+		if not blocked[cell] and not doubled[cell] then
+			if entry == nil or #entry.colors == 0 then
+				missing[cell] = true
+			elseif entry.colors[1] ~= want then
+				wrong[cell] = true
 			end
 		end
 	end
@@ -83,9 +88,20 @@ function Target.compare(target, liveGrid, vanished)
 		wrong = sortedKeys(wrong),
 		extra = sortedKeys(extra),
 		blocked = sortedKeys(blocked),
+		doubled = sortedKeys(doubled),
 	}
-	result.clear = #result.missing == 0 and #result.wrong == 0 and #result.extra == 0 and #result.blocked == 0
+	result.clear = #result.missing == 0 and #result.wrong == 0 and #result.extra == 0
+		and #result.blocked == 0 and #result.doubled == 0
 	return result
+end
+
+-- One-line summary of a compare result, for logs.
+function Target.describe(result)
+	local parts = { "clear=" .. tostring(result.clear) }
+	for _, key in ipairs({ "missing", "wrong", "extra", "blocked", "doubled" }) do
+		table.insert(parts, key .. "={" .. table.concat(result[key], ",") .. "}")
+	end
+	return table.concat(parts, " ")
 end
 
 return Target

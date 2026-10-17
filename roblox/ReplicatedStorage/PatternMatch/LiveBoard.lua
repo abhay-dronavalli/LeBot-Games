@@ -1,7 +1,8 @@
 -- ReplicatedStorage.PatternMatch.LiveBoard
--- Draws the real table on a board: one colored block Part on each occupied cell.
--- The board Model needs cell Parts named A1..D3 and a Blocks folder (made here if missing).
+-- Draws the real table on a board: one colored block Part on each cell with a block on the table.
+-- The board Model needs cell Parts named A1..C4 and a Blocks folder (made here if missing).
 -- Block parts are pooled, one per cell, created once and shown or hidden with Transparency.
+-- Stacked or doubled blocks don't get parts of their own yet; Target.compare still reports them.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
@@ -11,19 +12,6 @@ local UNKNOWN_COLOR = Color3.fromRGB(255, 255, 255) -- a color name missing from
 
 local LiveBoard = {}
 LiveBoard.__index = LiveBoard
-
--- StateStore blocks -> { [cell] = colorName }, counting only blocks Grid.cellOfBlock accepts.
--- If two counted blocks land in one cell, the later one wins.
-function LiveBoard.liveGridFrom(blocks)
-	local liveGrid = {}
-	for _, block in ipairs(blocks) do
-		local cell = Grid.cellOfBlock(block)
-		if cell then
-			liveGrid[cell] = block.color
-		end
-	end
-	return liveGrid
-end
 
 function LiveBoard.new(boardModel)
 	local self = setmetatable({ board = boardModel, pool = {} }, LiveBoard)
@@ -58,11 +46,12 @@ function LiveBoard.new(boardModel)
 	return self
 end
 
--- Shows the given StateStore blocks and returns the live grid it drew.
+-- Shows the given StateStore blocks and returns the live grid (Grid.liveGridFrom) it drew.
 function LiveBoard:render(blocks)
-	local liveGrid = LiveBoard.liveGridFrom(blocks)
+	local liveGrid = Grid.liveGridFrom(blocks)
 	for cell, part in pairs(self.pool) do
-		local colorName = liveGrid[cell]
+		local entry = liveGrid[cell]
+		local colorName = entry and entry.colors[1]
 		if colorName then
 			local color = Config.colors[colorName] or UNKNOWN_COLOR
 			if part.Color ~= color then

@@ -3,10 +3,13 @@
 
 return {
 	useFakeState = true,                 -- Core.StateStore stand-in invents blocks; set false once the real core is in
-	gridCols = 4, gridRows = 3,
-	gridOriginCm = Vector2.new(0, 0),   -- set with core guy: A1 corner nearest the arm, in table cm
-	cellSizeCm = 6,                      -- set after measuring the printed grid
+	gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)
+	gridOriginCm = Vector2.new(2.540, 2.223), -- table cm of cell A1's outer corner (the corner nearest tag 0)
+	cellSizeCm = 5.715,                  -- measured on the printed sheet
+	flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
+	flipY = false,                       -- true mirrors rows (A <-> C)
 	cellTolerance = 0.7,
+	ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
 	-- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
 	colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
 	           orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
@@ -15,6 +18,9 @@ return {
 	holdToClear = 1,
 	intermissionSeconds = 10,
 	modeSelectSeconds = 15,
+	resultsSeconds = 10,
+	debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
+	debugFastTimers = false,             -- testing: every game timer runs 4x faster
 	hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },
 	easy = { eventEvery = 45 },
 	vanishSeconds = 6, vanishCount = { 1, 2 },

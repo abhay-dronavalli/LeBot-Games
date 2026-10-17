@@ -1,4 +1,5 @@
--- Edit-time build script for Workspace.PatternCabinet (placeholder floor, TargetBoard, LiveBoard).
+-- Edit-time build script for Workspace.PatternCabinet (placeholder floor, Entry pad with the
+-- "Play Pattern Match" prompt, TargetBoard, LiveBoard).
 -- Not part of the game: run it once in Studio's command bar (or via the MCP execute_luau tool).
 -- Refuses to run if PatternCabinet already exists. Undo with Ctrl+Z.
 
@@ -65,6 +66,18 @@ local floor = part("Floor", Vector3.new(44, 1, 26), CFrame.new(center + Vector3.
 	Color3.fromRGB(150, 140, 120), cabinet)
 local floorTop = floor.Position.Y + floor.Size.Y / 2
 
+-- Entry pad between the spawn and the boards. ServerScriptService.PatternMode listens to its prompt.
+local entry = part("Entry", Vector3.new(4, 0.4, 4), CFrame.new(center.X, floorTop + 0.2, center.Z + 10),
+	Color3.fromRGB(70, 170, 90), cabinet)
+local prompt = Instance.new("ProximityPrompt")
+prompt.Name = "PlayPrompt"
+prompt.ActionText = "Play Pattern Match"
+prompt.ObjectText = "Pattern Match"
+prompt.HoldDuration = 0
+prompt.MaxActivationDistance = 8
+prompt.RequiresLineOfSight = false
+prompt.Parent = entry
+
 for i, spec in ipairs({ { "TargetBoard", "TARGET" }, { "LiveBoard", "LIVE" } }) do
 	local board = Instance.new("Model")
 	board.Name = spec[1]
@@ -75,12 +88,13 @@ for i, spec in ipairs({ { "TargetBoard", "TARGET" }, { "LiveBoard", "LIVE" } }) 
 		CFrame.new(x, floorTop + STAND_HEIGHT / 2, center.Z), Color3.fromRGB(90, 90, 90), board)
 	local base = part("Base", baseSize, CFrame.new(x, floorTop + STAND_HEIGHT + baseSize.Y / 2, center.Z),
 		Color3.fromRGB(45, 45, 45), board)
-	-- Base's +Z face is the row 1 edge (nearest the arm), facing the spawn.
-	label(base, Enum.NormalId.Back, spec[2] .. "   (row 1 edge)", { TextColor3 = Color3.new(1, 1, 1) })
+	-- Base's +Z face is the row A edge (arm side, where the arm twin will sit), facing the spawn.
+	-- Column 1 (tag 0 side) is at the -X end. Grid.worldPositionOf owns this layout.
+	label(base, Enum.NormalId.Back, spec[2] .. "   (row A edge, arm side)", { TextColor3 = Color3.new(1, 1, 1) })
 
 	for _, cell in ipairs(Grid.allCells()) do
 		local pos = Grid.worldPositionOf(cell, base)
-		-- Turned -90 degrees so the Top-face label reads upright from the row 1 edge.
+		-- Turned -90 degrees so the Top-face label reads upright from the row A edge.
 		local cframe = (base.CFrame.Rotation + pos + base.CFrame.UpVector * (CELL_THICKNESS / 2))
 			* CFrame.Angles(0, -math.pi / 2, 0)
 		local tile = part(cell, Vector3.new(CELL_PITCH - CELL_GAP, CELL_THICKNESS, CELL_PITCH - CELL_GAP),

@@ -1,21 +1,23 @@
 -- ReplicatedStorage.PatternMatch.Grid
 -- Table cm -> grid cell, and grid cell -> world position on a board model.
 --
--- Cell names are column letter + row number: "A1".."D3".
--- Columns A-D run left to right as the operator sees them from the follower arm (+x in table cm).
--- Rows 1-3 run from the arm toward the tripod (+y in table cm). Row 1 is nearest the arm.
+-- Matches the printed grid sheet: 3 rows x 4 columns, cells "A1".."C4" (letter = row, number = column).
+-- Table frame (plan.md): cm, x from tag 0 toward tag 1 (along the columns), y from tag 0 toward tag 3
+-- (along the rows), z up. Row A is on the arm side (nearest tags 0 and 1), row C toward the tripod.
+-- Column 1 is nearest tag 0, column 4 nearest tag 1.
 
 local Config = require(script.Parent.Config)
 
-local LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local ROW_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 local Grid = {}
 
-function Grid.cellName(col, row)
-	return string.sub(LETTERS, col, col) .. tostring(row)
+-- (row, col) -> "B3"
+function Grid.cellName(row, col)
+	return string.sub(ROW_LETTERS, row, row) .. tostring(col)
 end
 
--- "B3" -> 2, 3. Returns nil for anything that isn't a cell on this grid.
+-- "B3" -> 2, 3 (row, col). Returns nil for anything that isn't a cell on this grid.
 function Grid.parseCell(cell)
 	if type(cell) ~= "string" then
 		return nil
@@ -24,27 +26,28 @@ function Grid.parseCell(cell)
 	if not letter then
 		return nil
 	end
-	local col = string.find(LETTERS, letter, 1, true)
-	local row = tonumber(digits)
-	if col > Config.gridCols or row < 1 or row > Config.gridRows then
+	local row = string.find(ROW_LETTERS, letter, 1, true)
+	local col = tonumber(digits)
+	if row > Config.gridRows or col < 1 or col > Config.gridCols then
 		return nil
 	end
-	return col, row
+	return row, col
 end
 
--- Every cell, column-major: A1, A2, A3, B1, ...
+-- Every cell, row by row: A1, A2, A3, A4, B1, ...
 function Grid.allCells()
 	local cells = {}
-	for col = 1, Config.gridCols do
-		for row = 1, Config.gridRows do
-			table.insert(cells, Grid.cellName(col, row))
+	for row = 1, Config.gridRows do
+		for col = 1, Config.gridCols do
+			table.insert(cells, Grid.cellName(row, col))
 		end
 	end
 	return cells
 end
 
--- Table position in cm -> "A1".."D3", or nil if off grid.
+-- Table position in cm -> "A1".."C4", or nil if off grid.
 -- A position only counts if it sits inside the middle cellTolerance (70%) of its cell.
+-- Config.flipX mirrors columns (1 <-> 4) and Config.flipY mirrors rows (A <-> C).
 function Grid.cellOf(xCm, yCm)
 	local u = (xCm - Config.gridOriginCm.X) / Config.cellSizeCm
 	local v = (yCm - Config.gridOriginCm.Y) / Config.cellSizeCm
@@ -60,24 +63,57 @@ function Grid.cellOf(xCm, yCm)
 	if fu < margin or fu > 1 - margin or fv < margin or fv > 1 - margin then
 		return nil
 	end
-	return Grid.cellName(col, row)
+	if Config.flipX then
+		col = Config.gridCols + 1 - col
+	end
+	if Config.flipY then
+		row = Config.gridRows + 1 - row
+	end
+	return Grid.cellName(row, col)
 end
 
--- StateStore block -> cell, or nil if it doesn't count (held, stacked, not visible, off grid).
+-- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, in an ignored zone
+-- such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps them
+-- apart. visible == false still counts: the core keeps tracking a block at its last pose while its
+-- marker is hidden (under a stack, under the arm).
 function Grid.cellOfBlock(block)
-	if block.held == true or block.visible == false or block.level ~= 0 then
+	if block.held == true or Config.ignoreZones[block.zone] then
 		return nil
 	end
 	return Grid.cellOf(block.x, block.y)
 end
 
+-- StateStore blocks -> live grid: { [cell] = { colors = {...}, stacked = n } } for every cell holding
+-- at least one counted block. colors lists the blocks sitting on the table (level 0), so it has 2+
+-- entries when blocks share a cell. stacked counts blocks on top of others (level > 0).
+function Grid.liveGridFrom(blocks)
+	local liveGrid = {}
+	for _, block in ipairs(blocks) do
+		local cell = Grid.cellOfBlock(block)
+		if cell then
+			local entry = liveGrid[cell]
+			if not entry then
+				entry = { colors = {}, stacked = 0 }
+				liveGrid[cell] = entry
+			end
+			if (block.level or 0) > 0 then
+				entry.stacked += 1
+			else
+				table.insert(entry.colors, block.color)
+			end
+		end
+	end
+	return liveGrid
+end
+
 -- Cell -> world position at the center of that cell on top of the board's Base part.
 -- boardModel is a board Model with a Base part, or the Base part itself.
--- Columns run along the Base's local +X, rows along its local -Z (row 1 at the +Z edge),
--- so the result follows the board when it is moved or spun.
+-- Columns 1-4 run along the Base's local +X (column 1, the tag 0 side, at the -X edge). Rows A-C run
+-- along its local -Z (row A, the arm side, at the +Z edge). Seen from the row A edge this is the table
+-- as the operator sees it, not a mirror image. The result follows the board when it is moved or spun.
 function Grid.worldPositionOf(cell, boardModel)
-	local col, row = Grid.parseCell(cell)
-	if not col then
+	local row, col = Grid.parseCell(cell)
+	if not row then
 		return nil
 	end
 	local base = boardModel
