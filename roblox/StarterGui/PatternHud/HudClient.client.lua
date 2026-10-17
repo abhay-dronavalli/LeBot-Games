@@ -14,7 +14,8 @@ local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(0.5, 0)
 frame.Position = UDim2.new(0.5, 0, 0, 8)
-frame.Size = UDim2.new(1, -32, 0, 140)
+frame.Size = UDim2.new(1, -32, 0, 0)
+frame.AutomaticSize = Enum.AutomaticSize.Y -- grows with the visible lines
 frame.BackgroundColor3 = Color3.new(0, 0, 0)
 frame.BackgroundTransparency = 0.35
 frame.Parent = screen
@@ -50,8 +51,11 @@ end
 
 local stateLabel = line("State", 1, 28, 22)
 local roundLabel = line("Round", 2, 24, 18)
-local scoreLabel = line("Score", 3, 24, 18)
-local messageLabel = line("Message", 4, 52, 20)
+local revealLabel = line("Reveal", 3, 24, 18) -- Hard mode only
+local scoreLabel = line("Score", 4, 24, 18)
+local messageLabel = line("Message", 5, 52, 20)
+revealLabel.Font = Enum.Font.GothamBold
+revealLabel.Visible = false
 
 patternUI.OnClientEvent:Connect(function(p)
 	stateLabel.Text = "Pattern Match: " .. p.state
@@ -67,6 +71,11 @@ patternUI.OnClientEvent:Connect(function(p)
 		round ..= string.format("   %d s left", p.timeLeft)
 	end
 	roundLabel.Text = round
+
+	revealLabel.Visible = p.revealPhase ~= nil
+	if p.revealPhase then
+		revealLabel.Text = string.format("COLORS %s %ds", p.revealPhase == "show" and "VISIBLE" or "HIDDEN", p.revealTimeLeft or 0)
+	end
 
 	local rounds = {}
 	for r, points in ipairs(p.roundScores or {}) do

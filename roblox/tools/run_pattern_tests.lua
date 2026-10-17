@@ -183,4 +183,117 @@ else
 	check("Workspace.PatternCabinet exists", false, true)
 end
 
+local Game = require(pm.Game)
+local TargetBoard = require(pm.TargetBoard)
+
+section("15. Hard reveal timing: Game.revealAt(seconds since round start), show 5 s / hide 5 s")
+local function reveal(t)
+	local phase, left = Game.revealAt(t)
+	return string.format("%s %.2f", phase, left)
+end
+check("0 s (round start)", reveal(0), "show 5.00")
+check("4.9 s", reveal(4.9), "show 0.10")
+check("5.0 s boundary", reveal(5), "hide 5.00")
+check("9.9 s", reveal(9.9), "hide 0.10")
+check("10.0 s boundary, next cycle", reveal(10), "show 5.00")
+check("17 s", reveal(17), "hide 3.00")
+Config.debugFastTimers = true
+check("fast timers: 1.25 s boundary", reveal(1.25), "hide 1.25")
+Config.debugFastTimers = false
+
+section("16. Game driven by step() on a cloned cabinet (fake store and remote)")
+if cab then
+	local board = cab:Clone() -- never parented, so the place is untouched
+	local fakeBlocks = {}
+	local sent = {}
+	local g = Game.new({
+		cabinet = board,
+		store = { get = function() return { blocks = fakeBlocks } end },
+		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
+	})
+	local function steps(n, dt)
+		for _ = 1, n do g:step(dt) end
+	end
+	local function blocksFor(target)
+		local list = {}
+		for cell, color in pairs(target) do table.insert(list, block(cell, color)) end
+		return list
+	end
+
+	Config.debugForceMode = "hard"
+	g:setState("Idle")
+	check("start() from Idle", g:start(), true)
+	check("start() while running is ignored", g:start(), false)
+	g:step(Config.modeSelectSeconds)
+	check("debugForceMode=hard: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
+	check("round 1 starts in show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
+	local tcell, tcolor = next(g.target)
+	local tile = board.TargetBoard[tcell]
+	local other
+	for _, c in ipairs(cells) do
+		if not g.target[c] then other = board.TargetBoard[c] break end
+	end
+	check("show: target tile in its color", tile.Color == Config.colors[tcolor], true)
+	check("show: target tile outlined", tile.TargetOutline.Visible, true)
+	steps(19, 0.25) -- 4.75 s
+	check("4.75 s: still show, 1 s left on HUD", g.revealPhase .. " " .. sent[#sent].revealTimeLeft, "show 1")
+	g:step(0.25) -- 5.0 s
+	check("5.0 s: hide", g.revealPhase, "hide")
+	check("hide: target tile gray", tile.Color == TargetBoard.HIDDEN, true)
+	check("hide: outline stays", tile.TargetOutline.Visible, true)
+	check("hide: non-target tile neutral, no outline", other.Color == TargetBoard.NEUTRAL and not other.TargetOutline.Visible, true)
+	check("payload revealPhase / revealTimeLeft", sent[#sent].revealPhase .. " " .. sent[#sent].revealTimeLeft, "hide 5")
+	steps(20, 0.25) -- 10.0 s
+	check("10.0 s: show again", g.revealPhase, "show")
+	steps(20, 0.25) -- 15.0 s, back in hide
+	check("15.0 s: hide", g.revealPhase, "hide")
+
+	fakeBlocks = blocksFor(g.target)
+	steps(4, 0.25) -- clear held for 1 s
+	check("solved during hide -> Intermission", g.state, "Intermission")
+	check("intermission: full colors", tile.Color == Config.colors[tcolor], true)
+	check("intermission: no outline, no reveal in payload", tostring(tile.TargetOutline.Visible) .. " " .. tostring(sent[#sent].revealPhase), "false nil")
+
+	fakeBlocks = {}
+	g:step(Config.intermissionSeconds)
+	check("round 2 state", g.state .. " " .. g.round, "Round 2")
+	check("round 2 reset to show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
+
+	section("17. Easy mode unchanged, LiveBoard problem highlight")
+	Config.debugForceMode = nil
+	g:setState("Idle")
+	g:start()
+	g:step(Config.modeSelectSeconds)
+	check("debugForceMode=nil: mode", g.mode, "Easy")
+	local ecell, ecolor = next(g.target)
+	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(board.TargetBoard[ecell].TargetOutline.Visible), "nil false")
+	check("easy: target tile in its color", board.TargetBoard[ecell].Color == Config.colors[ecolor], true)
+
+	local free = {}
+	for _, c in ipairs(cells) do
+		if not g.target[c] then table.insert(free, c) end
+	end
+	fakeBlocks = blocksFor(g.target)
+	table.insert(fakeBlocks, block(free[1], "red"))                       -- extra
+	table.insert(fakeBlocks, block(free[2], "red"))                       -- double...
+	table.insert(fakeBlocks, block(free[2], "teal", { x = select(1, at(Grid.parseCell(free[2]))) + 1 }))
+	table.insert(fakeBlocks, block(ecell, "purple", { level = 1 }))       -- stack on a correct target cell
+	g:step(0.25)
+	local lit = {}
+	for _, c in ipairs(cells) do
+		if board.LiveBoard[c].ProblemHighlight.Visible then table.insert(lit, c) end
+	end
+	local want = { free[1], free[2], ecell }
+	table.sort(want)
+	check("extra + double + stack cells highlighted", lit, want)
+	fakeBlocks = blocksFor(g.target)
+	g:step(0.25)
+	lit = {}
+	for _, c in ipairs(cells) do
+		if board.LiveBoard[c].ProblemHighlight.Visible then table.insert(lit, c) end
+	end
+	check("problems removed -> highlights cleared", lit, {})
+	board:Destroy()
+end
+
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

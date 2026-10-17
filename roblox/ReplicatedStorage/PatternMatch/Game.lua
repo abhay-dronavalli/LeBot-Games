@@ -1,17 +1,16 @@
 -- ReplicatedStorage.PatternMatch.Game
 -- The Pattern Match game loop, run on the server by ServerScriptService.PatternMode:
 --   Idle -> ModeSelect -> Round 1 -> Intermission -> Round 2 -> Intermission -> Round 3 -> Results -> Idle
--- Easy mode only for now (build step 3). Each state is an enter/tick pair in `states`, so Hard mode and
--- events can hook in later. Every 0.2 s the loop redraws the LiveBoard from StateStore (in every state,
--- idle included) and then ticks the current state.
+-- Easy and Hard modes, no events yet (build step 5). Each state is an enter/tick pair in `states`.
+-- Every 0.2 s, step() redraws the LiveBoard from StateStore (in every state, idle included), counts
+-- down, ticks the current state and pushes the HUD payload if anything on it changed.
 
 local Config = require(script.Parent.Config)
-local Grid = require(script.Parent.Grid)
 local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
+local TargetBoard = require(script.Parent.TargetBoard)
 
 local TICK = 0.2
-local NEUTRAL = Color3.fromRGB(200, 200, 200)
 local ROUNDS = #Config.blocksPerRound
 local INTERMISSION_MESSAGE = "Clear the grid. Swap seats if you want."
 local WAITING_MESSAGE = "Waiting for grid to clear"
@@ -51,12 +50,34 @@ local function describeTarget(target)
 	return table.concat(parts, " ")
 end
 
+-- Cells the LiveBoard should flag: extra blocks (stacks included) and doubles.
+local function problemCells(result)
+	local cells = table.clone(result.extra)
+	for _, cell in ipairs(result.doubled) do
+		if not table.find(cells, cell) then
+			table.insert(cells, cell)
+		end
+	end
+	return cells
+end
+
+-- Hard mode reveal cycle: seconds since round start -> "show" or "hide", and seconds left in that
+-- phase. Every round starts with "show" for Config.hard.showSeconds, then "hide" for hideSeconds.
+function Game.revealAt(elapsed)
+	local show, hide = seconds(Config.hard.showSeconds), seconds(Config.hard.hideSeconds)
+	local t = elapsed % (show + hide)
+	if t < show then
+		return "show", show - t
+	end
+	return "hide", show + hide - t
+end
+
 local states = {}
 
 states.Idle = {
 	enter = function(self)
 		self.mode, self.target = nil, nil -- score and roundScores stay, so the HUD shows the last game
-		self:showTarget(nil)
+		self.targetBoard:show(nil)
 		self.message = "Walk up to the pad and press E to play Pattern Match."
 	end,
 }
@@ -69,7 +90,8 @@ states.ModeSelect = {
 	end,
 	tick = function(self)
 		if self.timeLeft <= 0 then
-			self.mode = "Easy" -- the real mode select screen is build step 6
+			-- The real mode select screen is build step 6. Until then: Config.debugForceMode, else Easy.
+			self.mode = Config.debugForceMode == "hard" and "Hard" or "Easy"
 			self.round = 1
 			self:setState("Round")
 		end
@@ -79,15 +101,31 @@ states.ModeSelect = {
 states.Round = {
 	enter = function(self)
 		self.target = Target.generate(Config.blocksPerRound[self.round])
-		self:showTarget(self.target)
 		self:startTimer(Config.roundSeconds[self.round])
+		self.roundElapsed = 0
 		self.clearFor = 0
 		self.lastCompare = nil
 		self.message = "Match the target!"
+		if self.mode == "Hard" then
+			self.revealPhase, self.revealLeft = Game.revealAt(0)
+		end
+		self.targetBoard:show(self.target, false, self.mode == "Hard")
 		log("round %d target: %s", self.round, describeTarget(self.target))
 	end,
 	tick = function(self, dt)
+		self.roundElapsed += dt
+		if self.mode == "Hard" then
+			local phase, left = Game.revealAt(self.roundElapsed)
+			self.revealLeft = left
+			if phase ~= self.revealPhase then
+				self.revealPhase = phase
+				self.targetBoard:show(self.target, phase == "hide", true)
+				log("round %d colors %s at %.1f s", self.round, phase == "hide" and "hidden" or "visible", self.roundElapsed)
+			end
+		end
+
 		local result = Target.compare(self.target, self.liveGrid, {})
+		self.liveBoard:showProblems(problemCells(result))
 		local text = Target.describe(result)
 		if text ~= self.lastCompare then
 			self.lastCompare = text
@@ -105,6 +143,7 @@ states.Round = {
 
 states.Intermission = {
 	enter = function(self)
+		self.targetBoard:show(self.target, false, false) -- full colors: the answer to the round just played
 		self:startTimer(Config.intermissionSeconds)
 		self.message = INTERMISSION_MESSAGE
 	end,
@@ -125,13 +164,14 @@ states.Intermission = {
 
 states.Results = {
 	enter = function(self)
+		self.targetBoard:show(self.target, false, false)
 		local parts = {}
 		for r = 1, ROUNDS do
 			table.insert(parts, string.format("R%d %d", r, self.roundScores[r] or 0))
 		end
 		self.message = string.format("Final score %d  (%s)", self.score, table.concat(parts, ", "))
 		self:startTimer(Config.resultsSeconds)
-		log("results: %s", self.message)
+		log("results (%s mode): %s", self.mode, self.message)
 	end,
 	tick = function(self)
 		if self.timeLeft <= 0 then
@@ -147,7 +187,7 @@ function Game.new(opts)
 	self.store = opts.store
 	self.ui = opts.ui
 	self.stateChanged = opts.stateChanged
-	self.targetBoard = opts.cabinet:WaitForChild("TargetBoard")
+	self.targetBoard = TargetBoard.new(opts.cabinet:WaitForChild("TargetBoard"))
 	self.liveBoard = LiveBoard.new(opts.cabinet:WaitForChild("LiveBoard"))
 	self.liveGrid = {}
 	self.state = "Idle"
@@ -165,24 +205,26 @@ function Game:start()
 	return true
 end
 
--- Runs forever: redraw the LiveBoard, count down, tick the current state.
+-- Runs forever, one step per tick.
 function Game:run()
 	self:setState("Idle")
 	while true do
-		local dt = task.wait(TICK)
-		self.liveGrid = self.liveBoard:render(self.store.get().blocks)
-		if self.timerRunning then
-			self.timeLeft = math.max(0, self.timeLeft - dt)
-			local shown = math.ceil(self.timeLeft)
-			if shown ~= self.shownSeconds then
-				self.shownSeconds = shown
-				self:pushUI()
-			end
-		end
-		local tick = states[self.state].tick
-		if tick then
-			tick(self, dt)
-		end
+		self:step(task.wait(TICK))
+	end
+end
+
+-- One tick: redraw the LiveBoard, count down, tick the current state, update the HUD if it changed.
+function Game:step(dt)
+	self.liveGrid = self.liveBoard:render(self.store.get().blocks)
+	if self.timerRunning then
+		self.timeLeft = math.max(0, self.timeLeft - dt)
+	end
+	local tick = states[self.state].tick
+	if tick then
+		tick(self, dt)
+	end
+	if self:hudKey() ~= self.pushedKey then
+		self:pushUI()
 	end
 end
 
@@ -190,8 +232,10 @@ function Game:setState(name)
 	self.state = name
 	self.timerRunning = false
 	self.timeLeft = 0
+	self.revealPhase, self.revealLeft = nil, nil
+	self.liveBoard:showProblems(nil)
 	states[name].enter(self)
-	log("state %s%s", name, self.round > 0 and name ~= "Idle" and (" (round " .. self.round .. ")") or "")
+	log("state %s%s", name, self.round > 0 and name ~= "Idle" and (" (round " .. self.round .. ", " .. tostring(self.mode) .. ")") or "")
 	self:pushUI()
 	if self.stateChanged then
 		self.stateChanged:Fire({ state = name, round = self.round, target = self.target })
@@ -200,7 +244,6 @@ end
 
 function Game:startTimer(s)
 	self.timeLeft = seconds(s)
-	self.shownSeconds = math.ceil(self.timeLeft)
 	self.timerRunning = true
 end
 
@@ -209,14 +252,6 @@ function Game:endRound(points, why)
 	self.score += points
 	log("round %d %s: %d points (total %d)", self.round, why, points, self.score)
 	self:setState(self.round < ROUNDS and "Intermission" or "Results")
-end
-
--- Colors the TargetBoard: target cells in their color, everything else neutral. nil blanks it.
-function Game:showTarget(target)
-	for _, cell in ipairs(Grid.allCells()) do
-		local colorName = target and target[cell]
-		self.targetBoard[cell].Color = colorName and Config.colors[colorName] or NEUTRAL
-	end
 end
 
 function Game:payload()
@@ -228,7 +263,15 @@ function Game:payload()
 		score = self.score,
 		message = self.message,
 		roundScores = table.clone(self.roundScores),
+		revealPhase = self.revealPhase,
+		revealTimeLeft = self.revealPhase and math.ceil(self.revealLeft) or nil,
 	}
+end
+
+-- The parts of the payload that change during a state; a new value means the HUD needs a push.
+function Game:hudKey()
+	local p = self:payload()
+	return string.format("%d|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft))
 end
 
 -- Sends the HUD payload to one player, or to everyone when player is nil.
@@ -236,6 +279,7 @@ function Game:pushUI(player)
 	if player then
 		self.ui:FireClient(player, self:payload())
 	else
+		self.pushedKey = self:hudKey()
 		self.ui:FireAllClients(self:payload())
 	end
 end
