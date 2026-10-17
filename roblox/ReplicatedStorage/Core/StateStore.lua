@@ -13,6 +13,7 @@
 -- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
 -- no random changes during a round or intermission, the exact target appears 5 s into each round, and
 -- the grid empties 3 s into each intermission. These two delays ignore debugFastTimers.
+-- In fake mode a server-only BindableEvent StateStore.Debug takes test commands (see debugCommand).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -192,15 +193,23 @@ local function solvedBlocks(target)
 	return blocks
 end
 
-local paused = false -- debugAutoSolve: no random changes while a round or intermission runs
+local autoSolvePaused = false -- debugAutoSolve: no random changes while a round or intermission runs
+local debugPaused = false     -- set by the Debug hook's "pause" command
+local currentTarget = nil     -- the game's current round target, for the Debug hook's "solve"
 
+-- Follows the Pattern Match game (PatternMatch.Remotes.PatternState): keeps the current target, and with
+-- Config.debugAutoSolve solves each round and empties the grid in intermission.
 local function followGame()
 	local stateSignal = ReplicatedStorage.PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternState")
 	local generation = 0
 	stateSignal.Event:Connect(function(info)
 		generation += 1
 		local mine = generation
-		paused = info.state == "Round" or info.state == "Intermission"
+		currentTarget = info.target
+		if not Config.debugAutoSolve then
+			return
+		end
+		autoSolvePaused = info.state == "Round" or info.state == "Intermission"
 		if info.state == "Round" then
 			task.delay(5, function()
 				if generation == mine then
@@ -220,14 +229,46 @@ local function followGame()
 	end)
 end
 
-if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
-	if Config.debugAutoSolve then
-		task.spawn(followGame)
+-- Testing hook, server only: ReplicatedStorage.Core.StateStore.Debug:Fire(command) with
+--   { op = "pause", on = true | false }        stop or resume the random changes
+--   { op = "add", cell = "B2", color = "red" } add a block at that cell's center
+--   { op = "remove", cell = "B2" }             remove the fake blocks on that cell
+--   { op = "solve" }                           replace every block with the current round's target
+local function debugCommand(cmd)
+	if cmd.op == "pause" then
+		debugPaused = cmd.on ~= false
+	elseif cmd.op == "add" then
+		local row, col = string.byte(cmd.cell) - 64, tonumber(string.sub(cmd.cell, 2))
+		local x, y = cellCenterCm(col, row)
+		local blocks = table.clone(state.blocks)
+		table.insert(blocks, newBlock(x, y, cmd.cell, cmd.color))
+		publish(blocks)
+	elseif cmd.op == "remove" then
+		local blocks = {}
+		for _, block in ipairs(state.blocks) do
+			if fakeCell[block.id] == cmd.cell then
+				fakeCell[block.id] = nil
+			else
+				table.insert(blocks, block)
+			end
+		end
+		publish(blocks)
+	elseif cmd.op == "solve" and currentTarget then
+		publish(solvedBlocks(currentTarget))
 	end
+	print(string.format("[StateStore fake] debug %s %s %s", cmd.op, cmd.cell or "", cmd.color or tostring(cmd.on or "")))
+end
+
+if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
+	task.spawn(followGame)
+	local debugEvent = Instance.new("BindableEvent")
+	debugEvent.Name = "Debug"
+	debugEvent.Event:Connect(debugCommand)
+	debugEvent.Parent = script
 	task.spawn(function()
 		while true do
 			task.wait(FAKE_INTERVAL)
-			if not paused then
+			if not autoSolvePaused and not debugPaused then
 				local blocks, msg = fakeStep()
 				print("[StateStore fake] " .. msg)
 				publish(blocks)

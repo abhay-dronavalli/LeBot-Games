@@ -164,7 +164,8 @@ check("initial t / seq / #blocks", s0.t .. " " .. s0.seq .. " " .. #s0.blocks, "
 local fired
 Store.changed:Connect(function(s) fired = s.seq end)
 Store.update({ t = "state", seq = 7, ts = 0, arm = s0.arm, tip = s0.tip, blocks = { block("B2") } })
-task.wait()
+local waitedFrom = os.clock() -- signal handlers are deferred; give it up to 1 s
+repeat task.wait() until fired ~= nil or os.clock() - waitedFrom > 1
 check("update() fires changed with new seq", fired, 7)
 check("get() returns updated blocks", #Store.get().blocks, 1)
 
@@ -206,9 +207,11 @@ if cab then
 	local board = cab:Clone() -- never parented, so the place is untouched
 	local fakeBlocks = {}
 	local sent = {}
+	local fired = {}
 	local g = Game.new({
 		cabinet = board,
 		store = { get = function() return { blocks = fakeBlocks } end },
+		core = { fire = function(name, intensity, duration) table.insert(fired, name .. " " .. intensity .. " " .. duration) end },
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
 	})
 	local function steps(n, dt)
@@ -293,6 +296,133 @@ if cab then
 		if board.LiveBoard[c].ProblemHighlight.Visible then table.insert(lit, c) end
 	end
 	check("problems removed -> highlights cleared", lit, {})
+
+	local PatternEvents = require(pm.PatternEvents)
+
+	section("18. vanish cell selection")
+	local rng = Random.new(7)
+	local badPicks, maxPicked = 0, 0
+	for _ = 1, 300 do
+		local tgt = Target.generate(rng:NextInteger(3, 5), rng)
+		local occupied = {}
+		for _, c in ipairs(cells) do
+			if not tgt[c] and rng:NextNumber() < 0.4 then occupied[c] = "red" end
+		end
+		local lg = live(occupied)
+		local picked = PatternEvents.pickVanishCells(tgt, lg, {}, 2, rng)
+		maxPicked = math.max(maxPicked, #picked)
+		local seen = {}
+		for _, c in ipairs(picked) do
+			if tgt[c] or lg[c] or seen[c] then badPicks += 1 end
+			seen[c] = true
+		end
+	end
+	check("300 random boards: picks on a target, an occupied cell, or twice", badPicks, 0)
+	check("never more than 2 cells", maxPicked <= 2, true)
+	local fullBoard = {}
+	for _, c in ipairs(cells) do fullBoard[c] = "red" end
+	check("no empty non-target cell -> nothing picked", PatternEvents.pickVanishCells({ A1 = "red" }, live(fullBoard), {}, 2, rng), {})
+	local allButB2 = {}
+	for _, c in ipairs(cells) do allButB2[c] = c ~= "B2" or nil end
+	check("already vanished cells are not picked again", PatternEvents.pickVanishCells({}, {}, allButB2, 2, rng), { "B2" })
+
+	section("19. vanish in a round: sticky rule, blocked compare, white outline")
+	Config.events = { "vanish" }
+	Config.debugEventEvery = 4
+	fakeBlocks = {}
+	g:setState("Idle")
+	g:start()
+	g:step(Config.modeSelectSeconds)
+	steps(7, 0.25) -- 1.75 s
+	check("1.75 s: no event yet", tostring(sent[#sent].event), "nil")
+	g:step(0.25) -- 2.0 s: warning, 2 s before the 4 s mark
+	check("2.0 s: vanish warning, 2 s", sent[#sent].event.name .. " " .. sent[#sent].event.phase .. " " .. sent[#sent].event.timeLeft, "vanish warning 2")
+	steps(8, 0.25) -- 4.0 s
+	check("4.0 s: vanish active", g.events.current.phase, "active")
+	local vanishedNow = sent[#sent].vanishedCells
+	local onTarget = 0
+	for _, c in ipairs(vanishedNow) do if g.target[c] then onTarget += 1 end end
+	check("1-2 cells vanished, none on the target", #vanishedNow >= 1 and #vanishedNow <= 2 and onTarget == 0, true)
+	local v1, v2 = vanishedNow[1], vanishedNow[2]
+	check("vanished tile transparent, label hidden", board.LiveBoard[v1].Transparency == 1 and not board.LiveBoard[v1].SurfaceGui.Enabled, true)
+	check("TargetBoard unchanged", board.TargetBoard[v1].Transparency, 0)
+
+	fakeBlocks = blocksFor(g.target)
+	table.insert(fakeBlocks, block(v1, "red"))
+	steps(8, 0.25) -- 6.0 s: target solved, but a block sits on a vanished cell
+	check("solved + block on a vanished cell: still Round", g.state, "Round")
+	check("compare reports it as blocked", Target.compare(g.target, g.liveGrid, g.events.vanished).blocked, { v1 })
+	check("white outline on the blocked cell", board.LiveBoard[v1].ProblemHighlight.Visible, true)
+	steps(20, 0.25) -- 11.0 s: the 6 s vanish timer ran out at 10 s
+	check("timer over, block still there: cell stays vanished", board.LiveBoard[v1].Transparency, 1)
+	if v2 then
+		check("the other vanished cell (no block) came back", board.LiveBoard[v2].Transparency, 0)
+	end
+	check("round still not cleared", g.state, "Round")
+
+	fakeBlocks = blocksFor(g.target)
+	g:step(0.25)
+	check("block removed: cell comes back", board.LiveBoard[v1].Transparency .. " " .. table.concat(sent[#sent].vanishedCells, ","), "0 ")
+	steps(4, 0.25)
+	check("then the round clears", g.state, "Intermission")
+	check("vanish never calls Core.Events", #fired, 0)
+
+	section("20. scheduler: only during a Round, never the same event twice in a row")
+	Config.events = { "vanish", "tremor", "inverted" }
+	Config.debugEventEvery = 3
+	local baseBefore = board.LiveBoard.Base.CFrame
+	local blockBefore = board.LiveBoard.Blocks.A1.CFrame
+	table.clear(fired)
+	local seq, outside, lastActive = {}, 0, nil
+	local function watch()
+		local ev = g.events.current
+		if ev and g.state ~= "Round" then outside += 1 end
+		if ev and ev.phase == "active" and ev ~= lastActive then
+			table.insert(seq, ev.name)
+			lastActive = ev
+		end
+	end
+	fakeBlocks = {}
+	g:setState("Idle")
+	g:start()
+	for _ = 1, 60 do g:step(0.25); watch() end -- 15 s of ModeSelect
+	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired, "0 0")
+	for _ = 1, 240 do g:step(0.25); watch() end -- round 1, 60 s, empty grid
+	check("round 1 timed out", g.state, "Intermission")
+	check("board parts back exactly where they were", board.LiveBoard.Base.CFrame == baseBefore and board.LiveBoard.Blocks.A1.CFrame == blockBefore, true)
+	check("no shake left running", g.events.shake == nil, true)
+	for _ = 1, 40 do g:step(0.25); watch() end -- 10 s of Intermission, then round 2 starts
+	check("round 2 started, schedule reset", g.state .. " " .. g.round .. " next at " .. g.events.nextAt, "Round 2 next at 3")
+	check("no event outside a Round", outside, 0)
+	local repeats = 0
+	for i = 2, #seq do
+		if seq[i] == seq[i - 1] then repeats += 1 end
+	end
+	check("round 1 ran at least 5 events", #seq >= 5, true)
+	check("back-to-back repeats in " .. table.concat(seq, ","), repeats, 0)
+	local tremors, inverts, quakes, mirrors = 0, 0, 0, 0
+	for _, name in ipairs(seq) do
+		if name == "tremor" then tremors += 1 elseif name == "inverted" then inverts += 1 end
+	end
+	for _, f in ipairs(fired) do
+		if f == "earthquake 0.5 4" then quakes += 1 elseif f == "mirror 1 8" then mirrors += 1 end
+	end
+	check("Core.Events: earthquake 0.5 4 per tremor, mirror 1 8 per inverted", quakes .. "/" .. tremors .. " " .. mirrors .. "/" .. inverts,
+		tremors .. "/" .. tremors .. " " .. inverts .. "/" .. inverts)
+
+	section("21. tremor shake restores every part exactly")
+	local baseStart = board.LiveBoard.Base.CFrame
+	local tileStart = board.TargetBoard.C4.CFrame
+	g.events:startShake()
+	local moved = false
+	for _ = 1, 10 do
+		task.wait()
+		if board.LiveBoard.Base.CFrame ~= baseStart then moved = true end
+	end
+	table.insert(lines, "     (boards moved while shaking: " .. tostring(moved) .. ")")
+	g.events:stopShake()
+	check("after stopShake: LiveBoard.Base and TargetBoard.C4 exactly restored",
+		board.LiveBoard.Base.CFrame == baseStart and board.TargetBoard.C4.CFrame == tileStart, true)
 	board:Destroy()
 end
 

@@ -91,12 +91,13 @@ ReplicatedStorage
   PatternMatch.Target (ModuleScript)      generate, compare
   PatternMatch.LiveBoard (ModuleScript)   pooled block parts on the LiveBoard
   PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Round, Intermission, Results
+  PatternMatch.PatternEvents (ModuleScript) event scheduler + vanish / tremor / inverted
+  PatternMatch.TargetBoard (ModuleScript) target colors, Hard-mode hidden look
   PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
   ArmTwin (Model), TwinDriver (ModuleScript)
   Remotes: PatternUI (server -> client), PatternPick (client -> server)
 ServerScriptService
   PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
-  PatternEvents (ModuleScript)             scheduler + the event implementations
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
   PatternHud (ScreenGui + LocalScript)     timer, round, event banner
@@ -115,6 +116,7 @@ return {
   cellTolerance = 0.7,                 -- a block counts only inside the middle 70% of a cell
                                        -- stacked blocks (level > 0) count as extra; 2+ table blocks in a cell = doubled
   ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
+  -- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
   colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
              orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
   blocksPerRound = { 3, 4, 5 },
@@ -122,10 +124,15 @@ return {
   holdToClear = 1,
   intermissionSeconds = 10,
   modeSelectSeconds = 15,
+  resultsSeconds = 10,                 -- how long Results stays up before Idle
+  debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
+  debugFastTimers = false,             -- testing: every game timer runs 4x faster
+  debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
+  debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
   hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },
   easy = { eventEvery = 45 },
   vanishSeconds = 6, vanishCount = { 1, 2 },
-  events = { "vanish", "tremor", "inverted" },
+  events = { "vanish", "tremor", "inverted" }, -- tremor and inverted durations (4 s, 8 s) live in PatternEvents
   twinJoints = { shoulder_pan = {sign=1, offset=0}, shoulder_lift = {sign=1, offset=0}, elbow_flex = {sign=1, offset=0},
                  wrist_flex = {sign=1, offset=0}, wrist_roll = {sign=1, offset=0}, gripper = {sign=1, offset=0} },
 }

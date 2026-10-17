@@ -7,7 +7,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Game = require(PatternMatch.Game)
-local StateStore = require(ReplicatedStorage:WaitForChild("Core"):WaitForChild("StateStore"))
+local Core = ReplicatedStorage:WaitForChild("Core")
+local StateStore = require(Core:WaitForChild("StateStore"))
+local Events = require(Core:WaitForChild("Events"))
 
 local function getOrCreate(parent, className, name)
 	local child = parent:FindFirstChild(name)
@@ -29,6 +31,7 @@ local prompt = cabinet:WaitForChild("Entry"):WaitForChild("PlayPrompt")
 local patternGame = Game.new({
 	cabinet = cabinet,
 	store = StateStore,
+	core = Events,
 	ui = patternUI,
 	stateChanged = patternState,
 })

@@ -1,14 +1,16 @@
 -- ReplicatedStorage.PatternMatch.Game
 -- The Pattern Match game loop, run on the server by ServerScriptService.PatternMode:
 --   Idle -> ModeSelect -> Round 1 -> Intermission -> Round 2 -> Intermission -> Round 3 -> Results -> Idle
--- Easy and Hard modes, no events yet (build step 5). Each state is an enter/tick pair in `states`.
--- Every 0.2 s, step() redraws the LiveBoard from StateStore (in every state, idle included), counts
--- down, ticks the current state and pushes the HUD payload if anything on it changed.
+-- Easy and Hard modes, with events during rounds (PatternMatch.PatternEvents). Each state is an
+-- enter/tick pair in `states`. Every 0.2 s, step() redraws the LiveBoard from StateStore (in every
+-- state, idle included), counts down, ticks the current state and pushes the HUD payload if anything
+-- on it changed.
 
 local Config = require(script.Parent.Config)
 local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
 local TargetBoard = require(script.Parent.TargetBoard)
+local PatternEvents = require(script.Parent.PatternEvents)
 
 local TICK = 0.2
 local ROUNDS = #Config.blocksPerRound
@@ -50,12 +52,14 @@ local function describeTarget(target)
 	return table.concat(parts, " ")
 end
 
--- Cells the LiveBoard should flag: extra blocks (stacks included) and doubles.
+-- Cells the LiveBoard should outline: extra blocks (stacks included), doubles, and blocks on vanished cells.
 local function problemCells(result)
 	local cells = table.clone(result.extra)
-	for _, cell in ipairs(result.doubled) do
-		if not table.find(cells, cell) then
-			table.insert(cells, cell)
+	for _, list in ipairs({ result.doubled, result.blocked }) do
+		for _, cell in ipairs(list) do
+			if not table.find(cells, cell) then
+				table.insert(cells, cell)
+			end
 		end
 	end
 	return cells
@@ -110,10 +114,12 @@ states.Round = {
 			self.revealPhase, self.revealLeft = Game.revealAt(0)
 		end
 		self.targetBoard:show(self.target, false, self.mode == "Hard")
+		self.events:startRound(self.mode)
 		log("round %d target: %s", self.round, describeTarget(self.target))
 	end,
 	tick = function(self, dt)
 		self.roundElapsed += dt
+		self.events:tick(dt, self.target, self.liveGrid)
 		if self.mode == "Hard" then
 			local phase, left = Game.revealAt(self.roundElapsed)
 			self.revealLeft = left
@@ -124,7 +130,7 @@ states.Round = {
 			end
 		end
 
-		local result = Target.compare(self.target, self.liveGrid, {})
+		local result = Target.compare(self.target, self.liveGrid, self.events.vanished)
 		self.liveBoard:showProblems(problemCells(result))
 		local text = Target.describe(result)
 		if text ~= self.lastCompare then
@@ -180,15 +186,19 @@ states.Results = {
 	end,
 }
 
--- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), ui (PatternUI RemoteEvent),
--- stateChanged (optional BindableEvent, fired with { state, round, target } on every state change)
+-- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), core (Core.Events),
+-- ui (PatternUI RemoteEvent), stateChanged (optional BindableEvent, fired with { state, round, target }
+-- on every state change)
 function Game.new(opts)
 	local self = setmetatable({}, Game)
 	self.store = opts.store
 	self.ui = opts.ui
 	self.stateChanged = opts.stateChanged
-	self.targetBoard = TargetBoard.new(opts.cabinet:WaitForChild("TargetBoard"))
-	self.liveBoard = LiveBoard.new(opts.cabinet:WaitForChild("LiveBoard"))
+	local targetModel = opts.cabinet:WaitForChild("TargetBoard")
+	local liveModel = opts.cabinet:WaitForChild("LiveBoard")
+	self.targetBoard = TargetBoard.new(targetModel)
+	self.liveBoard = LiveBoard.new(liveModel)
+	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard, boards = { targetModel, liveModel } })
 	self.liveGrid = {}
 	self.state = "Idle"
 	self.mode, self.round, self.score, self.roundScores = nil, 0, 0, {}
@@ -233,6 +243,7 @@ function Game:setState(name)
 	self.timerRunning = false
 	self.timeLeft = 0
 	self.revealPhase, self.revealLeft = nil, nil
+	self.events:stopRound()
 	self.liveBoard:showProblems(nil)
 	states[name].enter(self)
 	log("state %s%s", name, self.round > 0 and name ~= "Idle" and (" (round " .. self.round .. ", " .. tostring(self.mode) .. ")") or "")
@@ -255,6 +266,7 @@ function Game:endRound(points, why)
 end
 
 function Game:payload()
+	local event, vanishedCells = self.events:payload()
 	return {
 		state = self.state,
 		mode = self.mode,
@@ -265,13 +277,17 @@ function Game:payload()
 		roundScores = table.clone(self.roundScores),
 		revealPhase = self.revealPhase,
 		revealTimeLeft = self.revealPhase and math.ceil(self.revealLeft) or nil,
+		event = event,                 -- { name, banner, phase = "warning" | "active", timeLeft } or nil
+		vanishedCells = vanishedCells, -- sorted list of cells
 	}
 end
 
 -- The parts of the payload that change during a state; a new value means the HUD needs a push.
 function Game:hudKey()
 	local p = self:payload()
-	return string.format("%d|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft))
+	local event = p.event and (p.event.name .. ":" .. p.event.phase .. ":" .. p.event.timeLeft) or "-"
+	return string.format("%d|%s|%s|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
+		event, table.concat(p.vanishedCells, ","))
 end
 
 -- Sends the HUD payload to one player, or to everyone when player is nil.

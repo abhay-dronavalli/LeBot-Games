@@ -22,6 +22,7 @@ return {
 	debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
 	debugFastTimers = false,             -- testing: every game timer runs 4x faster
 	debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
+	debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
 	hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },
 	easy = { eventEvery = 45 },
 	vanishSeconds = 6, vanishCount = { 1, 2 },

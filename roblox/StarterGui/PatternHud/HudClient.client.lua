@@ -1,12 +1,17 @@
 -- StarterGui.PatternHud.HudClient
--- Plain Pattern Match HUD: state, round, time left, score and message from the PatternUI remote.
+-- Plain Pattern Match HUD: state, round, time left, score and message from the PatternUI remote,
+-- plus the event banner, and a small camera shake while a Tremor is active.
 -- No styling yet (build step 9).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Config = require(PatternMatch:WaitForChild("Config"))
 local patternUI = PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternUI")
+
+local CAMERA_SHAKE_STUDS = 0.12
+local CAMERA_SHAKE_RADIANS = math.rad(0.6)
 
 local screen = script.Parent
 
@@ -52,10 +57,34 @@ end
 local stateLabel = line("State", 1, 28, 22)
 local roundLabel = line("Round", 2, 24, 18)
 local revealLabel = line("Reveal", 3, 24, 18) -- Hard mode only
-local scoreLabel = line("Score", 4, 24, 18)
-local messageLabel = line("Message", 5, 52, 20)
+local eventLabel = line("Event", 4, 30, 24)   -- only while an event is warning or active
+local scoreLabel = line("Score", 5, 24, 18)
+local messageLabel = line("Message", 6, 52, 20)
 revealLabel.Font = Enum.Font.GothamBold
 revealLabel.Visible = false
+eventLabel.Font = Enum.Font.GothamBold
+eventLabel.TextColor3 = Color3.fromRGB(255, 210, 60)
+eventLabel.Visible = false
+
+-- Camera shake: nudge the camera a little every frame, after the camera scripts have placed it.
+local shaking = false
+local function setCameraShake(on)
+	if on == shaking then
+		return
+	end
+	shaking = on
+	if on then
+		local rng = Random.new()
+		RunService:BindToRenderStep("PatternTremor", Enum.RenderPriority.Camera.Value + 1, function()
+			local camera = workspace.CurrentCamera
+			camera.CFrame *= CFrame.new(rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS),
+				rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS), 0)
+				* CFrame.Angles(0, 0, rng:NextNumber(-CAMERA_SHAKE_RADIANS, CAMERA_SHAKE_RADIANS))
+		end)
+	else
+		RunService:UnbindFromRenderStep("PatternTremor")
+	end
+end
 
 patternUI.OnClientEvent:Connect(function(p)
 	stateLabel.Text = "Pattern Match: " .. p.state
@@ -76,6 +105,17 @@ patternUI.OnClientEvent:Connect(function(p)
 	if p.revealPhase then
 		revealLabel.Text = string.format("COLORS %s %ds", p.revealPhase == "show" and "VISIBLE" or "HIDDEN", p.revealTimeLeft or 0)
 	end
+
+	local event = p.event
+	eventLabel.Visible = event ~= nil
+	if event then
+		if event.phase == "warning" then
+			eventLabel.Text = string.format("WARNING: %s in %ds", event.banner, event.timeLeft)
+		else
+			eventLabel.Text = string.format("%s  %ds", event.banner, event.timeLeft)
+		end
+	end
+	setCameraShake(event ~= nil and event.name == "tremor" and event.phase == "active")
 
 	local rounds = {}
 	for r, points in ipairs(p.roundScores or {}) do
