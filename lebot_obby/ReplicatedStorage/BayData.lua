@@ -29,9 +29,11 @@ return {
 		--
 		-- The wall closes from the far end toward the entrance, so row 1 is reached before
 		-- row 0. Lever A sits deeper (row 1) and is therefore the timed one; Lever B sits by
-		-- the entrance and stays reachable. Once A kills the blades the wall jams on A's own
-		-- crate and never reaches row 0, so the finish is unhurried by design -- the ladder
-		-- doubles as the shield.
+		-- the entrance, which the wall reaches last.
+		--
+		-- A's crate buys a stall when the wall meets it, but only Config.SawWallStallSeconds
+		-- and only once, so the whole bay stays a race -- and standing on that crate stops
+		-- being safe the moment its stall is spent.
 		levers = {
 			{id = "A", side = "left",  cell = {0, 1}, color = "orange", level = 1,
 				height = 8.6,  minStand = 3},
