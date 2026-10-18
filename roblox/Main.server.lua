@@ -1,6 +1,6 @@
 --!strict
--- Paste this into a Script in ServerScriptService, with Bridge, StateStore-free Mapping,
--- SkyArm and BlockSync as ModuleScripts beside it. Enable
+-- Paste this into a Script in ServerScriptService, with Bridge, Mapping, SkyArm, BlockSync
+-- and BoardNotice as ModuleScripts beside it. Enable
 -- Game Settings -> Security -> Allow HTTP Requests first, then press Play.
 --
 -- This is the smallest thing that proves the link: the Sky Arm mirrors the real arm, real
@@ -14,6 +14,7 @@ local Bridge = require(script.Parent.Bridge)
 local Mapping = require(script.Parent.Mapping)
 local SkyArm = require(script.Parent.SkyArm)
 local BlockSync = require(script.Parent.BlockSync)
+local BoardNotice = require(script.Parent.BoardNotice)
 
 -- localhost works when Studio and the robot process share a laptop. Otherwise use the robot
 -- laptop's LAN IP, e.g. "ws://192.168.1.42:8765".
@@ -21,6 +22,11 @@ local URL = "ws://localhost:8765"
 
 local arm = SkyArm.new(workspace, { thickness = 3 })
 local blocks = BlockSync.new(workspace)
+
+-- Blocks come from a vision model on the robot laptop, which can fail in ways that look like
+-- nothing at all from in here - most importantly an OpenAI account with no credits left. This
+-- puts that on screen instead of letting the board quietly stop moving.
+local notice = BoardNotice.new()
 
 -- A floor under the sheet's build zone, so there is something to stand on while testing.
 --
@@ -71,6 +77,12 @@ end
 
 Bridge.onHello(function(h)
 	blocks:setCube(h.space and h.space.cube_mm)
+	if h.board then
+		-- Says in the log how often blocks can be expected to change at all, so a board that
+		-- sits still for half a minute is not mistaken for a broken link.
+		print(("[Main] board read by %s, %s"):format(
+			tostring(h.board.reader or "nothing"), tostring(h.board.trigger or "never")))
+	end
 	if h.space and h.space.sheet then
 		fitPad(h.space.sheet.w_mm, h.space.sheet.h_mm)
 	end
@@ -85,6 +97,7 @@ end)
 Bridge.onState(function(s)
 	arm:update(s.arm)
 	blocks:update(s.blocks)
+	notice:update(s.notes and s.notes.board)
 end)
 
 Bridge.connect(URL)

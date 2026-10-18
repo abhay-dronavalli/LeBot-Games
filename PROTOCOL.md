@@ -25,8 +25,10 @@ Everything the server sends is in the **sheet frame, millimetres**:
 - `+x` right, `+y` down the page (away from the arm, which sits off the top edge)
 - `+z` up off the paper, so `z = 0` is the paper surface
 
-The sheet is US Letter, 215.9 × 279.4 mm, with a 3×3 grid of 57.15 mm cells. The arm's
-shoulder-pan axis is at about `(115, -44)`, i.e. off the top edge, centred.
+The sheet is US Letter, 279.4 × 215.9 mm landscape, with a 3×4 grid of 57.15 mm cells
+labelled `A1`..`C4` — the letter is the row, `A` nearest the arm. Those labels are printed on
+the sheet, and the vision model reads them to place a block, so **block positions are cell
+labels first and millimetres second**: `x`/`y` are derived from `cell`, not measured.
 
 The **client** converts mm to its own units, so the scale is retuned in Roblox without
 restarting Python. For Roblox, which is Y-up:
@@ -57,6 +59,8 @@ Static geometry, sent before any state frame.
 {"t":"hello","v":1,"source":"mock","state_hz":30.0,
  "joints":["shoulder_pan","shoulder_lift","elbow_flex","wrist_flex","wrist_roll","gripper"],
  "effects":["butterfingers","earthquake","fog","freeze","mirror","molasses"],
+ "board":{"reader":"gpt-4o","trigger":"release","release_delay_s":2.0,"poll_s":null,
+          "max_stack":2,"cells":["A1","A2","A3","A4","B1","B2","B3","B4","C1","C2","C3","C4"]},
  "space":{
    "frame":"sheet mm: origin at the sheet's top-left corner, +x right, +y down the page ...",
    "sheet":{"w_mm":215.9,"h_mm":279.4},
@@ -70,6 +74,11 @@ Static geometry, sent before any state frame.
 `source` is `mock`, `teleop` or `auto`, so the client can show what is driving the arm.
 `effects` is the authoritative list of effect names the server accepts — build the UI from it
 rather than hard-coding names.
+
+`board` says how the block list is produced, so a client can tell "nobody has moved a cube in
+a while" from "the link is broken". `reader` is the model name (or `"mock"`, or `null` when
+nothing is reading), `trigger` is `"release"`, `cells` is every cell label on this sheet, and
+`max_stack` is how tall a stack can get. See `notes.board` under `state` for its health.
 
 ### `state` — 30 Hz
 
@@ -105,21 +114,62 @@ Blocks:
 
 | Field | Meaning |
 |---|---|
-| `id` | Stable across frames. One platform per id. Not derived from colour. |
-| `color` | A name, for looks. Identity is `id`; a wrong colour is cosmetic. |
-| `x`, `y` | Sheet mm. `z` is height above the paper. |
-| `yaw` | Degrees, counterclockwise from above, wrapping every 90°. |
-| `level` | Stack level. 0 is on the paper. Height in game comes from this, not from `z`. |
-| `held` | In the gripper. Its position is the FK tip, and `z` is the real carry height. |
-| `visible` | The camera can see it right now. `false` means the pose is remembered, not fresh. |
-| `age` | Seconds since it was last confirmed. |
+| `id` | Stable across reads. One platform per id. Not derived from colour. |
+| `cell` | The printed cell it is sitting in, `"A1"`..`"C4"`. The authoritative position. |
+| `color` | A name, for looks. `"grey"` means the colour could not be read (see below). |
+| `x`, `y` | Sheet mm: the centre of `cell`. `z` is `level` times the cube size. |
+| `yaw` | Always `0.0`. A block in a printed cell is square to it. |
+| `level` | Stack level. 0 is on the paper, 1 is on top of another block. Max 1. |
+| `held` | Always `false`. Kept for compatibility; nothing sets it any more. |
+| `visible` | Always `true`. A block is on the board or it is not reported at all. |
+| `age` | Seconds since the read that produced it. |
 
-`arm_age` and `blocks_age` are seconds since each part was last updated. Blocks update slower
-than the arm (perception is ~10 Hz, the arm is 30 Hz), and on a bus dropout or a lost sheet
-these climb — grey the Sky Arm out rather than trusting a stale pose.
+**Blocks are not tracked frame to frame.** A vision model is shown the overhead frame and
+asked what is in each printed cell. That read happens **two seconds after the gripper opens**
+and otherwise not at all, because the board can only change when the arm lets go. Between
+reads the same board is republished unchanged.
 
-`notes` is free-form diagnostics (`script` in mock mode, `sheet` fit error, `bus_error`).
-Do not depend on its keys.
+Three consequences a client has to be built for:
+
+- **A block in the gripper stays where it was.** It is not on the board — it is in the air —
+  so the last read's answer stands until the next one. Its platform must not be deleted or
+  moved mid-carry; it simply steps to its new cell at the next read. This is why `held` is
+  gone: there is no carry to render.
+- **`blocks_age` of thirty seconds is healthy.** It is no longer a staleness signal. Use
+  `notes.board` to tell a quiet board from a broken one.
+- **A stacked block's lower cube may report `"grey"`.** An overhead camera cannot see the
+  colour of a block with another block on top of it. The server fills this in from the
+  previous read where it can, and sends grey where it cannot.
+
+`arm_age` is seconds since the arm was last read, and still means what it always did: on a bus
+dropout it climbs, so grey the Sky Arm out rather than trusting a stale pose.
+
+### `notes.board`
+
+Free-form diagnostics otherwise (`script` in mock mode, `bus_error`), but `notes.board` is
+worth depending on: it is how a client explains a board that has stopped moving.
+
+```json
+{"state":"no_credits","model":"gpt-4o","reads":7,"cells":"A1 red, C4 grey+teal",
+ "since_read":41.2,"trigger":"2 s after the gripper opens",
+ "message":"You exceeded your current quota",
+ "fix":"add credits to the OpenAI account",
+ "url":"https://platform.openai.com/settings/organization/billing"}
+```
+
+| `state` | Meaning |
+|---|---|
+| `ok` | The last read succeeded. |
+| `reading` | A read is in flight. |
+| `no_credits` | The OpenAI account is empty. **The board has stopped updating.** Retries on its own once topped up. |
+| `no_key` | No API key on the robot laptop. Blocks stay empty for the session. |
+| `auth` | The key was rejected. |
+| `rate_limit` | Throttled. Clears by itself; retries in ~20 s. |
+| `error` | Usually the camera. Retries in ~20 s. |
+
+`no_credits` is the one worth interrupting a player for: the rig looks completely healthy and
+a human standing next to it can fix it in about a minute. `roblox/BoardNotice.lua` puts it on
+screen.
 
 ### `pong`
 

@@ -1,6 +1,6 @@
 # roblox/
 
-The Roblox side of the bridge. Five files: paste them into Studio as-is, press Play, and the
+The Roblox side of the bridge. Six files: paste them into Studio as-is, press Play, and the
 Sky Arm mirrors the real arm while real blocks become platforms.
 
 The wire format is [`../PROTOCOL.md`](../PROTOCOL.md).
@@ -8,9 +8,9 @@ The wire format is [`../PROTOCOL.md`](../PROTOCOL.md).
 ## Setup
 
 1. **Game Settings → Security → Allow HTTP Requests: on.** Nothing works without this.
-2. In `ServerScriptService`, create four **ModuleScripts** named `Bridge`, `Mapping`,
-   `SkyArm`, `BlockSync`, and one **Script** named `Main`. Paste each file in. (`Main.server.lua`
-   is the Script; the rest are the modules.)
+2. In `ServerScriptService`, create five **ModuleScripts** named `Bridge`, `Mapping`,
+   `SkyArm`, `BlockSync`, `BoardNotice`, and one **Script** named `Main`. Paste each file in.
+   (`Main.server.lua` is the Script; the rest are the modules.)
 3. Start the robot process: `python -m bridge.main --source mock`
 4. Press **Play**. The output window should show
    `[Bridge] hello: source=mock protocol v1, 6 effects`.
@@ -35,6 +35,7 @@ the same code path either way, so it is testable before the hardware exists.
 | `Mapping.lua` | Sheet mm → studs. **The only place the scale lives.** |
 | `SkyArm.lua` | The giant arm that mirrors the follower. |
 | `BlockSync.lua` | One platform per real block, rideable. |
+| `BoardNotice.lua` | On-screen banner when the board stops updating, and why. |
 | `Main.server.lua` | Wires the above together. The smallest thing that proves the link. |
 
 ## Three things that are easy to get wrong
@@ -45,16 +46,21 @@ points* in sheet mm, not raw joint angles, so segment *i* is just the part spann
 per-joint sign or offset to discover by wiggling one real joint at a time — the real
 kinematics already ran in Python against the arm's own URDF and fitted calibration.
 
-**Platforms must not be anchored.** An anchored part moved by setting its `CFrame` does *not*
-carry a character standing on it: the player slides off, is left behind, or gets flung. Since
-the crane lift (a player riding a platform the real arm carries) is the demo's money shot,
-`BlockSync` uses **unanchored** parts driven by `AlignPosition` + `AlignOrientation` with the
-server as network owner, and caps speed at 60 studs/s so a jumpy camera frame cannot launch
-the rider. Held blocks also stay `CanCollide = true`: collision is the thing the player stands
-on, so switching it off while held (as an earlier version did) removed the ride entirely. The
-speed cap, not loss of collision, is what keeps the rider safe. If riding still proves
-unreliable, `BlockSync:attachRider(id, character)` welds the player on for the duration of a
-lift.
+**A platform is anchored while it rests and unanchored while it moves.** An anchored part
+moved by setting its `CFrame` does *not* carry a character standing on it: the player slides
+off, is left behind, or gets flung. But leaving every platform unanchored is worse — two
+stacked cubes become two constraint-driven rigid bodies pressing on each other, and the
+smallest overlap topples a stack that is rock solid on the real table.
+
+So `BlockSync` switches on the block's **cell**. Python no longer tracks a block while the arm
+carries it; a block simply appears in a new cell between one board read and the next. When
+`b.cell` changes, the part unanchors and `AlignPosition` + `AlignOrientation` drive it across
+at up to 60 studs/s with the server as network owner — so a player standing on it rides along,
+which is what the crane lift used to do from forward kinematics. On arrival (or after a 6 s
+timeout, so nothing stays unanchored forever) it re-anchors and snaps exactly to the target.
+Platforms stay `CanCollide = true` throughout: collision is the thing the player stands on,
+and the speed cap is what keeps the rider safe. If riding still proves unreliable,
+`BlockSync:attachRider(id, character)` welds the player on for the crossing.
 
 **Read the newest frame, not the next one.** Python sends 30 frames a second whether or not
 anything reads them, so a slow handler falls behind as frames queue in the socket.
@@ -63,20 +69,30 @@ anything reads them, so a slow handler falls behind as frames queue in the socke
 queue.
 
 **Constraints need a force limit raised to match the part.** `AlignPosition.MaxForce` defaults
-to 10000. A platform is ~22 x 6.5 x 22 studs at density 0.7, about 2200 mass, so its weight at
-the default gravity is ~4.3e5 — 43x the limit. Under-powered, the constraint cannot hold the
-part up at all: platforms sag to the floor, and a *held* block (`CanCollide = false`, so nothing
-catches it) sinks through the world until the engine destroys it at `FallenPartsDestroyHeight`,
-after which the block is gone for the session. `BlockSync` sets `MaxForce`/`MaxTorque` to 1e8
-and keeps the rider speed cap in `MaxVelocity`, where it belongs. `update` also rebuilds any
-platform whose part has left the tree, so a lost part recovers instead of vanishing silently.
+to 10000. A platform is a 22-stud cube at density 0.7, roughly 7500 mass, so its weight at the
+default gravity is well over 1e6 — orders of magnitude past the limit. Under-powered, the
+constraint cannot hold the part at all: a platform crossing to a new cell sags toward the floor
+instead of arriving. `BlockSync` sets `MaxForce`/`MaxTorque` to 1e8 and keeps the rider speed
+cap in `MaxVelocity`, where it belongs. `update` also rebuilds any platform whose part has left
+the tree, so a lost part recovers instead of vanishing silently.
 
-**A held block arrives grey, so colour must be set every frame.** While a block is in the jaw
-its position comes from forward kinematics, which knows where the jaw is but nothing about what
-it holds, so Python reports `color = "grey"` for the duration and the real colour again on
-release. A part coloured only in `create` would keep whatever it was when it first appeared, so
-`update` refreshes `p.Color` on every frame. The Python side keeps the true colour internally
-for block association; grey is a display state, not a loss of information.
+**A buried block can arrive grey, so colour must be set every frame.** An overhead camera
+cannot read the colour of a cube with another cube on top of it, so Python sends `"grey"` when
+it cannot name one, and the real colour again once it is uncovered. A part coloured only in
+`create` would keep whatever it had when it first appeared, so `update` refreshes `p.Color`
+every frame.
+
+**A missing block is not always a removed block.** `update` destroys the platform for any id
+the state frame stops reporting. That is correct for a cube taken off the table — but a cube
+the arm is holding in the air is not on the board either. Python deliberately keeps reporting
+it in the cell it was last read in, precisely so this does not delete a platform out from
+under a rider mid-carry. Do not "fix" that by hiding blocks the arm is near.
+
+**Tell the player when the board dies.** The board is read by a vision model on the robot
+laptop, and when that stops the game looks completely normal — the Sky Arm still moves, the
+platforms still stand — except blocks never move again. `BoardNotice` reads `notes.board` and
+puts a banner on screen for the states a human can act on, most importantly `no_credits`: the
+OpenAI account is empty, and somebody next to the rig can fix it in a minute if told.
 
 ## Tuning the scale
 

@@ -8,8 +8,10 @@ Torque stays OFF: you open and close the jaw by hand. Watch the number while you
   2. close it on a real cube         -> this is the holding band
   3. close it the whole way on air   -> this is GRIP_EMPTY_PCT
 
-Then set GRIP_CLOSED_PCT in bridge/world.py a little under (1), so that anything narrower
-counts as "closing or closed". bridge/world.py no longer uses a lower bound, so (3) only
+Nothing in bridge/ needs these numbers any more: `board.ReleaseTrigger` learns the jaw's
+open/closed span at runtime from the readings it sees, precisely because a hardcoded
+percentage is wrong for any other gripper and wrong again after a recalibration. This script
+is still useful for checking the jaw by hand, and (3) only
 matters if you want to tell an empty jaw from a holding one in your own code.
 
 The running totals at the end give the min and max seen, which is usually all you need.
@@ -49,7 +51,10 @@ def main():
 
     if lo is not None:
         print(f"Seen: {lo:.1f}% at the narrowest, {hi:.1f}% at the widest.")
-        print(f"Suggested GRIP_CLOSED_PCT for bridge/world.py: {lo + (hi - lo) * 0.7:.0f}")
+        # The same 0.4/0.6 split board.ReleaseTrigger derives for itself, printed so the
+        # jaw can be sanity-checked by eye against what the bridge will decide at runtime.
+        print(f"The bridge will read closed below {lo + (hi - lo) * 0.4:.0f}% "
+              f"and open above {lo + (hi - lo) * 0.6:.0f}%")
         print("(that is 70% of the way from closed to open, so a jaw on a cube reads 'closed')")
     return 0
 
