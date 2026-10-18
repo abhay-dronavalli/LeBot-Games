@@ -7,6 +7,7 @@ plan is the original intent and has diverged.
 |---|---|
 | [obby_plan.md](obby_plan.md) | The master plan. Numbered sections (0–21) that the Luau comments cite — "Section 7", "Section 10.2" etc. refer to it. **§4.1–4.2 and §12 are superseded**, and so is every colour requirement in it. |
 | [robot-link.md](robot-link.md) | The real arm into the game: the link, the mat→bay mapping, and the two-player shape. Built and verified against a mock. |
+| [bay-04-dark-room.md](bay-04-dark-room.md) | Bay 4, built and solved end to end. |
 | [debug-menu.md](debug-menu.md) | Jumping to any scenario, fresh state, and playing without a second player. |
 | [bay-01-saw-wall.md](bay-01-saw-wall.md) | Bay 1, built and verified end to end. |
 | [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
@@ -105,7 +106,7 @@ would walk through four empty bays to reach it.
 | 1 | **Saw Wall** | 3 (1 + a stack of 2) | **two levers, exact stand level, hold E** | ✅ built & verified; 16-stud unvaultable wall, 75 s |
 | 2 | **Void** | 2 | cells (1,0) (1,1) | ✅ built & verified |
 | 3 | **Laser Walk** | **1**, moved repeatedly | **walk it along a random 6–8 cell route** | ✅ built & verified |
-| 4 | **Dark zone** | 2 | cells (1,1) (2,1) | ❌ — **in scope, not yet designed**: its mechanic was the teal glow, and colour is gone |
+| 4 | **Dark Room** | any, moved to sweep light | **find 10 screws, then drive the power box** | ✅ built & verified |
 
 **Parked (out of scope):** Lava `[5]`, Crusher roof `[6]`, Mobs `[7]`, Arrow turrets `[8]`,
 Ice `[9]`.

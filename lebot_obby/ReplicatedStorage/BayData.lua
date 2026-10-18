@@ -97,12 +97,15 @@ return {
 	[4] = {
 		obstacle = "DarkZone",
 		level = 1,
-		solveCells = {{1, 1}, {2, 1}},
-		-- NEEDS A DESIGN PASS: this bay was "teal blocks GLOW", which was the one obstacle solved
-		-- by what the block emits rather than what it blocks -- and it was the only bay whose
-		-- mechanic was tied to a specific colour. With any block accepted, either every crate
-		-- lights the dark or the bay needs a different idea.
-		note = "Lights out, with pits you cannot see. The blocks light the way.",
+		-- Solved by an ACTION -- driving the power box -- not by filling cells. The blocks are
+		-- lanterns here: they light the search, they are not the answer. checkSolved skips the
+		-- bay and the builder owns state.solved.
+		solveMode = "action",
+		solveCells = {},
+		banner = "DARK ROOM  -  FIND 10 SCREWS",
+		note = "Lights out. A block hangs a lantern over its cell, and a screw is invisible"
+			.. " until its cell is lit -- so finding all ten is a conversation, not a walk."
+			.. " With ten in, the power box on the right-hand wall opens the room.",
 	},
 
 	----------------------------------------------------------------

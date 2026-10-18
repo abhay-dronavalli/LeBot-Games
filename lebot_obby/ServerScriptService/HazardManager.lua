@@ -10,6 +10,7 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local BayData = require(ReplicatedStorage:WaitForChild("BayData"))
@@ -1994,67 +1995,380 @@ end
 -- DARK ZONE: lights out, with pits you cannot see until something lights them. The only
 -- obstacle solved by what the block EMITS rather than what it blocks.
 BUILDERS.DarkZone = function(i, folder, info, state)
-	local centre = bayCenter(i)
+	-- DARK ROOM. A search, not a traverse -- the only bay where the obstacle is not knowing
+	-- where anything is.
+	--
+	-- The cube is a TOKEN, like the laser walk: a block on the operator's mat hangs a LANTERN
+	-- from the ceiling above that cell. Nothing is carried in and nothing is stood on. What the
+	-- operator is really doing is aiming a torch, one cell at a time, while the runner searches
+	-- the pool of light underneath it.
+	--
+	-- Ten screws lie on the floor and are INVISIBLE unless their cell is lit. That gate is the
+	-- whole bay: you cannot sweep the floor blind, so finding them is a conversation -- "light
+	-- column 2" -- rather than a walk. With all ten in, a power box on the side wall at head
+	-- height comes live, and driving its screws unlocks the room and brings the lights up.
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	if bay then
+		bay:SetAttribute("VirtualCrates", true)
+	end
 
-	-- kill the overhead lights above this bay
-	local dimmed = {}
-	local rails = Workspace.Warehouse:FindFirstChild("SkyRails")
-	if rails then
-		for _, t in ipairs(rails:GetChildren()) do
-			if string.match(t.Name, "^Truss")
-				and math.abs(t.Position.Z - centre.Z) < Config.BayDepth / 2 + 8 then
-				for _, l in ipairs(t:GetChildren()) do
-					if l:IsA("SpotLight") then
-						l.Enabled = false
-						table.insert(dimmed, l)
-					end
-				end
-			end
+	local z0 = bayZStart(i)
+	local W, D = Config.BayWidth, Config.BayDepth
+	local CEIL_Y = 14          -- low enough to read as a room, below the gantry rails at 18
+	local SCREW_COUNT = 10
+
+	local DARK = Color3.fromRGB(26, 26, 32)
+	local WARM = Color3.fromRGB(255, 206, 128)
+	local STEEL = Color3.fromRGB(198, 202, 212)
+
+	----------------------------------------------------------------
+	-- The room. Sealed on four sides and roofed, because "dark" has to come from being shut
+	-- in rather than from a tinted box you can still see the warehouse through.
+	----------------------------------------------------------------
+	for _, side in ipairs({{"Left", 0}, {"Right", W}}) do
+		newPart("DarkWall" .. side[1], Vector3.new(1, CEIL_Y, D),
+			Vector3.new(side[2], CEIL_Y / 2, z0 + D / 2), DARK,
+			Enum.Material.DiamondPlate, folder, {CanCollide = true})
+	end
+	newPart("DarkWallFar", Vector3.new(W + 2, CEIL_Y, 1),
+		Vector3.new(W / 2, CEIL_Y / 2, z0 + D), DARK, Enum.Material.DiamondPlate, folder,
+		{CanCollide = true})
+	newPart("DarkCeiling", Vector3.new(W + 2, 1, D),
+		Vector3.new(W / 2, CEIL_Y, z0 + D / 2), DARK, Enum.Material.DiamondPlate, folder,
+		{CanCollide = true})
+
+	-- The door you came in by. It drops behind you, which is what makes this a locked room.
+	local GATE_H = 14
+	local gate = newPart("DarkGate", Vector3.new(W, GATE_H, 1),
+		Vector3.new(W / 2, -GATE_H / 2, z0), Color3.fromRGB(58, 56, 52),
+		Enum.Material.DiamondPlate, folder, {CanCollide = true})
+
+	-- The way out, in the far wall. Stays shut until the power box is driven.
+	local exitDoor = newPart("DarkExit", Vector3.new(CELL * 1.5, 9, 1.2),
+		Vector3.new(W / 2, 4.5, z0 + D), Color3.fromRGB(44, 48, 56),
+		Enum.Material.Metal, folder, {CanCollide = true})
+	local exitGlow = newPart("DarkExitEdge", Vector3.new(CELL * 1.5 + 0.4, 0.3, 1.5),
+		Vector3.new(W / 2, 9.2, z0 + D), Color3.fromRGB(70, 74, 84),
+		Enum.Material.Neon, folder, {CanQuery = false})
+
+	----------------------------------------------------------------
+	-- Lanterns. One per cell, hanging just under the ceiling, lit by the operator's blocks.
+	----------------------------------------------------------------
+	local lanterns = {}
+	for col = 0, Config.BayCols - 1 do
+		for row = 0, Config.BayRows - 1 do
+			local c = cellCenter(i, col, row)
+			local housing = newPart("Lantern", Vector3.new(1.4, 0.8, 1.4),
+				Vector3.new(c.X, CEIL_Y - 1.1, c.Z), Color3.fromRGB(40, 40, 46),
+				Enum.Material.Metal, folder, {Transparency = 1, CanQuery = false})
+			local bulb = newPart("LanternBulb", Vector3.new(0.7, 0.7, 0.7),
+				Vector3.new(c.X, CEIL_Y - 1.7, c.Z), WARM,
+				Enum.Material.Neon, folder,
+				{Transparency = 1, CanQuery = false, Shape = Enum.PartType.Ball})
+			local light = Instance.new("PointLight")
+			light.Color = WARM
+			light.Range = CELL * 2.1
+			light.Brightness = 0
+			light.Enabled = false
+			light.Parent = bulb
+			lanterns[col .. "," .. row] =
+				{housing = housing, bulb = bulb, light = light, on = false}
 		end
 	end
 
-	local murk = newPart("Darkness", Vector3.new(Config.BayWidth + 12, 22, Config.BayDepth),
-		Vector3.new(centre.X, 11, centre.Z), Color3.fromRGB(0, 0, 3),
-		Enum.Material.SmoothPlastic, folder, {Transparency = 0.5, CanQuery = false})
-
-	-- pits hidden in the dark
-	local pits = {}
-	for _, cell in ipairs({{0, 0}, {3, 0}, {2, 1}, {1, 2}, {3, 2}}) do
-		local c = cellCenter(i, cell[1], cell[2])
-		local pit = newPart("HiddenPit", Vector3.new(CELL - 1.5, 0.4, CELL - 1.5),
-			Vector3.new(c.X, 0.15, c.Z), Color3.fromRGB(30, 0, 0),
-			Enum.Material.Neon, folder, {Transparency = 0.92})
-		makeLethal(pit, state)
-		table.insert(pits, pit)
+	local function setLantern(col, row, on)
+		local l = lanterns[col .. "," .. row]
+		if not l or l.on == on then
+			return
+		end
+		l.on = on
+		l.housing.Transparency = on and 0 or 1
+		l.bulb.Transparency = on and 0 or 1
+		l.light.Enabled = on
+		l.light.Brightness = on and 2.4 or 0
 	end
+
+	local function isLit(col, row)
+		local l = lanterns[col .. "," .. row]
+		return (l ~= nil) and l.on
+	end
+
+	----------------------------------------------------------------
+	-- The screws. Scattered, and invisible until their cell is lit.
+	----------------------------------------------------------------
+	local screws = {}
+	local found = 0
+	do
+		-- Spread over the twelve cells so no single lantern reveals half of them, and jittered
+		-- within each so a lit cell still has to be looked at rather than merely entered.
+		local slots = {}
+		for col = 0, Config.BayCols - 1 do
+			for row = 0, Config.BayRows - 1 do
+				table.insert(slots, {col, row})
+			end
+		end
+		for n = #slots, 2, -1 do
+			local j = math.random(n)
+			slots[n], slots[j] = slots[j], slots[n]
+		end
+		for n = 1, SCREW_COUNT do
+			local slot = slots[((n - 1) % #slots) + 1]
+			local c = cellCenter(i, slot[1], slot[2])
+			local jx = (math.random() - 0.5) * (CELL - 2.5)
+			local jz = (math.random() - 0.5) * (CELL - 2.5)
+			local screw = newPart("Screw", Vector3.new(0.45, 1.1, 0.45),
+				Vector3.new(c.X + jx, 0.55, c.Z + jz), STEEL, Enum.Material.Metal, folder,
+				{Transparency = 1, CanQuery = false, Shape = Enum.PartType.Cylinder})
+			screw.CFrame = CFrame.new(screw.Position) * CFrame.Angles(0, 0, math.rad(90))
+			table.insert(screws, {part = screw, col = slot[1], row = slot[2], taken = false})
+		end
+	end
+
+	----------------------------------------------------------------
+	-- The power box. Dead until every screw is in, then it is the way out.
+	----------------------------------------------------------------
+	local boxZ = z0 + D * 0.5
+	local box = newPart("PowerBox", Vector3.new(0.6, 3.4, 2.6),
+		Vector3.new(W - 1.2, 4.6, boxZ), Color3.fromRGB(38, 38, 44),
+		Enum.Material.DiamondPlate, folder, {CanCollide = false})
+	local boxLamp = newPart("PowerBoxLamp", Vector3.new(0.3, 0.4, 2.0),
+		Vector3.new(W - 1.6, 6.1, boxZ), Color3.fromRGB(70, 20, 20),
+		Enum.Material.Neon, folder, {CanQuery = false})
+	local driver = newPart("Screwdriver", Vector3.new(0.3, 1.6, 0.3),
+		Vector3.new(W - 2.0, 4.6, boxZ), Color3.fromRGB(220, 180, 60),
+		Enum.Material.Metal, folder, {Transparency = 1, CanQuery = false})
+
+	local boxLabel = addLabel(folder, "POWER BOX  -  SEALED",
+		Vector3.new(W - 2.2, 7.6, boxZ), Color3.fromRGB(150, 120, 120))
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Drive the screws"
+	prompt.ObjectText = "Power Box"
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 2.5
+	prompt.MaxActivationDistance = 9
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = false
+	prompt.Parent = box
+
+	----------------------------------------------------------------
+	-- Lighting. Saved and restored, because Lighting is a GLOBAL service: leave it dim and
+	-- every other bay is dim too, including whatever the overseer is looking at.
+	----------------------------------------------------------------
+	local saved = {
+		Ambient = Lighting.Ambient,
+		OutdoorAmbient = Lighting.OutdoorAmbient,
+		Brightness = Lighting.Brightness,
+	}
+	local dark = false
+	local function setDark(on)
+		if dark == on then
+			return
+		end
+		dark = on
+		if on then
+			Lighting.Ambient = Color3.fromRGB(4, 4, 6)
+			Lighting.OutdoorAmbient = Color3.fromRGB(6, 6, 10)
+			Lighting.Brightness = 0.15
+		else
+			Lighting.Ambient = saved.Ambient
+			Lighting.OutdoorAmbient = saved.OutdoorAmbient
+			Lighting.Brightness = saved.Brightness
+		end
+	end
+
+	----------------------------------------------------------------
+	-- Which cells are lit follows the operator's blocks.
+	----------------------------------------------------------------
+	local litCells = {}
+	BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
+		if not folder.Parent or bayModel ~= folder.Parent then
+			return
+		end
+		local now = {}
+		for _, c in ipairs(cellsList) do
+			now[c.col .. "," .. c.row] = true
+		end
+		litCells = now
+		for col = 0, Config.BayCols - 1 do
+			for row = 0, Config.BayRows - 1 do
+				setLantern(col, row, now[col .. "," .. row] == true)
+			end
+		end
+	end)
+
+	----------------------------------------------------------------
+	-- Picking screws up. Only in the light -- otherwise you would sweep the floor blind and
+	-- the lanterns would be decoration.
+	----------------------------------------------------------------
+	local function collect(entry)
+		if entry.taken or not isLit(entry.col, entry.row) then
+			return
+		end
+		entry.taken = true
+		found += 1
+		entry.part.Transparency = 1
+		entry.part.CanTouch = false
+		local pop = newPart("ScrewPop", Vector3.new(0.6, 0.6, 0.6), entry.part.Position,
+			WARM, Enum.Material.Neon, folder,
+			{CanQuery = false, Shape = Enum.PartType.Ball})
+		TweenService:Create(pop, TweenInfo.new(0.35), {
+			Size = Vector3.new(3, 3, 3),
+			Transparency = 1,
+		}):Play()
+		Debris:AddItem(pop, 0.5)
+	end
+
+	for _, entry in ipairs(screws) do
+		entry.part.Touched:Connect(function(hit)
+			local ch = characterFrom(hit)
+			if ch and not isGhost(ch) then
+				collect(entry)
+			end
+		end)
+	end
+
+	----------------------------------------------------------------
+	-- Driving the screws home.
+	----------------------------------------------------------------
+	local opened = false
+	local function openRoom()
+		if opened then
+			return
+		end
+		opened = true
+		prompt.Enabled = false
+
+		task.spawn(function()
+			-- the screwdriver turns, then the room comes back
+			driver.Transparency = 0
+			local spin = 0
+			local t0 = os.clock()
+			while os.clock() - t0 < 1.2 and folder.Parent do
+				spin += 0.5
+				driver.CFrame = CFrame.new(driver.Position) * CFrame.Angles(0, spin, 0)
+				task.wait(0.03)
+			end
+			driver.Transparency = 1
+			setDark(false)
+			boxLamp.Color = Color3.fromRGB(120, 240, 150)
+			exitGlow.Color = Color3.fromRGB(120, 240, 150)
+			boxLabel.Text = "POWER BOX  -  ON"
+			boxLabel.TextColor3 = Color3.fromRGB(140, 255, 170)
+			TweenService:Create(exitDoor, TweenInfo.new(1.0, Enum.EasingStyle.Quad), {
+				CFrame = CFrame.new(exitDoor.Position.X, -5, exitDoor.Position.Z),
+			}):Play()
+			task.wait(1.0)
+			exitDoor.CanCollide = false
+			state.setSolved(true)
+		end)
+	end
+
+	prompt.Triggered:Connect(function(player)
+		local ch = player.Character
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 or isGhost(ch) or found < SCREW_COUNT then
+			return
+		end
+		openRoom()
+	end)
+
+	----------------------------------------------------------------
+	-- Run loop
+	----------------------------------------------------------------
+	local running = false
+	local function setRunning(on)
+		if running == on then
+			return
+		end
+		running = on
+		TweenService:Create(gate, TweenInfo.new(0.5), {
+			CFrame = CFrame.new(gate.Position.X,
+				on and GATE_H / 2 or -GATE_H / 2, gate.Position.Z),
+		}):Play()
+		setDark(on)
+	end
+
+	task.spawn(function()
+		while folder.Parent do
+			local occupants = occupantsOf(i, 0)
+			setRunning(#occupants > 0 and not state.solved)
+
+			for _, entry in ipairs(screws) do
+				if not entry.taken then
+					entry.part.Transparency = isLit(entry.col, entry.row) and 0 or 1
+				end
+			end
+
+			local ready = (found >= SCREW_COUNT)
+			prompt.Enabled = ready and not opened
+			if opened then
+				-- left as the open-room presentation
+			elseif ready then
+				boxLamp.Color = Color3.fromRGB(240, 200, 60)
+				boxLabel.Text = "POWER BOX  -  HOLD E"
+				boxLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
+			else
+				boxLamp.Color = Color3.fromRGB(70, 20, 20)
+				boxLabel.Text = string.format("POWER BOX  -  %d/%d SCREWS", found, SCREW_COUNT)
+				boxLabel.TextColor3 = Color3.fromRGB(170, 130, 130)
+			end
+
+			local p = nil
+			if running or state.solved then
+				p = {title = "BAY 4  -  DARK ROOM"}
+				if state.solved then
+					p.task = "CLEARED"
+					p.hint = "The lights are on and the door is open."
+					p.tone = "ok"
+				elseif ready then
+					p.task = "POWER BOX  -  DRIVE THE SCREWS"
+					p.hint = "Right-hand wall, middle of the room. Hold E."
+					p.tone = "warn"
+				else
+					p.task = string.format("FIND THE SCREWS  -  %d / %d", found, SCREW_COUNT)
+					p.hint = "Call out a cell. A block there hangs a lantern, and a screw only"
+						.. " shows in the light."
+					p.tone = "danger"
+				end
+				local litCount = 0
+				for _ in pairs(litCells) do
+					litCount += 1
+				end
+				p.steps = {
+					string.format("%s  %d / %d screws",
+						ready and "[x]" or "[ ]", found, SCREW_COUNT),
+					string.format("%s  power box  -  %s",
+						opened and "[x]" or (ready and "[ ]" or "[-]"),
+						opened and "driven" or (ready and "ready" or "sealed")),
+				}
+				p.note = string.format("%d lantern%s lit. Any block lights the cell it is in.",
+					litCount, (litCount == 1) and "" or "s")
+			end
+			publishObjective(i, p, CELL)
+			task.wait(0.2)
+		end
+		-- never leave the world dark because the bay was torn down mid-run
+		setDark(false)
+	end)
 
 	function state.onSolved()
-		TweenService:Create(murk, TweenInfo.new(0.9), {Transparency = 1}):Play()
-		for _, l in ipairs(dimmed) do
-			l.Enabled = true
-		end
-		for _, p in ipairs(pits) do
-			p.Transparency = 0.25
-			p.Color = Color3.fromRGB(255, 70, 70)
-		end
-		-- the teal crates themselves become the light source
-		for _, c in ipairs(folder.Parent:GetChildren()) do
-			if c.Name == "Crate" then
-				local b = c:FindFirstChild("Base")
-				if b and not b:FindFirstChildOfClass("PointLight") then
-					local l = Instance.new("PointLight")
-					l.Color = Color3.fromRGB(130, 255, 240)
-					l.Range = 30
-					l.Brightness = 3.5
-					l.Parent = b
-				end
-			end
+		setDark(false)
+		prompt.Enabled = false
+	end
+
+	function state.reset()
+		setDark(false)
+		opened = false
+		found = 0
+		driver.Transparency = 1
+		for _, entry in ipairs(screws) do
+			entry.taken = false
+			entry.part.CanTouch = true
+			entry.part.Transparency = 1
 		end
 	end
 end
-
--- ICE: frictionless floor. You slide through a pinch point with lethal drops either side;
--- the blocks are guard rails that cover them.
 BUILDERS.Ice = function(i, folder, info, state)
 	local centre = bayCenter(i)
 	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
