@@ -48,6 +48,7 @@ length and byte sum so the match is proven rather than assumed.
 | `ServerScriptService/DebugMode.lua` | `ServerScriptService.DebugMode` | Script |
 | `ServerScriptService/GhostMode.lua` | `ServerScriptService.GhostMode` | Script |
 | `StarterPlayerScripts/DebugMenu.client.lua` | `StarterPlayer.StarterPlayerScripts.DebugMenu` | LocalScript |
+| `StarterPlayerScripts/OverseerCam.client.lua` | `StarterPlayer.StarterPlayerScripts.OverseerCam` | LocalScript |
 | `StarterPlayerScripts/DebugCellEditor.client.lua` | `StarterPlayer.StarterPlayerScripts.DebugCellEditor` | LocalScript |
 | `StarterPlayerScripts/GhostControl.client.lua` | `StarterPlayer.StarterPlayerScripts.GhostControl` | LocalScript |
 | `StarterPlayerScripts/ObjectiveHud.client.lua` | `StarterPlayer.StarterPlayerScripts.ObjectiveHud` | LocalScript |

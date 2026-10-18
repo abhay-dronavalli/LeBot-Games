@@ -64,6 +64,10 @@ local function snapshot()
 			level = info and info.level or nil,
 			solved = state and state.solved or false,
 			switches = info and info.solveMode == "switches" or false,
+			-- Where this bay wants blocks. The overseer view marks these in world, because
+			-- "place a block at (1,0)" is only useful if you can see which cell that is.
+			solveCells = info and info.solveCells or nil,
+			banner = info and info.banner or nil,
 		}
 	end
 	return {

@@ -85,6 +85,38 @@ Two things have to be forgotten on a reset, and both caused bugs:
   the diff baseline, so a cell the editor still believed in was re-delivered on the very next
   edit — one click after a reset produced two crates, one of them from the previous run.
 
+## 4b. The overseer view (**V**)
+
+Player 2's view. **V** toggles between the runner's over-the-shoulder camera and an elevated
+shot of the active bay, so in solo one person can flip between the two halves of the game and
+check what the operator is looking at.
+
+The angle is elevated, from the entrance end, looking down the bay. That is not arbitrary:
+
+- Columns (X) spread left-to-right and rows (Z) recede, which is exactly how the printed mat
+  and the 4×3 debug grid are laid out. A side-on view would foreshorten the columns and turn
+  "col 2, row 1" into guesswork.
+- It is where the Sky Arm stands, so what the overseer sees and what the arm reaches share a
+  mental model.
+- y = 38 clears a bay's own furniture — bay 1's 16-stud saw wall and side walls — while
+  staying under the roof trusses at 46.
+
+Every cell is labelled with its `col,row` painted flat on the floor, and the cells this bay
+wants a block in are **green** (`solveCells`, carried in the status payload). A called-out
+"(1,0)" is then somewhere you can see rather than count out.
+
+**Walls go transparent client-side.** The warehouse shell sits between this camera and the
+bay, so the shell's `LocalTransparencyModifier` is raised while the view is on. Doing it on
+the client matters: it is this viewer's x-ray, not a change to the world, so player 1 still
+sees solid walls around them. It is restored on the way out, along with the camera subject and
+the markers.
+
+Two things that cost time here: a `BillboardGui` adorned to the marker **did not render at
+all** — correct text, laid-out `AbsoluteSize`, nothing on screen — so the labels are a
+`SurfaceGui` on the pad's top face instead, which also reads better from above. And a Top-face
+`SurfaceGui`'s own axes run across the bay, so the text needs `Rotation = -90` to face the
+camera; `+90` renders it upside down, which at a glance looks merely mirrored.
+
 ## 5. One mat, nine bays
 
 `RunControl.activeBay` is the single answer to "which bay does the mat map to", because three
