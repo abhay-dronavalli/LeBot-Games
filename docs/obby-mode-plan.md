@@ -1,6 +1,7 @@
 # Obby as an arcade mode: conversion plan
 
-Oct 18, 2026. Plan only. Nothing here is built yet. Run it once Kushagra freezes his design work.
+Oct 18, 2026. **Built (files only, not yet run in Studio): see [As built](#as-built) at the end.** The plan below is
+kept as written, except the map now goes to **OriginZ = 1100**, not 800: Dragon Arena spans about Z 520..880.
 Contract: [arcade-plan.md "Mode contract"](arcade-plan.md#mode-contract-send-to-teammates-today). Reference mode:
 `roblox/ServerStorage/Modes/PatternMatch/Module.lua`. The Back to Lobby pad is on `origin/lobby-integration` (2d220d0).
 
@@ -183,3 +184,110 @@ is, and what the bay is asking for. `OverseerCam` already draws all of that exce
 11. Test the lobby pad mid-round (lose, round ends) and a server leave.
 12. Test with the mock bridge (`live` feed): crates follow mock blocks and the robot view shows the active bay.
 13. Commit the sources and push. Save the arcade place (it's gitignored except `places/LeBot_Arcade.rbxl` per the lobby branch).
+
+---
+
+## As built
+
+Done on `obby-mode`, Oct 18. The branch merges `origin/lobby-integration` (2d220d0) and `origin/obby_kushi` (d8c0f94,
+the newest `Place1.rbxl`) with no conflicts, and `roblox/` is identical to lobby-integration apart from the files below.
+**Files only.** None of it has been run in Studio yet, and there is no Luau checker here, so the first install will
+surface any typos in Output.
+
+Kushagra's standalone copy stays in `lebot_obby/`, and he can keep working there. The arcade copies listed below started
+as his files with minimal edits, so a later design change can be ported by diffing his file against its arcade twin.
+
+### Where everything is
+
+| Repo | Studio | What |
+|---|---|---|
+| `roblox/ServerStorage/Modes/Obby/Module.lua` | `ServerStorage.Modes.Obby.Module` | The mode: Start/Stop/PlayerLeft, run clock, finish, respawn checkpoint, lobby pad. `DisplayName "Robo Obby"`, `WinsToUnlock 0`, `MaxDuration 500` |
+| `roblox/ServerStorage/Modes/Obby/Server/*.lua` | `ServerStorage.Modes.Obby.Server.*` (ModuleScripts) | His server code, cloned fresh as `Modes.Obby.Runtime` each round: RunControl, BlockSync, SkyArm, ArmMirror, HazardManager, ActiveBayTracker, BridgeFeed, DebugMode (the solo crate source), Status (new: the always-on half of his DebugMenu), DebugMenu and GhostMode (debug only), BayData, CrateDefs, Mapping |
+| `roblox/ReplicatedStorage/Obby/Config.lua` | `ReplicatedStorage.Obby.Config` | His tunables, plus `OriginZ = 1100`, `ArcadeDebug = false`, `ResultSeconds`, `RespawnSettleSeconds`, `Dark*` |
+| (made by Module and the installer) | `ReplicatedStorage.Obby.Remotes` | His 9 remotes (`DebugStatus` is renamed `Status`) |
+| `roblox/ReplicatedStorage/Obby/Views/PlayerView.lua`, `RobotView.lua` | `ReplicatedStorage.Obby.Views.*` | Role views. RobotView is OverseerCam, always on, with the objective panel and run/link status |
+| `roblox/ReplicatedStorage/Obby/Views/Player/*.client.lua` | `...Views.Player.*` (LocalScripts) | ObjectiveHud (plus a run clock), CellEditor (solo only), BackdropFx, CameraPolish, DarkRoom (new) |
+| `roblox/ReplicatedStorage/Obby/Views/Debug/*.client.lua` | `...Views.Debug.*` | DebugMenu (F1/F2) and GhostControl (Q), cloned only when ArcadeDebug is on |
+| `roblox/ReplicatedStorage/Core/Games/Obby.lua` | `ReplicatedStorage.Core.Games.Obby` | Registry entry. `ArcadeActiveGame` makes it active while the Obby bay runs, so the core needed no edit |
+| `roblox/tools/prepare_obby_map.lua` | (command bar, in Place1) | Packs the map |
+| `roblox/tools/install_obby_mode.lua` | (command bar, in the arcade) | Installs every script, module and remote, then checks the map, the cabinet and leftovers |
+
+How the contract is met:
+
+- **Fresh per round.** Start clones `Server/` and requires the clone. Engine, remote and player connections go
+  through `session.track`, and threads through `session.spawn`. Loops are `while folder.Parent` or check `session.alive`.
+- **Scoped to the round.** HUDs, loops and remotes reach `session.runners` and the robot role only. No `FireAllClients`
+  or `Players:GetPlayers()` is left in the game logic.
+- **No own robot link.** The obby's `Bridge` is gone. BridgeFeed reads `Core.StateStore` (hello and the raw mm frame) on
+  `Shared.StateStore.Updated`, and the feed is `live` when `Shared.Bridge.isOnline()` at Start, else `solo`.
+- **No Lighting.** The dark room sets `Dark` on `Bay04`, and the runner's camera gets a ColorCorrectionEffect.
+- **No spawn lookups.** `RunControl.startCFrame()` reads `Map.Start`.
+- **Debug off by default.** Every debug key (F1, F2, Q, the cell editor's 1–9/N/R/T/K/H/M, HazardManager's R) and
+  every DebugCommand need `ArcadeDebug`. Set it with `Config.ArcadeDebug` or the attribute `ArcadeDebug = true` on
+  `ServerStorage.Modes.Obby`.
+
+The rules of a round:
+
+- **Win:** a runner reaches `Map.Finish` (course Z 115..123, past bay 4's exit) with bay 4 solved, before the
+  480 s clock runs out.
+- **Results:** when everyone has finished or gone, or the clock hits 0, a 4 s result screen shows, then `Finished`
+  fires once in list form.
+- **Death:** the runner respawns at the approach to the furthest bay they reached. That bay is rebuilt fresh, unless
+  another runner is standing in it.
+- **Lobby pad:** `Map.LobbyPad` is Enabled from Start until the runner enters bay 1, and again once the round is
+  decided. The arcade forfeits the win of anyone who takes a pad (`awardWins` skips `leftEarly`), so it stays off while
+  a finished runner waits for the others.
+
+### Getting the map in
+
+1. In the repo root: `python -m http.server 8771 --bind 127.0.0.1` (not 8765, which is the robot bridge's port).
+2. Open `lebot_obby/Place1.rbxl` in Studio, Edit mode, and run this in the command bar:
+   ```lua
+   game:GetService("HttpService").HttpEnabled = true
+   loadstring(game:GetService("HttpService"):GetAsync("http://127.0.0.1:8771/roblox/tools/prepare_obby_map.lua"))()
+   ```
+   This moves `Warehouse`, `Backdrop` and `StartSpawn` into one Model, `Workspace.Map`. It turns the SpawnLocation into a
+   plain part and adds `Start`, `Finish` and `LobbyPad` (tagged `LobbyTeleporter`). It then shifts the whole Model
+   +1100 Z (to about Z 1033..1287, X −87..119) and sets it Persistent. Check the bounds line in Output.
+3. Right click `Workspace.Map` → **Save to File…** → `places/ObbyMap.rbxm`. Close Place1 **without saving**.
+   `*.rbxm` is gitignored, so use `git add -f` if you want it in the repo.
+4. Open `places/LeBot_Arcade.rbxl`. Right click `ServerStorage.Modes.Obby` (make the Folder if it isn't there) →
+   **Insert from File…** → `places/ObbyMap.rbxm`. It arrives as `Map`.
+5. Same command bar, now in the arcade:
+   ```lua
+   loadstring(game:GetService("HttpService"):GetAsync("http://127.0.0.1:8771/roblox/tools/install_obby_mode.lua"))()
+   ```
+   Fix every warning it prints. It checks for the Map's parts, a SpawnLocation or script in the map, Cell_0_0 at
+   Z ≈ 1104, the Obby cabinet in `Workshop.Bays` (Mode `Obby`), the core Bridge, and standalone copies of obby scripts.
+   Then save the arcade place.
+6. Play. Walk into the Obby portal alone (solo: the grid places the blocks), then with the mock bridge (live).
+
+### Unsure, check these first
+
+- **1.5× saw-wall levers.** The level gate holds: it raycasts 9 studs down from the root and compares the *support's*
+  height to the lever's stand level (±3.02). So a lever still can't be thrown one level too low. What changes:
+  - One level too low, the hold prompt now shows from about 7.7 studs away instead of 6.6, then gets refused.
+  - The single centre ray can miss a crate edge the wider body is still standing on, which reads as "NEED 1 CRATE".
+  - Lever B headroom: on the 2-stack, the head reaches about 21.2. The right rail beam sits at X 28, Y 18, directly over
+    cell (3,0). Check whether it's collidable and blocks the jump.
+- **1.5× laser walk (the bigger risk).** Death is any touch on a live pad or beam (beams at Y 1.6, 4.4 and 7.2).
+  - At 1.5× the arms reach about ±3, so drifting **about 1.1 studs** off a cell's centre line puts an arm into a live
+    neighbour's 4.4 beam. At 1× that took 2.1.
+  - The 7.2 beam is now at head height.
+  - If playtests confirm it, the fix is a per-player opt-out in `CharacterScale` (e.g. a `NoScale` attribute Module
+    sets on runners) or thinner/shorter beams. Neither is done.
+- **Dark room look.** The tint values (`Config.Dark*`) are a guess. Tune them by eye: the sconces must still read and
+  the screws must only show when lit.
+- **Hall lighting.** Kushagra's Atmosphere, Bloom, `BackdropGrade` and Sky don't come over (the arcade owns
+  Lighting), so the hall looks different from Place1. The course still gets light from the skylight strip.
+- **Respawn rebuilds the bay.** That clears its crates. In live they re-seat from the real mat on the next frame; in
+  solo the runner places them again.
+- **Robot objective after joining mid-bay.** The robot sees the objective on the next push (most bays re-push every
+  0.2 s). Status is answered on request; the objective isn't.
+- **Live mode:** never run against hardware (robot-link.md). If `live` starts before the core has a hello, Mapping keeps
+  its defaults.
+- **Python side:** the arcade sends `{t = "mode", name = "obby"}` and needs a mapping for it.
+- **Known in Kushagra's code, left alone:** the saw's `placeWall` puts both blade rows at the same height.
+  `characterFrom` can kill any character in the map, but only runners are ever in it.
+- **More than one runner:** bays seal behind the first runner. Roles normally give one character, so this hasn't been
+  designed around.
