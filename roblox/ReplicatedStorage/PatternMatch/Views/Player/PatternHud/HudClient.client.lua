@@ -1,5 +1,9 @@
--- StarterGui.PatternHud.HudClient
--- Pattern Match HUD, driven by the PatternUI remote payload (PatternMatch.Game:payload):
+-- ReplicatedStorage.PatternMatch.Views.Player.PatternHud.HudClient
+-- Pattern Match HUD, driven by the PatternUI remote payload (PatternMatch.Game:payload). A template:
+-- Views.PlayerView clones its ScreenGui into PlayerGui for the player role and spectators (never the robot)
+-- and destroys it on exit. With the ReadOnly attribute (spectators) it sends nothing: no Q / R, no arrows,
+-- and no camera shake (their camera already follows the player's). It asks for the current payload
+-- (PatternRefresh) when it starts, and stops the tremor shake when the view exits (Exiting attribute).
 --   - Ticket stack (bottom left, small): only the ACTIVE ticket is face up (ticket #, points, mini 4 x 3
 --     grid with row A on top and columns 1-4 left to right, like the board seen from the row C side; a
 --     stacked cell is split, top color over bottom, with a small "2" badge; age). Waiting tickets peek out
@@ -57,6 +61,7 @@ local TUCK = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out
 local FLY = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 local screen = script.Parent
+local readOnly = screen:GetAttribute("ReadOnly") == true
 screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling -- a card's contents always draw over the card itself
 
 local root = Instance.new("Frame")
@@ -356,10 +361,11 @@ local function clearStack()
 end
 
 local function cycle(dir)
-	if inShiftNow and lastWaiting > 0 then
+	if not readOnly and inShiftNow and lastWaiting > 0 then
 		ticketCycle:FireServer(dir)
 	end
 end
+prevButton.Visible, nextButton.Visible = not readOnly, not readOnly
 prevButton.Activated:Connect(function() cycle(TicketStack.ARROWS.Prev) end)
 nextButton.Activated:Connect(function() cycle(TicketStack.ARROWS.Next) end)
 UserInputService.InputBegan:Connect(function(input)
@@ -465,7 +471,7 @@ local function setTremor(on)
 		return
 	end
 	shaking = on
-	if on then
+	if on and not readOnly then
 		local rng = Random.new()
 		RunService:BindToRenderStep("PatternTremor", Enum.RenderPriority.Camera.Value + 1, function()
 			local camera = workspace.CurrentCamera
@@ -473,15 +479,22 @@ local function setTremor(on)
 				rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS), 0)
 				* CFrame.Angles(0, 0, rng:NextNumber(-CAMERA_SHAKE_RADIANS, CAMERA_SHAKE_RADIANS))
 		end)
+	end
+	if on then
 		boardShake = BoardShake.start({ cabinet:WaitForChild("TargetBoard"), cabinet:WaitForChild("LiveBoard") })
 	else
-		RunService:UnbindFromRenderStep("PatternTremor")
+		pcall(RunService.UnbindFromRenderStep, RunService, "PatternTremor") -- not bound on a read-only copy
 		if boardShake then
 			boardShake:stop()
 			boardShake = nil
 		end
 	end
 end
+
+-- The view is leaving (role or game change): put the camera and the boards back.
+screen:GetAttributeChangedSignal("Exiting"):Connect(function()
+	setTremor(false)
+end)
 
 -- Payload ---------------------------------------------------------------------------------------------
 
@@ -615,3 +628,4 @@ patternUI.OnClientEvent:Connect(function(p)
 	end
 end)
 
+remotes:WaitForChild("PatternRefresh"):FireServer() -- the current state, right away

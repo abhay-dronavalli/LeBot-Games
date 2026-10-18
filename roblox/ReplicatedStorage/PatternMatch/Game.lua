@@ -226,7 +226,12 @@ states.Results = {
 }
 
 -- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), core (Core.Events),
--- ui (PatternUI RemoteEvent), stateChanged (optional BindableEvent, fired with
+-- ui (PatternUI RemoteEvent), robotUi (optional RobotUI RemoteEvent), players (optional function returning
+-- the players to send the HUD to) and roleOf (optional function player -> role): with all three, every
+-- player gets the full HUD payload except the robot role, which gets only Game.robotPayload on robotUi
+-- (without them everyone gets the full payload through ui:FireAllClients), onActive (optional function
+-- called with true when a game starts and false when it is back to Idle: Core.GameRegistry's active game),
+-- stateChanged (optional BindableEvent, fired with
 -- { state, mode, activeId, target } on every state change and every active ticket change, where target
 -- is the active ticket's target), rng (optional Random for tickets, for repeatable tests), manualAttract
 -- (true: the attract demo only moves when tests call game.attract:advance(dt))
@@ -234,6 +239,7 @@ function Game.new(opts)
 	local self = setmetatable({}, Game)
 	self.store = opts.store
 	self.ui = opts.ui
+	self.robotUi, self.players, self.roleOf, self.onActive = opts.robotUi, opts.players, opts.roleOf, opts.onActive
 	self.stateChanged = opts.stateChanged
 	self.rng = opts.rng or Random.new()
 	local targetModel = opts.cabinet:WaitForChild("TargetBoard")
@@ -459,6 +465,9 @@ function Game:setState(name)
 	self.revealPhase, self.revealLeft = nil, nil
 	self.events:stop()
 	self.liveBoard:showProblems(nil)
+	if self.onActive then
+		self.onActive(name ~= "Idle") -- the player is in Pattern Match from mode select until Results end
+	end
 	states[name].enter(self)
 	log("state %s%s", name, self.mode and name ~= "Idle" and (" (" .. self.mode .. ")") or "")
 	self:pushUI()
@@ -530,13 +539,49 @@ function Game:hudKey()
 		tostring(p.orderUp and p.orderUp.seq))
 end
 
+-- What the robot role may see of a payload: the state, the shift timer, the score, tickets done and the
+-- latest ORDER UP. Never the tickets, the target, the reveal phase, events or vanished cells: the operator
+-- plays blind (Views.RobotView).
+function Game.robotPayload(p)
+	return {
+		state = p.state,
+		timeLeft = p.timeLeft,
+		score = p.score,
+		completedCount = p.completedCount,
+		orderUp = p.orderUp and { seq = p.orderUp.seq, points = p.orderUp.points } or nil,
+		robot = p.robot,
+	}
+end
+
+-- One player's copy: the robot role gets the robot payload on robotUi, everyone else the full one.
+function Game:sendTo(player, payload)
+	local role = self.roleOf and self.roleOf(player)
+	if self.roleOf and role == nil then
+		return -- no role yet (just joined): it gets a payload when its role is set
+	end
+	if role == "robot" then
+		if self.robotUi then
+			self.robotUi:FireClient(player, Game.robotPayload(payload))
+		end
+	else
+		self.ui:FireClient(player, payload)
+	end
+end
+
 -- Sends the HUD payload to one player, or to everyone when player is nil.
 function Game:pushUI(player)
+	local payload = self:payload()
 	if player then
-		self.ui:FireClient(player, self:payload())
+		self:sendTo(player, payload)
+		return
+	end
+	self.pushedKey = self:hudKey()
+	if self.players and self.roleOf then
+		for _, p in ipairs(self.players()) do
+			self:sendTo(p, payload)
+		end
 	else
-		self.pushedKey = self:hudKey()
-		self.ui:FireAllClients(self:payload())
+		self.ui:FireAllClients(payload)
 	end
 end
 

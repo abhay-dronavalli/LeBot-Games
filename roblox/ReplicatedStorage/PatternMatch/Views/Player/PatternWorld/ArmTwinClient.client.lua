@@ -1,4 +1,6 @@
--- StarterPlayer.StarterPlayerScripts.ArmTwinClient
+-- ReplicatedStorage.PatternMatch.Views.Player.PatternWorld.ArmTwinClient
+-- (A template: Views.PlayerView clones it into PlayerGui for the player role and spectators; the stick arm
+-- goes away when the view exits.)
 -- Makes the arm twin next to the LiveBoard follow the real arm on this client: the server broadcasts the
 -- arm as world points over the LiveBoard on PatternMatch.Remotes.ArmPose (from the bridge's arm.points)
 -- and ArmTwin.Stick draws it as a stick figure, easing toward each sample. With no arm data (before the
@@ -14,4 +16,5 @@ local cabinet = workspace:WaitForChild("PatternCabinet")
 local twin = cabinet:WaitForChild("LiveBoard"):WaitForChild("ArmTwin")
 twin:WaitForChild("Base")
 
-Stick.attach(twin, armPose, cabinet)
+local handle = Stick.attach(twin, armPose, cabinet)
+script.Parent:GetAttributeChangedSignal("Exiting"):Connect(handle.destroy)

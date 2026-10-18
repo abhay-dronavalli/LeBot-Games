@@ -1,5 +1,7 @@
--- StarterGui.PatternModeSelect.ModeSelectClient
--- Mode select screen for the player who pressed "Play Pattern Match" (the PatternUI payload's chooser).
+-- ReplicatedStorage.PatternMatch.Views.Player.PatternModeSelect.ModeSelectClient
+-- Mode select screen for the player who pressed "Play Pattern Match" (the PatternUI payload's chooser). A
+-- template: Views.PlayerView clones its ScreenGui into PlayerGui; never open on a ReadOnly (spectator) copy,
+-- and the camera goes back to normal if the view exits mid-shot (Exiting attribute).
 -- The camera flies to a fixed shot of the table inside the bedroom, two tiles (EASY / HARD) send the
 -- pick through the PatternPick remote, and a countdown shows the auto-pick. Everyone else keeps the
 -- HUD, which says who is choosing.
@@ -39,6 +41,7 @@ local TILES = {
 }
 
 local screen = script.Parent
+local readOnly = screen:GetAttribute("ReadOnly") == true
 
 local root = Instance.new("Frame")
 root.Name = "Root"
@@ -211,7 +214,7 @@ local function close()
 end
 
 patternUI.OnClientEvent:Connect(function(p)
-	local choosing = p.state == "ModeSelect" and p.chooserUserId == localPlayer.UserId
+	local choosing = not readOnly and p.state == "ModeSelect" and p.chooserUserId == localPlayer.UserId
 	if choosing and not showing then
 		open()
 	elseif not choosing and showing then
@@ -226,5 +229,13 @@ patternUI.OnClientEvent:Connect(function(p)
 		confirm.Visible = true
 	else
 		countdown.Text = string.format("Auto-picks EASY in %d", p.timeLeft or 0)
+	end
+end)
+
+screen:GetAttributeChangedSignal("Exiting"):Connect(function()
+	if showing then
+		showing = false
+		localPlayer:SetAttribute("PatternShot", nil)
+		workspace.CurrentCamera.CameraType = savedType or Enum.CameraType.Custom
 	end
 end)

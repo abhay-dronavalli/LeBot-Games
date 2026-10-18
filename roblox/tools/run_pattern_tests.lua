@@ -610,7 +610,7 @@ if cab then
 	check("Q / R and the arrows map to the same -1 / +1; E (the ProximityPrompt key) does nothing",
 		TicketStack.KEYS[Enum.KeyCode.Q] .. " " .. TicketStack.KEYS[Enum.KeyCode.R] .. " " .. tostring(TicketStack.KEYS[Enum.KeyCode.E])
 		.. " " .. TicketStack.ARROWS.Prev .. " " .. TicketStack.ARROWS.Next, "-1 1 nil -1 1")
-	local hudSource = game:GetService("StarterGui").PatternHud:FindFirstChildWhichIsA("LocalScript").Source
+	local hudSource = RS.PatternMatch.Views.Player.PatternHud:FindFirstChildWhichIsA("LocalScript").Source
 	check("the HUD wires Q / R and both arrows to one cycle() that fires TicketCycle, with Q / R key hints",
 		string.find(hudSource, "TicketStack.KEYS[input.KeyCode]", 1, true) ~= nil
 		and string.find(hudSource, "cycle(TicketStack.ARROWS.Prev)", 1, true) ~= nil
@@ -1500,5 +1500,167 @@ if RS:FindFirstChild("ArmTwin") and RS.ArmTwin:FindFirstChild("Stick") and cabMo
 else
 	check("ReplicatedStorage.ArmTwin.Stick and the cabinet exist", false, true)
 end
+
+section("30. roles (Core.Roles): assignment with fake players, swap, the remote guard")
+do
+	local RolesM = require(RS.Core.Roles:Clone())
+	local function fake(name)
+		local attrs = {}
+		return { Name = name, UserId = #name, SetAttribute = function(_, k, v) attrs[k] = v end,
+			GetAttribute = function(_, k) return attrs[k] end }
+	end
+	local a = RolesM.Assigner.new()
+	local p1, p2, p3, p4 = fake("Ann"), fake("Bo"), fake("Cy"), fake("Di")
+	check("join order: player, robot, spectator, spectator", table.concat({ a:join(p1), a:join(p2), a:join(p3), a:join(p4) }, " "),
+		"player robot spectator spectator")
+	check("the Role attribute is set on each Player", table.concat({ p1:GetAttribute("Role"), p2:GetAttribute("Role"),
+		p3:GetAttribute("Role"), RolesM.of(p4) }, " "), "player robot spectator spectator")
+	a:leave(p1)
+	check("the player leaves: the role is empty, spectators keep theirs", tostring(a:holder("player")) .. " " .. a:roleOf(p3), "nil spectator")
+	local p5 = fake("Ed")
+	check("the next client to join fills it", a:join(p5) .. " " .. tostring(a:holder("player") == p5), "player true")
+	a:leave(p2)
+	local p6 = fake("Flo")
+	check("the robot leaves and rejoins: robot again", a:join(p6) .. " / " .. a:join(p2), "robot / spectator")
+	local changed = a:swap()
+	check("swap: the player and robot trade, attributes follow, spectators untouched",
+		#changed .. " " .. RolesM.of(p5) .. " " .. RolesM.of(p6) .. " " .. RolesM.of(p3), "2 robot player spectator")
+	a:swap()
+	check("swap twice: back where it was", RolesM.of(p5) .. " " .. RolesM.of(p6), "player robot")
+	local solo = RolesM.Assigner.new()
+	local only = fake("Solo")
+	solo:join(only)
+	check("solo swap (no robot yet): the player becomes the robot, player empty", #solo:swap() .. " " .. RolesM.of(only)
+		.. " " .. tostring(solo:holder("player")), "1 robot nil")
+	local forced = RolesM.Assigner.new({ forced = "robot" })
+	check("debugForceRole robot: the first client is the robot, the second the player",
+		forced:join(fake("A")) .. " " .. forced:join(fake("B")) .. " " .. forced:join(fake("C")), "robot player spectator")
+	local forcedPlayer = RolesM.Assigner.new({ forced = "player" })
+	check("debugForceRole player: same as normal", forcedPlayer:join(fake("A")) .. " " .. forcedPlayer:join(fake("B")), "player robot")
+
+	local calls = {}
+	local guarded = RolesM.guard(function(player, value) table.insert(calls, player.Name .. "=" .. tostring(value)); return "ran" end, "TestRemote")
+	local robot, spectator, nobody = fake("Rob"), fake("Spec"), fake("New")
+	robot:SetAttribute("Role", "robot")
+	spectator:SetAttribute("Role", "spectator")
+	local player = fake("Pat")
+	player:SetAttribute("Role", "player")
+	check("guard: the robot's call is dropped", guarded(robot, 1), nil)
+	check("guard: a spectator's call is dropped", guarded(spectator, 2), nil)
+	check("guard: a client with no role yet is dropped", guarded(nobody, 3), nil)
+	check("guard: the player's call runs, arguments intact", tostring(guarded(player, 4)) .. " " .. table.concat(calls, ","), "ran Pat=4")
+end
+
+section("31. game registry (Core.GameRegistry): entries, the view each role shows")
+do
+	local core = RS.Core:Clone()
+	local Registry = require(core.GameRegistry)
+	local pmEntry = Registry.get("PatternMatch")
+	check("Pattern Match is registered (Core.Games.PatternMatch): name, lobby, two view modules",
+		pmEntry ~= nil and pmEntry.name .. " " .. tostring(pmEntry.lobby) .. " " .. pmEntry.playerView.Name .. " " .. pmEntry.robotView.Name,
+		"Pattern Match true PlayerView RobotView")
+	check("lobbyEntry is Pattern Match", Registry.lobbyEntry() == pmEntry, true)
+	local views = {}
+	for _, m in ipairs({ pmEntry.playerView, pmEntry.robotView, RS.Core.Views.LobbyRobotView }) do
+		local v = require(m) -- the real modules: PlayerView finds its templates through script.Parent
+		table.insert(views, m.Name .. "=" .. tostring(type(v.enter) == "function" and type(v.exit) == "function"))
+	end
+	check("every view module has enter() and exit()", table.concat(views, " "), "PlayerView=true RobotView=true LobbyRobotView=true")
+	local fakeGame = { id = "Obby", playerView = "obby player", robotView = "obby robot" }
+	local lobby = { id = "PM", playerView = "pm player", robotView = "pm robot", lobby = true }
+	local function v(role, active) return tostring(Registry.viewFor(role, active, lobby, "lobby robot")) end
+	check("robot: lobby view with no game, the active game's robot view in one",
+		v("robot", nil) .. " | " .. v("robot", fakeGame) .. " | " .. v("robot", lobby), "lobby robot | obby robot | pm robot")
+	check("player and spectator: the lobby game's player view, then the active game's",
+		v("player", nil) .. " | " .. v("spectator", nil) .. " | " .. v("player", fakeGame) .. " | " .. v("spectator", fakeGame),
+		"pm player | pm player | obby player | obby player")
+	check("no role yet: no view", v(nil, fakeGame), "nil")
+	check("no lobby game: a player in the lobby shows nothing", tostring(Registry.viewFor("player", nil, nil, "x")), "nil")
+	check("register checks its entry", (pcall(Registry.register, { id = "Bad", name = "Bad" })), false)
+	core:Destroy()
+end
+
+section("32. Pattern Match for the robot role: its own payload, sent per role; the active game")
+if cab then
+	local board = cab:Clone()
+	local function fake(name, role)
+		local attrs = { Role = role }
+		return { Name = name, UserId = #name, GetAttribute = function(_, k) return attrs[k] end }
+	end
+	local full, robotSent = {}, {}
+	local ui = { FireAllClients = function() error("FireAllClients with roles") end,
+		FireClient = function(_, p, payload) table.insert(full, p.Name .. ":" .. tostring(payload.tickets ~= nil)) end }
+	local robotUi = { FireClient = function(_, p, payload) table.insert(robotSent, { name = p.Name, payload = payload }) end }
+	local players = { fake("Pat", "player"), fake("Rob", "robot"), fake("Spec", "spectator"), fake("New", nil) }
+	local active = {}
+	local g = Game.new({ cabinet = board, store = { get = function() return { blocks = {} } end, status = function() return "mock" end },
+		core = { fire = function() end }, ui = ui, robotUi = robotUi, players = function() return players end,
+		roleOf = function(p) return p:GetAttribute("Role") end, onActive = function(on) table.insert(active, tostring(on)) end,
+		rng = Random.new(3), manualAttract = true })
+	g:setState("Idle")
+	Config.debugForceMode = "easy"
+	g:start(players[1])
+	table.clear(full)
+	table.clear(robotSent)
+	g:pushUI()
+	check("everyone but the robot gets the full payload; no role yet gets nothing", table.concat(full, " "), "Pat:true Spec:true")
+	local rp = robotSent[1] and robotSent[1].payload or {}
+	local keys = {}
+	for k in pairs(rp) do table.insert(keys, k) end
+	table.sort(keys)
+	check("the robot gets only state, timer, score, tickets done, ORDER UP and the link",
+		(robotSent[1] and robotSent[1].name or "-") .. " " .. table.concat(keys, ","), "Rob completedCount,robot,score,state,timeLeft")
+	local ticket = g:activeTicket()
+	g:completeTicket(ticket)
+	local last = robotSent[#robotSent].payload
+	check("an ORDER UP reaches the robot as seq + points only", tostring(last.orderUp and last.orderUp.seq) .. " "
+		.. tostring(last.orderUp and last.orderUp.points == ticket.points) .. " " .. tostring(last.orderUp and last.orderUp.id), "1 true nil")
+	check("Game.robotPayload drops tickets, target, reveal, events and vanished cells", (function()
+		local p = Game.robotPayload(g:payload())
+		return tostring(p.tickets) .. tostring(p.activeId) .. tostring(p.revealPhase) .. tostring(p.event) .. tostring(p.vanishedCells)
+	end)(), "nilnilnilnilnil")
+	g:pushUI(players[2])
+	check("pushUI(robot) sends the robot payload, never the full one", tostring(robotSent[#robotSent].name) .. " " .. tostring(robotSent[#robotSent].payload.tickets), "Rob nil")
+	g:setState("Results")
+	g:setState("Idle")
+	check("active game: on from the start, off back in Idle", table.concat(active, ","), "false,true,true,false")
+	Config.debugForceMode = nil
+	board:Destroy()
+end
+
+local viewsFolder = RS.PatternMatch:FindFirstChild("Views")
+check("Views.Player templates: PatternHud, PatternModeSelect (ScreenGuis), PatternWorld (CabinetFocus, ArmTwinClient)", (function()
+	local t = viewsFolder and viewsFolder:FindFirstChild("Player")
+	if not t then return "missing" end
+	local w = t:FindFirstChild("PatternWorld")
+	return tostring(t:FindFirstChild("PatternHud") and t.PatternHud:IsA("ScreenGui")) .. " "
+		.. tostring(t:FindFirstChild("PatternModeSelect") and t.PatternModeSelect:IsA("ScreenGui")) .. " "
+		.. tostring(w and w:FindFirstChild("CabinetFocus") ~= nil and w:FindFirstChild("ArmTwinClient") ~= nil)
+end)(), "true true true")
+check("nothing of Pattern Match left in StarterGui / StarterPlayerScripts (the views own it)",
+	tostring(game:GetService("StarterGui"):FindFirstChild("PatternHud")) .. " " .. tostring(game:GetService("StarterGui"):FindFirstChild("PatternModeSelect"))
+	.. " " .. tostring(game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("ArmTwinClient"))
+	.. " " .. tostring(game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("CabinetFocus")), "nil nil nil nil")
+check("Players.CharacterAutoLoads is off (CoreRoles spawns only the player role)", game:GetService("Players").CharacterAutoLoads, false)
+check("the robot view's camera shot keeps the whole cabinet behind it", (function()
+	local src = viewsFolder and viewsFolder:FindFirstChild("RobotView") and viewsFolder.RobotView.Source or ""
+	local fx, fy, fz = string.match(src, "SHOT_FROM = Vector3.new%(([%-%d%.]+), ([%-%d%.]+), ([%-%d%.]+)%)")
+	local ax, ay, az = string.match(src, "SHOT_AT = Vector3.new%(([%-%d%.]+), ([%-%d%.]+), ([%-%d%.]+)%)")
+	if not (fx and ax) then return "no shot" end
+	local from, at = Vector3.new(tonumber(fx), tonumber(fy), tonumber(fz)), Vector3.new(tonumber(ax), tonumber(ay), tonumber(az))
+	local look = (at - from).Unit
+	-- Every corner of the cabinet's bounding box (and 12 studs above it, the celebration text) is behind
+	-- the camera: a negative dot with the look direction.
+	local cf, size = workspace.PatternCabinet:GetBoundingBox()
+	for _, sx in ipairs({ -0.5, 0.5 }) do
+		for _, sy in ipairs({ -0.5, 0.5 }) do
+			for _, sz in ipairs({ -0.5, 0.5 }) do
+				local corner = cf:PointToWorldSpace(Vector3.new(sx, sy, sz) * size) + Vector3.new(0, sy > 0 and 12 or 0, 0)
+				if (corner - from):Dot(look) >= 0 then return "cabinet in front" end
+			end
+		end
+	end
+	return "all behind"
+end)(), "all behind")
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

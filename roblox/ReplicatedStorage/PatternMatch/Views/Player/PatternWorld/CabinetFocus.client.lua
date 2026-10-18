@@ -1,4 +1,6 @@
--- StarterPlayer.StarterPlayerScripts.CabinetFocus
+-- ReplicatedStorage.PatternMatch.Views.Player.PatternWorld.CabinetFocus
+-- (A template: Views.PlayerView clones it into PlayerGui for the player role and spectators; the robot
+-- views set their own blur.)
 -- Depth of field that keeps the Pattern Match table sharp and softly blurs the room behind it. Every
 -- frame it sets Lighting.CabinetFocus (a DepthOfFieldEffect) FocusDistance to the camera's distance to
 -- the table's center, with an in-focus radius wide enough for both boards and the arm twin.

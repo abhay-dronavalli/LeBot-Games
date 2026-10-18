@@ -14,8 +14,9 @@
 --   StateStore.status()    -> "live" (bridge, any source but mock), "mock" (bridge, source mock),
 --                             "offline" (see linkStatus, or still pending) or "fake" (fake generator)
 --   StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge) -> "live" | "mock" | "offline",
---                             the bridge part of status() as a pure function
---   StateStore.hello()     -> the bridge's hello frame, or nil
+--                             the bridge part of status() as a pure function; the server also keeps
+--                             status() in the "RobotLink" attribute of ReplicatedStorage.Core, for any client
+--   StateStore.hello()    -> the bridge's hello frame, or nil
 --   StateStore.sendEvent(name, intensity, duration) -> true if it went to the robot, else false, reason
 --
 -- Bridge mode (Config.useBridge, the default): the server requires ServerScriptService.Bridge, registers
@@ -480,6 +481,15 @@ end
 
 if RunService:IsServer() and RunService:IsRunning() then
 	task.spawn(followGame)
+	task.spawn(function() -- the link status for every client (the lobby robot view's badge)
+		while true do
+			local status = StateStore.status()
+			if script.Parent:GetAttribute("RobotLink") ~= status then
+				script.Parent:SetAttribute("RobotLink", status)
+			end
+			task.wait(0.25)
+		end
+	end)
 	if not Config.useBridge then
 		startFake("Config.useBridge is false")
 	else
