@@ -113,6 +113,26 @@ the label reads `STACK HIGHER`.
 
 ---
 
+## 4b. On-screen objective
+
+The bay drives a HUD (`StarterPlayerScripts/ObjectiveHud`) through the generic
+`Remotes.Objective` event, so the player is never guessing what the bay wants:
+
+| State | Task line | Timer |
+|---|---|---|
+| outside the bay | *hidden* | — |
+| blades live | `LEVER A — KILL THE BLADES` | `WALL REACHES YOU IN m:ss` |
+| blades dead | `LEVER B — STOP THE WALL` | `WALL REACHES YOU IN m:ss` |
+| crate jamming the wall | (unchanged) | `STALLED 0:10`, counting down |
+| solved | `CLEARED` | — |
+
+Each line carries a hint naming the wall and what you need to stand on. A refused placement
+flashes `BLADES LIVE - CANNOT DROP THERE` under the panel for 2.5s, and on the billboard in
+world. The countdown turns red under 10s by itself, whatever the task tone is.
+
+The payload is `{title, task, hint, tone, timer, timerLabel, timerTone, flash}` and firing
+`nil` clears the HUD — nothing in it is saw-wall specific, so later bays can reuse it.
+
 ## 5. Colour code
 
 Green means **"this is your target right now"** and nothing else is ever green.
@@ -148,6 +168,12 @@ The wall travels **far end → entrance**. Two things follow from that:
 
 Lever housings are 3.5 studs wide and **jut into the bay**. Flush with the wall they'd
 sit a couple of studs short of the crate's edge and be unreachable.
+
+The handle rotates about **Z**, so it swings out into the bay toward whoever is standing in
+front of it. An earlier version rotated about X, which tipped each lever down the lane and
+made them look aimed at nothing in particular. Measured: throwing Lever A moves the knob from
+`(3.15, 10.00, 12.00)` to `(5.41, 8.42, 12.00)` — X moves toward the bay centre, Z is
+unchanged.
 
 ---
 
@@ -211,6 +237,11 @@ gets a *different instance* and proves nothing.
 | Parked rejection after A | delivered by `retryRejected` |
 | Stall after A | held at z=15.09 for ~10s, then resumed at 0.314 studs/s |
 | Stall spent once | wall passed the same crate without re-jamming |
+| HUD outside bay | hidden |
+| HUD task switch | `LEVER A` → after throw → `LEVER B`, hints follow |
+| HUD countdown | `0:58` → `0:56` over 2s, and `STALLED 0:10` during a jam |
+| Refusal flash | `BLADES LIVE - CANNOT DROP THERE` |
+| Lever swing axis | knob moves in X, Z unchanged |
 
 ---
 
