@@ -126,14 +126,13 @@ local BUILDERS = {}
 -- the floor, and that IS the exit -- there is no separate gate. The closing wall is the clock,
 -- which makes Config.SawWallSeconds the one knob for this bay's difficulty.
 --
--- Why a crate can stall the wall, and why that isn't a free win: a crate can never be
--- destroyed, because the real cube is still sitting on the operator's table and the game has
--- to mirror it. So contact is resolved by whether there is anything to cut with --
---   blades live -> they chew through, wall slows to Config.SawWallGrindFactor
---   blades dead -> nothing cuts, wall jams solid
--- That gives the spare cube a real job (buy time before Lever A) and makes the Lever B stack
--- double as a shield afterwards, so the player is never killed standing on the block that
--- saved them.
+-- Stalling the wall is a REWARD for killing the blades, never a way to skip that step:
+--   blades live -> the wall cuts straight through a crate without slowing, and a crate cannot
+--                  even be placed within Config.SawWallNoPlaceBand of the blades
+--   blades dead -> nothing cuts, so the first crate in the path jams the wall solid
+-- A crate is never destroyed, because the real cube is still on the operator's table and the
+-- game has to mirror it. That also makes the Lever B stack a shield once A is thrown, so the
+-- player is never killed standing on the block that saved them.
 BUILDERS.Saw = function(i, folder, info, state)
 	local z0 = bayZStart(i)
 	local zEnd = z0 + Config.BayDepth
@@ -196,6 +195,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 	local wallZ, spin, bladesLive = WALL_START, 0, true
 	local sunk = false
+	-- declared up here, not down with the run/reset helpers, because the placement guard below
+	-- closes over it; left further down it resolved to a nil global and the guard allowed
+	-- everything through
+	local running = false
 
 	local function placeWall(z)
 		if sunk then
@@ -250,6 +253,25 @@ BUILDERS.Saw = function(i, folder, info, state)
 		return nil
 	end
 
+	-- Refuse deliveries that would stall the wall before the blades are dead. The band is
+	-- measured from the blades, so a crate placed early -- while the wall is still far away --
+	-- is fine; it is only dropping one just in front of live blades that is turned away.
+	-- Rejections are parked by BlockSync and re-offered when Lever A changes the answer.
+	local rejectNotice
+	BlockSync.setPlacementGuard(folder.Parent, function(cell)
+		if not running or not bladesLive then
+			return true
+		end
+		local cellZ = cellCenter(i, cell.col, cell.row).Z
+		if cellZ > wallZ - Config.SawWallNoPlaceBand then
+			if rejectNotice then
+				rejectNotice("BLADES LIVE - CANNOT DROP THERE")
+			end
+			return false, "blades live"
+		end
+		return true
+	end)
+
 	----------------------------------------------------------------
 	-- levers. Colour code is deliberate: green means "this is your target right now" and
 	-- nothing else is ever green, so a thrown lever goes cold blue instead of staying green.
@@ -294,11 +316,14 @@ BUILDERS.Saw = function(i, folder, info, state)
 		lv.pivot = Vector3.new(x + inward * 1.4, y - 1.0, z)
 		lv.handle = newPart("Lever" .. spec.id .. "Handle", Vector3.new(0.45, HANDLE_LEN, 0.45),
 			lv.pivot, Color3.fromRGB(190, 58, 52), Enum.Material.Metal, folder)
+		lv.knob = newPart("Lever" .. spec.id .. "Knob", Vector3.new(0.85, 0.85, 0.85),
+			lv.pivot, Color3.fromRGB(235, 80, 68), Enum.Material.SmoothPlastic, folder,
+			{Shape = Enum.PartType.Ball})
 
 		function lv.setAngle(deg)
-			lv.handle.CFrame = CFrame.new(lv.pivot)
-				* CFrame.Angles(math.rad(inward * deg), 0, 0)
-				* CFrame.new(0, HANDLE_LEN / 2, 0)
+			local base = CFrame.new(lv.pivot) * CFrame.Angles(math.rad(inward * deg), 0, 0)
+			lv.handle.CFrame = base * CFrame.new(0, HANDLE_LEN / 2, 0)
+			lv.knob.CFrame = base * CFrame.new(0, HANDLE_LEN, 0)
 		end
 		lv.setAngle(0)
 
@@ -311,16 +336,27 @@ BUILDERS.Saw = function(i, folder, info, state)
 		lv.label = addLabel(folder, "LEVER " .. spec.id,
 			Vector3.new(x + inward * 1.8, y + 3.6, z), Color3.fromRGB(130, 130, 140))
 
-		-- characterFrom already drops ghosts and non-players, so spectating can't cheat it
-		lv.mount.CanTouch = true
-		lv.mount.Touched:Connect(function(hit)
-			local ch, hum = characterFrom(hit)
-			if not (ch and hum and hum.Health > 0) or lv.phase ~= ARMED then
+		-- A real wall lever: climb to it and hold E. ProximityPrompt gives the hold-to-act UI
+		-- and the key binding for free, and brushing past no longer throws anything -- the old
+		-- Touched version fired the moment any body part grazed the housing.
+		local prompt = Instance.new("ProximityPrompt")
+		prompt.ActionText = "Flip Lever"
+		prompt.ObjectText = "Lever " .. spec.id
+		prompt.KeyboardKeyCode = Enum.KeyCode.E
+		prompt.HoldDuration = Config.SawLeverHoldSeconds
+		prompt.MaxActivationDistance = 9
+		prompt.RequiresLineOfSight = false
+		prompt.Enabled = false
+		prompt.Parent = lv.mount
+		lv.prompt = prompt
+
+		prompt.Triggered:Connect(function(player)
+			local ch = player.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 or isGhost(ch) or lv.phase ~= ARMED then
 				return
 			end
-			-- too low to count. No message here: a lever mounted for a stacked pair is
-			-- physically out of touch from a single crate, so this branch rarely even runs.
-			-- The proximity hint in the run loop is what actually tells the player why.
+			-- the run loop's proximity hint already explains a stack that is too short
 			if supportHeight(ch) < lv.minStand then
 				return
 			end
@@ -342,6 +378,9 @@ BUILDERS.Saw = function(i, folder, info, state)
 			return
 		end
 		lv.phase = phase
+		if lv.prompt then
+			lv.prompt.Enabled = (phase == ARMED)
+		end
 		if phase == DORMANT then
 			lv.mount.Color = Color3.fromRGB(40, 40, 46)
 			lv.beacon.Color = Color3.fromRGB(34, 34, 38)
@@ -372,9 +411,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 	----------------------------------------------------------------
 	-- run / reset. The obstacle stays dormant until someone is actually inside, which also
 	-- gives the reset for free: when the bay empties unsolved, everything goes back.
+	-- (`running` is declared further up, with the wall state.)
 	----------------------------------------------------------------
-	local running = false
-
 	local function playersInBay()
 		local found = {}
 		for _, pl in ipairs(Players:GetPlayers()) do
@@ -430,6 +468,9 @@ BUILDERS.Saw = function(i, folder, info, state)
 			setPhase(leverA, THROWN)
 			setBladesLive(false)
 			setPhase(leverB, ARMED)
+			-- the operator may already have a cube down that the guard turned away; with the
+			-- blades dead it is allowed now, so the game owes them that crate
+			BlockSync.retryRejected(folder.Parent)
 			print("[HazardManager] saw wall: Lever A thrown, blades dead")
 		end
 	end
@@ -445,6 +486,15 @@ BUILDERS.Saw = function(i, folder, info, state)
 				state.setSolved(true)
 			end
 		end
+	end
+
+	local notice = addLabel(folder, "", Vector3.new(midX, 7.5, z0 + 5),
+		Color3.fromRGB(255, 140, 90))
+	notice.Text = ""
+	local noticeUntil = 0
+	function rejectNotice(text)
+		notice.Text = text
+		noticeUntil = os.clock() + 2.5
 	end
 
 	placeWall(WALL_START)
@@ -475,10 +525,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 				local blocker = crateInPath(wallZ)
 				local advance = studsPerSecond * dt
-				if blocker then
-					advance = bladesLive and advance * Config.SawWallGrindFactor or 0
+				if blocker and not bladesLive then
+					advance = 0 -- jammed: no spinning blade left to cut with
 				end
-				-- sparks only while something is actually being chewed
+				-- sparks while live blades are cutting through a crate they cannot stop on
 				sparks.Transparency = (blocker and bladesLive) and (0.25 + math.random() * 0.5) or 1
 
 				wallZ = math.max(wallZ - advance, WALL_END)
@@ -517,6 +567,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 						lv.label.TextColor3 = Color3.fromRGB(120, 255, 150)
 					end
 				end
+			end
+
+			if notice.Text ~= "" and os.clock() > noticeUntil then
+				notice.Text = ""
 			end
 
 			task.wait(TICK)
