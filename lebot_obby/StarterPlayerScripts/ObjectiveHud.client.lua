@@ -65,6 +65,23 @@ local hintLabel = line(57, 18, 15, DIM, false)
 local timerLabel = line(78, 16, 13, DIM, true)
 local timerValue = line(90, 22, 20, Color3.fromRGB(255, 255, 255), true)
 
+-- A step checklist and a standing note, both optional. The panel used to show one task line
+-- at a time, which told you what to do next but never what the SHAPE of the bay was -- so you
+-- could not see that there were two levers, or that you had already done one.
+local stepLabels = {}
+for idx = 1, 4 do
+	local l = line(112 + (idx - 1) * 19, 17, 15, DIM, false)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Position = UDim2.new(0, 22, 0, 112 + (idx - 1) * 19)
+	l.Size = UDim2.new(1, -44, 0, 17)
+	l.Visible = false
+	stepLabels[idx] = l
+end
+
+local noteLabel = line(112, 30, 13, DIM, false)
+noteLabel.TextWrapped = true
+noteLabel.Visible = false
+
 -- flash sits outside the panel so a transient message never shifts the layout
 local flash = Instance.new("TextLabel")
 flash.AnchorPoint = Vector2.new(0.5, 0)
@@ -114,6 +131,34 @@ Objective.OnClientEvent:Connect(function(p)
 		timerLabel.Visible = false
 		timerValue.Visible = false
 	end
+
+	-- Steps first, then the note under them; the panel grows to fit whatever is present so a
+	-- bay with no checklist looks exactly as it did before.
+	local used = 0
+	for idx, l in ipairs(stepLabels) do
+		local text = p.steps and p.steps[idx]
+		l.Visible = text ~= nil
+		if text then
+			used = idx
+			l.Text = text
+			-- a finished step reads as finished without having to parse the [x]
+			l.TextColor3 = text:find("%[x%]") and TONE.ok
+				or text:find("%[%-%]") and Color3.fromRGB(120, 124, 136)
+				or Color3.fromRGB(226, 230, 240)
+		end
+	end
+
+	local noteTop = 112 + used * 19 + 2
+	noteLabel.Visible = p.note ~= nil
+	if p.note then
+		noteLabel.Text = p.note
+		noteLabel.Position = UDim2.new(0, 22, 0, noteTop)
+		noteLabel.Size = UDim2.new(1, -44, 0, 30)
+	end
+
+	local panelHeight = 112 + used * 19 + (p.note and 34 or 0) + 8
+	root.Size = UDim2.new(0, 470, 0, math.max(120, panelHeight))
+	flash.Position = UDim2.new(0.5, 0, 0, math.max(132, panelHeight + 10))
 
 	flash.Text = p.flash or ""
 	flash.Visible = (p.flash ~= nil)
