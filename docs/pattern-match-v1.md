@@ -68,9 +68,10 @@ Each event shows a 2 s warning banner before it starts, so the player can call i
 ## 5. Boards
 
 - Two boards in the world, side by side, 3D parts, not GUI: TargetBoard and LiveBoard. Player walks around them freely.
-- Click a board (ClickDetector on its base) to spin it 90 degrees. Tween, 0.3 s.
-- LiveBoard: 12 cell parts plus one block part per visible block on the grid, colored from `Config.colors`. Vanished cells use `Transparency = 1`.
-- TargetBoard: 12 cell parts, target cells colored, non-target cells neutral. In hard mode hidden phase, target cells turn gray.
+- Click anywhere on a board to spin it 90 degrees around its vertical center axis, 0.3 s. The ClickDetector (`SpinClick`) sits on the whole board Model, not just the base, because the tiles cover the base's top. Spins run on the server so everyone sees the same orientation, queue up, and wait while a tremor is on.
+- Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell, made once, recolored or hidden, never created per tick.
+- LiveBoard: 12 cell parts plus a block on each cell with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`.
+- TargetBoard: 12 neutral cell parts plus a block, identical to the LiveBoard's, on each target cell in its target color; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase they turn neutral gray (same block, recolored). Intermission and Results show full colors.
 
 ## 6. Robot twin (v1, parts-built)
 

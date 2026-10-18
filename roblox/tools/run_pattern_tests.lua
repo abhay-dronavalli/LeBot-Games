@@ -239,20 +239,30 @@ if cab then
 	check("debugForceMode=hard skips mode select: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
 	check("round 1 starts in show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
 	local tcell, tcolor = next(g.target)
-	local tile = board.TargetBoard[tcell]
+	local tblock = board.TargetBoard.Blocks[tcell]
 	local other
 	for _, c in ipairs(cells) do
-		if not g.target[c] then other = board.TargetBoard[c] break end
+		if not g.target[c] then other = board.TargetBoard.Blocks[c] break end
 	end
-	check("show: target tile in its color", tile.Color == Config.colors[tcolor], true)
-	check("show: target tile outlined", tile.TargetOutline.Visible, true)
+	check("show: target block shown in its color", tblock.Transparency == 0 and tblock.Color == Config.colors[tcolor], true)
+	check("show: target block outlined", tblock.TargetOutline.Visible, true)
+	check("show: non-target cell has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
+	local neutralTiles = 0
+	for _, c in ipairs(cells) do
+		if board.TargetBoard[c].Color == TargetBoard.NEUTRAL then neutralTiles += 1 end
+	end
+	check("all 12 TargetBoard tiles stay neutral", neutralTiles, 12)
+	check("target block matches a LiveBoard block (size, material, height above its tile)",
+		tblock.Size == board.LiveBoard.Blocks[tcell].Size and tblock.Material == board.LiveBoard.Blocks[tcell].Material
+		and math.abs((tblock.Position.Y - board.TargetBoard[tcell].Position.Y) - (board.LiveBoard.Blocks[tcell].Position.Y - board.LiveBoard[tcell].Position.Y)) < 0.001, true)
 	steps(19, 0.25) -- 4.75 s
 	check("4.75 s: still show, 1 s left on HUD", g.revealPhase .. " " .. sent[#sent].revealTimeLeft, "show 1")
 	g:step(0.25) -- 5.0 s
 	check("5.0 s: hide", g.revealPhase, "hide")
-	check("hide: target tile gray", tile.Color == TargetBoard.HIDDEN, true)
-	check("hide: outline stays", tile.TargetOutline.Visible, true)
-	check("hide: non-target tile neutral, no outline", other.Color == TargetBoard.NEUTRAL and not other.TargetOutline.Visible, true)
+	check("hide: target block still shown, now gray", tblock.Transparency == 0 and tblock.Color == TargetBoard.HIDDEN, true)
+	check("hide: outline stays", tblock.TargetOutline.Visible, true)
+	check("hide: non-target cell still has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
+	check("hide: the tile under it stays neutral", board.TargetBoard[tcell].Color == TargetBoard.NEUTRAL, true)
 	check("payload revealPhase / revealTimeLeft", sent[#sent].revealPhase .. " " .. sent[#sent].revealTimeLeft, "hide 5")
 	steps(20, 0.25) -- 10.0 s
 	check("10.0 s: show again", g.revealPhase, "show")
@@ -262,8 +272,8 @@ if cab then
 	fakeBlocks = blocksFor(g.target)
 	steps(4, 0.25) -- clear held for 1 s
 	check("solved during hide -> Intermission", g.state, "Intermission")
-	check("intermission: full colors", tile.Color == Config.colors[tcolor], true)
-	check("intermission: no outline, no reveal in payload", tostring(tile.TargetOutline.Visible) .. " " .. tostring(sent[#sent].revealPhase), "false nil")
+	check("intermission: target block in full color", tblock.Transparency == 0 and tblock.Color == Config.colors[tcolor], true)
+	check("intermission: no outline, no reveal in payload", tostring(tblock.TargetOutline.Visible) .. " " .. tostring(sent[#sent].revealPhase), "false nil")
 
 	fakeBlocks = {}
 	g:step(Config.intermissionSeconds)
@@ -275,8 +285,14 @@ if cab then
 	startEasy()
 	check("debugForceMode=nil: auto-picked Easy, round 1", g.mode .. " " .. g.state, "Easy Round")
 	local ecell, ecolor = next(g.target)
-	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(board.TargetBoard[ecell].TargetOutline.Visible), "nil false")
-	check("easy: target tile in its color", board.TargetBoard[ecell].Color == Config.colors[ecolor], true)
+	local eblock = board.TargetBoard.Blocks[ecell]
+	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(eblock.TargetOutline.Visible), "nil false")
+	check("easy: target block shown in its color", eblock.Transparency == 0 and eblock.Color == Config.colors[ecolor], true)
+	local easyBlocks = 0
+	for _, c in ipairs(cells) do
+		if board.TargetBoard.Blocks[c].Transparency == 0 then easyBlocks += 1 end
+	end
+	check("easy: one target block per target cell, round 1 = 3", easyBlocks, 3)
 
 	local free = {}
 	for _, c in ipairs(cells) do
@@ -417,6 +433,7 @@ if cab then
 	local BoardShake = require(pm.BoardShake)
 	local baseStart = board.LiveBoard.Base.CFrame
 	local tileStart = board.TargetBoard.C4.CFrame
+	local targetBlockStart = board.TargetBoard.Blocks.B2.CFrame
 	local shake = BoardShake.start({ board.TargetBoard, board.LiveBoard })
 	local moved = false
 	for _ = 1, 10 do
@@ -427,6 +444,7 @@ if cab then
 	shake:stop()
 	check("after stop: LiveBoard.Base and TargetBoard.C4 exactly restored",
 		board.LiveBoard.Base.CFrame == baseStart and board.TargetBoard.C4.CFrame == tileStart, true)
+	check("after stop: TargetBoard block B2 exactly restored too", board.TargetBoard.Blocks.B2.CFrame == targetBlockStart, true)
 
 	section("22. mode select: only the starter picks, only during ModeSelect, only once")
 	local alice, bob = { Name = "Alice", UserId = 101 }, { Name = "Bob", UserId = 202 }
@@ -465,12 +483,13 @@ if cab then
 	section("23. spinning a board keeps tiles and blocks on their cells")
 	local BoardSpinner = require(pm.BoardSpinner)
 	g.liveBoard:render({ block("A1", "red"), block("B3", "teal"), block("C4", "yellow") })
-	local function offCells()
+	local function offCells(boardModel)
+		boardModel = boardModel or board.LiveBoard
 		local bad = 0
 		for _, c in ipairs(cells) do
-			local tile = board.LiveBoard[c]
-			local d = tile.Position - Grid.worldPositionOf(c, board.LiveBoard)
-			local e = board.LiveBoard.Blocks[c].Position - tile.Position
+			local tile = boardModel[c]
+			local d = tile.Position - Grid.worldPositionOf(c, boardModel)
+			local e = boardModel.Blocks[c].Position - tile.Position
 			if Vector3.new(d.X, 0, d.Z).Magnitude > 0.01 or Vector3.new(e.X, 0, e.Z).Magnitude > 0.01 then bad += 1 end
 		end
 		return bad
@@ -498,6 +517,7 @@ if cab then
 	check("after 4 spins: cells off", offCells(), 0)
 	liveSpinner:destroy()
 
+	g.targetBoard:show({ A1 = "red", C3 = "teal" }, false, false)
 	local shakingNow = true
 	local targetSpinner = BoardSpinner.new(board.TargetBoard, { isShaking = function() return shakingNow end })
 	local tlook0 = board.TargetBoard.Base.CFrame.LookVector
@@ -508,6 +528,10 @@ if cab then
 	local took = waitIdle(targetSpinner, 3)
 	check("tremor over: the spin runs, after the 0.5 s margin", math.abs(board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0)) < 0.001
 		and took >= BoardSpinner.AFTER_SHAKE_SECONDS + BoardSpinner.SPIN_SECONDS - 0.05, true)
+	check("TargetBoard spin: target blocks stay on their tiles (cells off)", offCells(board.TargetBoard), 0)
+	check("TargetBoard spin: A1 / C3 target blocks still shown, B2 still empty",
+		board.TargetBoard.Blocks.A1.Color == Config.colors.red and board.TargetBoard.Blocks.C3.Color == Config.colors.teal
+		and board.TargetBoard.Blocks.A1.Transparency == 0 and board.TargetBoard.Blocks.B2.Transparency == 1, true)
 	targetSpinner:destroy()
 	board:Destroy()
 end

@@ -4,8 +4,10 @@
 -- the pick through the PatternPick remote, and a countdown shows the auto-pick. Everyone else keeps
 -- the HUD, which says who is choosing.
 -- The shot hides the Baseplate and SpawnLocation on this client only (LocalTransparencyModifier), so
--- the island under the cabinet floats in open sky. They come back when the camera returns.
+-- the island under the cabinet floats in open sky, and hides the sun and moon, which would otherwise
+-- show below the island. All of it comes back when the camera returns.
 
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -180,7 +182,18 @@ for i, spec in ipairs(TILES) do
 	end)
 end
 
+local savedCelestial = nil -- the Sky's CelestialBodiesShown before the shot
+
 local function setVistaHidden(hidden)
+	local sky = Lighting:FindFirstChildOfClass("Sky")
+	if sky and hidden then
+		savedCelestial = sky.CelestialBodiesShown
+		sky.CelestialBodiesShown = false
+	elseif sky and savedCelestial ~= nil then
+		sky.CelestialBodiesShown = savedCelestial
+		savedCelestial = nil
+	end
+
 	local modifier = hidden and 1 or 0
 	for _, name in ipairs(VISTA_HIDE) do
 		local thing = workspace:FindFirstChild(name)
