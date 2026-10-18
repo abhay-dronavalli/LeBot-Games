@@ -4033,120 +4033,200 @@ Remotes.Hud.OnClientEvent:Connect(function(payload)
 end)
 
 -- ---------------------------------------------------------------------------------------------
--- The operator's overhead view
+-- The aerial operator view
 -- ---------------------------------------------------------------------------------------------
 
--- A fixed high camera over the whole arena, tilted toward the pedestal so the operator sees what
--- is in front of the dragon. Only this view outlines the players: dark avatars vanish against
--- obsidian from above, and the operator has to see who they are about to hit.
-local function becomeOperator()
-	local highlights = {}
+-- Press V to switch any client between the normal player camera and the aerial view. The server
+-- can also assign it on join (the ArenaOperator attribute, set from OPERATOR_NAME in ArenaMain),
+-- but the key is the one that always works: in Play Solo your player is named after your Roblox
+-- account, not "Player1", so a name match is exactly the thing that fails when you are trying to
+-- get a second screen up in a hurry.
+local AERIAL_KEY = Enum.KeyCode.V
 
-	local function mark(char: Model)
-		local h = Instance.new("Highlight")
-		h.OutlineColor = C.UiText
-		h.FillTransparency = 1
-		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		h.Adornee = char
-		h.Parent = char
-		highlights[char] = h
-	end
+local OPERATOR_FACING = {
+	mirror = "CONTROLS INVERTED",
+	fog = "CONTROLS LAGGING",
+	molasses = "CONTROLS SLUGGISH",
+	freeze = "ARM FROZEN",
+	earthquake = "ARM SHAKING",
+	butterfingers = "JAW JAMMED",
+}
 
-	for _, p in Players:GetPlayers() do
-		if p.Character then
-			mark(p.Character)
-		end
-		p.CharacterAdded:Connect(mark)
-	end
-	Players.PlayerAdded:Connect(function(p)
-		p.CharacterAdded:Connect(mark)
-	end)
+-- Debuffs that change what the operator's own hands are doing, shown large because they are the
+-- reason the arm is not going where they pushed it.
+local opText = text(gui, Theme.Font.Display, 40, C.UiDanger)
+opText.AnchorPoint = Vector2.new(0.5, 0)
+opText.Position = UDim2.new(0.5, 0, 0, 110)
+opText.Size = UDim2.new(1, -40, 0, 50)
+opText.Text = ""
+opText.Visible = false
 
-	-- Waited for, not sampled once. The arena is only built when the `hello` frame arrives, which
-	-- is after the robot process connects - and if Python is started after Studio, that can be
-	-- tens of seconds. A single timed WaitForChild gives up and silently leaves the operator on a
-	-- normal player camera with no hint why.
-	local floor: BasePart? = nil
-	while not floor do
-		local arenaModel = workspace:FindFirstChild("Arena")
-		local found = arenaModel and arenaModel:FindFirstChild("Floor")
-		if found and found:IsA("BasePart") then
-			floor = found
-		else
-			task.wait(0.5)
-		end
-	end
+local hint = text(gui, Theme.Font.Label, 14, C.UiText)
+hint.AnchorPoint = Vector2.new(1, 0)
+hint.Position = UDim2.new(1, -16, 0, 16)
+hint.Size = UDim2.new(0, 220, 0, 18)
+hint.TextXAlignment = Enum.TextXAlignment.Right
+hint.TextTransparency = 0.35
+hint.Text = "V — AERIAL VIEW"
 
-	local centre = floor.Position
-	local height = math.max(floor.Size.X, floor.Size.Z) * 1.15
-	-- Pulled back toward the far edge and tilted, rather than straight down: a pure top-down view
-	-- hides how high the head is, which is the one thing the operator needs to judge.
-	local view = CFrame.lookAt(
-		centre + Vector3.new(0, height, floor.Size.Z * 0.45),
-		centre)
+local aerial = false
+local highlights = {} :: { [Model]: Highlight }
+local aerialConns = {} :: { RBXScriptConnection }
+local aerialView: CFrame? = nil
 
-	-- Re-asserted every frame rather than set once. The engine takes the camera back whenever it
-	-- decides the player needs a default one - a character loading, a respawn, a CameraType reset -
-	-- and a demo where the operator's view silently drops back to third person mid-round is worse
-	-- than the cost of two assignments a frame.
-	camera.CameraType = Enum.CameraType.Scriptable
-	camera.CFrame = view
-	RunService.RenderStepped:Connect(function()
-		if camera.CameraType ~= Enum.CameraType.Scriptable then
-			camera.CameraType = Enum.CameraType.Scriptable
-		end
-		camera.CFrame = view
-	end)
-
-	-- Debuffs that affect the *operator* are shown large here, because they change what their own
-	-- hands are doing.
-	local opText = text(gui, Theme.Font.Display, 40, C.UiText)
-	opText.AnchorPoint = Vector2.new(0.5, 0)
-	opText.Position = UDim2.new(0.5, 0, 0, 110)
-	opText.Size = UDim2.new(1, -40, 0, 50)
-	opText.Text = ""
-
-	local OPERATOR_FACING = {
-		mirror = "CONTROLS INVERTED",
-		fog = "CONTROLS LAGGING",
-		molasses = "CONTROLS SLUGGISH",
-		freeze = "ARM FROZEN",
-		earthquake = "ARM SHAKING",
-		butterfingers = "JAW JAMMED",
-	}
-
-	Remotes.Hud.OnClientEvent:Connect(function(payload)
-		local lines = {}
-		for _, e in (payload.effects or {}) do
-			local msg = OPERATOR_FACING[e.name]
-			if msg then
-				table.insert(lines, msg)
-			end
-		end
-		opText.Text = table.concat(lines, "   ")
-		opText.TextColor3 = #lines > 0 and C.UiDanger or C.UiText
-	end)
-
-	-- The ability bar is the players' tool, and the operator is not a player.
-	bar.Visible = false
-end
-
--- Read rather than awaited. The server sets this as the player joins, which can be before this
--- script runs, so checking the current value first is what makes it work at all; the signal is
--- only for a change made later.
-local OPERATOR_ATTRIBUTE = "ArenaOperator"
-local becameOperator = false
-
-local function checkOperator()
-	if becameOperator or not player:GetAttribute(OPERATOR_ATTRIBUTE) then
+-- Dark avatars vanish against obsidian from overhead, and the operator has to see who they are
+-- about to land a head on. Only the aerial view outlines them; the players never see this.
+local function mark(char: Model)
+	if not aerial or highlights[char] then
 		return
 	end
-	becameOperator = true
-	becomeOperator()
+	local h = Instance.new("Highlight")
+	h.OutlineColor = C.UiText
+	h.FillTransparency = 1
+	h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	h.Adornee = char
+	h.Parent = char
+	highlights[char] = h
+end
+
+local function clearMarks()
+	for char, h in highlights do
+		h:Destroy()
+		highlights[char] = nil
+	end
+end
+
+-- Where to put the camera. Nil until the arena exists, which only happens once `hello` arrives -
+-- so this is recomputed on each toggle rather than cached from the first attempt.
+local function aerialCFrame(): CFrame?
+	local arenaModel = workspace:FindFirstChild("Arena")
+	local floor = arenaModel and arenaModel:FindFirstChild("Floor")
+	if not (floor and floor:IsA("BasePart")) then
+		return nil
+	end
+	local centre = floor.Position
+	local height = math.max(floor.Size.X, floor.Size.Z) * 1.15
+	-- Pulled back toward the far edge and tilted, not straight down: a pure top-down view hides
+	-- how high the head is, which is the one thing the operator needs to judge.
+	return CFrame.lookAt(centre + Vector3.new(0, height, floor.Size.Z * 0.45), centre)
+end
+
+local function setAerial(on: boolean)
+	if on == aerial then
+		return
+	end
+
+	if on then
+		local view = aerialCFrame()
+		if not view then
+			-- No floor yet means no `hello` yet. Say so rather than silently doing nothing, which
+			-- looks identical to a broken keybind.
+			hint.Text = "NO ARENA YET — START THE ROBOT PROCESS"
+			task.delay(3, function()
+				if not aerial then
+					hint.Text = "V — AERIAL VIEW"
+				end
+			end)
+			return
+		end
+		aerial = true
+		aerialView = view
+		hint.Text = "V — PLAYER VIEW"
+		bar.Visible = false              -- the ability bar is the players' tool
+		opText.Visible = true
+
+		camera.CameraType = Enum.CameraType.Scriptable
+		camera.CFrame = view
+
+		for _, p in Players:GetPlayers() do
+			if p.Character then
+				mark(p.Character)
+			end
+		end
+		for _, p in Players:GetPlayers() do
+			table.insert(aerialConns, p.CharacterAdded:Connect(mark))
+		end
+		table.insert(aerialConns, Players.PlayerAdded:Connect(function(p)
+			table.insert(aerialConns, p.CharacterAdded:Connect(mark))
+		end))
+		-- Re-asserted every frame: the engine takes the camera back whenever it decides the player
+		-- needs a default one, and a view that silently drops to third person mid-demo is worse
+		-- than one assignment a frame.
+		table.insert(aerialConns, RunService.RenderStepped:Connect(function()
+			if aerial and aerialView then
+				if camera.CameraType ~= Enum.CameraType.Scriptable then
+					camera.CameraType = Enum.CameraType.Scriptable
+				end
+				camera.CFrame = aerialView
+			end
+		end))
+	else
+		aerial = false
+		aerialView = nil
+		hint.Text = "V — AERIAL VIEW"
+		bar.Visible = true
+		opText.Visible = false
+		for _, c in aerialConns do
+			c:Disconnect()
+		end
+		table.clear(aerialConns)
+		clearMarks()
+
+		-- Hand the camera back. Without re-pointing CameraSubject the player is left staring at
+		-- nothing when they toggle out after respawning.
+		camera.CameraType = Enum.CameraType.Custom
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			camera.CameraSubject = hum
+		end
+	end
+end
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if not processed and input.KeyCode == AERIAL_KEY then
+		setAerial(not aerial)
+	end
+end)
+
+-- The server can still assign the view on join. Read rather than awaited: the attribute is set as
+-- the player joins, which can be before this script runs, so checking the current value first is
+-- what makes it work at all.
+local OPERATOR_ATTRIBUTE = "ArenaOperator"
+
+local function checkOperator()
+	if player:GetAttribute(OPERATOR_ATTRIBUTE) and not aerial then
+		-- The arena may not be built yet. Keep trying until it is, so an operator assigned on join
+		-- still lands in the aerial view once the robot process connects.
+		task.spawn(function()
+			while player:GetAttribute(OPERATOR_ATTRIBUTE) and not aerial do
+				setAerial(true)
+				if aerial then
+					break
+				end
+				task.wait(1)
+			end
+		end)
+	end
 end
 
 player:GetAttributeChangedSignal(OPERATOR_ATTRIBUTE):Connect(checkOperator)
 checkOperator()
+
+-- The operator-facing debuff text follows the same payload the HUD does.
+Remotes.Hud.OnClientEvent:Connect(function(payload)
+	if not aerial then
+		return
+	end
+	local lines = {}
+	for _, e in (payload.effects or {}) do
+		local msg = OPERATOR_FACING[e.name]
+		if msg then
+			table.insert(lines, msg)
+		end
+	end
+	opText.Text = table.concat(lines, "   ")
+end)
 ]]></ProtectedString>
 				</Properties>
 			</Item>

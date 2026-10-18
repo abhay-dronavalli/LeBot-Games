@@ -71,8 +71,24 @@ StarterPlayer
 If Studio is on a different machine from the robot, change `URL` in `ArenaMain` from `localhost`
 to the robot laptop's LAN IP.
 
-To put someone on the overhead operator view, set `OPERATOR_NAME` in `ArenaMain` to their Roblox
-username. Left empty, nobody gets it — which is the right default for a public server.
+## The aerial view
+
+**Press `V`.** Any client toggles between the normal player camera and the aerial operator view —
+fixed high camera over the whole arena, white outlines on every player, no ability bar, and
+operator-facing debuff text ("CONTROLS INVERTED") across the top. There is a reminder in the
+top-right corner of the screen.
+
+The server can also assign it on join: set `OPERATOR_NAME` in `ArenaMain` to a Roblox username.
+That player is excluded from the round and gets no character, which is what you want for a real
+operator who is holding the leader arm rather than playing. Left empty, nobody is assigned — the
+right default for a public server, and the `V` key still works for everyone.
+
+Use the key, not the name, when you are setting up screens in a hurry: in Play Solo your player is
+named after your Roblox account rather than `Player1`, so a name match is exactly the thing that
+fails right when you are trying to get a second display up.
+
+If `V` reports `NO ARENA YET — START THE ROBOT PROCESS`, the floor does not exist because no
+`hello` frame has arrived. That is the robot process not running, not the keybind.
 
 ## Combining this with other games
 
