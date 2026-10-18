@@ -82,7 +82,8 @@ TwinDriver.serve(armPose, function()
 		return nil
 	end
 	local s = StateStore.get()
-	if s.arm == nil or (tonumber(s.arm_age) or 0) > Config.bridgeStaleSeconds then
+	local armAge = tonumber(s.arm_age) -- null: no arm published yet
+	if s.arm == nil or armAge == nil or armAge > Config.bridgeStaleSeconds then
 		return nil
 	end
 	return Stick.payload(s.arm.points, liveBoard)

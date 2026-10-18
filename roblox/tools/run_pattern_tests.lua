@@ -188,6 +188,7 @@ check("double on non-target B4 .doubled", r.doubled, { "B4" }); check(".extra", 
 check("describe()", Target.describe(r), "clear=false missing={} wrong={} extra={B4} blocked={} doubled={B4}")
 
 section("11. generate(n, maxHeight): n blocks, towers no taller than maxHeight, never above the global cap")
+Config.uniqueColorsPerTicket = false -- placement only here (n up to 12 is more than the 6 colors); 11a has colors
 local bad = 0
 local tallestSeen = {}
 for _ = 1, 500 do
@@ -236,6 +237,58 @@ end
 check("stackChance argument: 1 always stacks, 0 never does", always .. " " .. never, "100 100")
 check("24 blocks at maxHeight 2 fills every cell twice", select(1, Target.count(Target.generate(24, 2))), 24)
 check("13 blocks at maxHeight 1 is refused", pcall(Target.generate, 13, 1), false)
+
+section("11a. uniqueColorsPerTicket: no color twice in a pattern, towers included")
+check("default: off (core perception names repeated colors)", Config.uniqueColorsPerTicket, false)
+Config.uniqueColorsPerTicket = true
+do
+	local function repeats(target)
+		local seen, dup = {}, false
+		for _, tower in pairs(target) do
+			for _, color in ipairs(tower) do
+				if seen[color] then dup = true end
+				seen[color] = true
+			end
+		end
+		return dup
+	end
+	local rng = Random.new(5)
+	local dupPatterns, sameTower, towers2, sizes = 0, 0, 0, {}
+	for _ = 1, 600 do
+		local n = rng:NextInteger(Config.ticketBlocksMin, Config.ticketBlocksMax)
+		local t = Target.generate(n, Config.maxStackGlobal, rng, rng:NextNumber())
+		if repeats(t) then dupPatterns += 1 end
+		for _, tower in pairs(t) do
+			if #tower == 2 then
+				towers2 += 1
+				if tower[1] == tower[2] then sameTower += 1 end
+			end
+		end
+		sizes[Target.count(t) == n] = true
+	end
+	check("600 tickets: no repeated color; 2-high towers seen, none of one color; every ticket keeps its n",
+		dupPatterns .. " " .. tostring(towers2 > 50) .. " " .. sameTower .. " " .. tostring(sizes[true] and not sizes[false]), "0 true 0 true")
+	check("all-stacked (stackChance 1, n 6): six blocks, six colors", (function()
+		local t = Target.generate(6, 2, Random.new(9), 1)
+		return Target.count(t) .. " " .. tostring(repeats(t))
+	end)(), "6 false")
+	check("n above the palette is capped at #colors (12 asked -> 6 blocks)", (Target.count(Target.generate(12, 2, Random.new(3), 0.5))), 6)
+	local saved = Config.colors
+	Config.colors = { red = saved.red, teal = saved.teal, yellow = saved.yellow }
+	check("three colors left in Config.colors: a 4-block ticket comes out as 3 different colors", (function()
+		local t = Target.generate(4, 2, Random.new(4), 0.5)
+		return Target.count(t) .. " " .. tostring(repeats(t))
+	end)(), "3 false")
+	Config.colors = saved
+	Config.uniqueColorsPerTicket = false
+	local anyDup = false
+	local r2 = Random.new(5)
+	for _ = 1, 300 do
+		if repeats(Target.generate(4, 2, r2, 0.5)) then anyDup = true end
+	end
+	check("uniqueColorsPerTicket = false: colors may repeat again", anyDup, true)
+	Config.uniqueColorsPerTicket = false -- the default
+end
 
 section("11b. compare with towers (target A1=red, B2=red/teal, C3=yellow)")
 local tall = towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" })
@@ -655,6 +708,18 @@ if cab then
 	check("back online: the 1 s hold starts over", tostring(g.activeId == frozenId), "true")
 	steps(4, 0.25)
 	check("then ORDER UP", tostring(g.activeId ~= frozenId) .. " " .. tostring(g.score > frozenScore) .. " " .. sent[#sent].robot, "true true mock")
+
+	section("16f2b. repeated colors: a ticket with two reds, and a red/red tower, can be matched")
+	setPattern(g:activeTicket(), { A1 = "red", C3 = "red" })
+	local twinRedId, twinRedScore = g.activeId, g.score
+	fakeBlocks = { block("A1", "red"), block("C3", "red") }
+	steps(5, 0.25)
+	check("two reds on two cells: ORDER UP", tostring(g.activeId ~= twinRedId) .. " " .. tostring(g.score > twinRedScore), "true true")
+	setPattern(g:activeTicket(), { B2 = { "red", "red" } })
+	local towerId, towerScore = g.activeId, g.score
+	fakeBlocks = blocksFor({ B2 = { "red", "red" } })
+	steps(5, 0.25)
+	check("a red/red tower: ORDER UP", tostring(g.activeId ~= towerId) .. " " .. tostring(g.score > towerScore), "true true")
 
 	section("16f3. a misread block (green) shows gray and blocks the match")
 	setPattern(g:activeTicket(), { B3 = "red" })
@@ -1207,6 +1272,22 @@ if cab then
 	for _ = A.index, Config.attractPatterns do finishPattern() end
 	check("after " .. Config.attractPatterns .. " patterns: a fresh set, from its first pattern", tostring(A.set ~= firstSet) .. " " .. A.index
 		.. " " .. A.completions, "true 1 " .. Config.attractPatterns)
+	Config.uniqueColorsPerTicket = true
+	check("uniqueColorsPerTicket on: attract patterns never repeat a color, towers included (40 fresh sets)", (function()
+		for _ = 1, 40 do
+			for _, t in ipairs(A:newSet()) do
+				local seen = {}
+				for _, tower in pairs(t) do
+					for _, color in ipairs(tower) do
+						if seen[color] then return false end
+						seen[color] = true
+					end
+				end
+			end
+		end
+		return true
+	end)(), true)
+	Config.uniqueColorsPerTicket = false
 	local setsWithStack = 0
 	for _ = 1, 40 do
 		for _, t in ipairs(A:newSet()) do
@@ -1318,6 +1399,21 @@ do
 	check("source / status before any hello", Store.source() .. " " .. Store.status(), "pending offline")
 	check("sendEvent without the bridge: Roblox side only", select(2, Store.sendEvent("earthquake", 0.5, 4)), "no robot bridge (pending)")
 	check("Events.fire returns false without the bridge", Ev.fire("earthquake", 0.5, 4), false)
+	local function ls(...) return Store.linkStatus(...) end
+	check("badge: mock -> MOCK; teleop, follower, auto, a new name or none -> ROBOT LIVE",
+		table.concat({ ls("mock", 0.1, 0.1, 0.03), ls("teleop", 0.1, 0.1, 0.03), ls("follower", 0.1, 0.1, 0.03),
+			ls("auto", 0.1, 0.1, 0.03), ls("crane2000", 0.1, 0.1, 0.03), ls(nil, 0.1, 0.1, 0.03) }, " "),
+		"mock live live live live live")
+	check("null ages: blocks_age or arm_age nil -> offline (both, and the first frame not in yet)",
+		table.concat({ ls("teleop", 0.1, nil, 0.03), ls("teleop", 0.1, 0.1, nil), ls("mock", 0.1, nil, nil), ls("mock", nil, 0.1, 0.03) }, " "),
+		"offline offline offline offline")
+	check("stale: no frame for 1.5 s, or blocks_age 1.5 -> offline; ages as strings still read",
+		table.concat({ ls("mock", 1.5, 0.1, 0.03), ls("mock", 0.1, 1.5, 0.03), ls("mock", 0.1, "0.1", "0.03") }, " "),
+		"offline offline mock")
+	check("a frame with every part null converts without an error", (function()
+		local ok, st = pcall(Store.fromFrame, { t = "state", seq = 1, ts = 0, arm = nil, arm_age = nil, blocks = nil, blocks_age = nil })
+		return tostring(ok) .. " " .. tostring(ok and st.arm) .. " " .. tostring(ok and #st.blocks)
+	end)(), "true nil 0")
 	local frame = { t = "state", seq = 5, ts = 1, arm_age = 0.02, blocks_age = 0.1,
 		arm = { joints = {}, points = { { name = "shoulder_pan", x = 1, y = 2, z = 3 }, { name = "tip", x = 4, y = 5, z = 6 } } },
 		blocks = {

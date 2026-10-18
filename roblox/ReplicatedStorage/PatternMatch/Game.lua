@@ -314,9 +314,9 @@ function Game:addTicket()
 	local n = self.rng:NextInteger(Config.ticketBlocksMin, Config.ticketBlocksMax)
 	local chance = Game.stackChanceAt(self.shiftElapsed, self.shiftLength)
 	local target = Target.generate(n, Config.maxStackGlobal, self.rng, chance)
-	local _, tallest = Target.count(target)
+	local blocks, tallest = Target.count(target)
 	local ticket = {
-		id = self.nextTicketId, target = target, blocks = n, points = Game.ticketPoints(target),
+		id = self.nextTicketId, target = target, blocks = blocks, points = Game.ticketPoints(target),
 		stacked = tallest > 1, arrivedAt = self.shiftElapsed,
 	}
 	self.nextTicketId += 1

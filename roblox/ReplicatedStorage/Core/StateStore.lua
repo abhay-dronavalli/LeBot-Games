@@ -12,8 +12,9 @@
 --   StateStore.changed     -> signal (BindableEvent.Event) fired after every state update
 --   StateStore.source()    -> "pending" (waiting for the hello), "bridge" or "fake"
 --   StateStore.status()    -> "live" (bridge, any source but mock), "mock" (bridge, source mock),
---                             "offline" (still pending, no frame for Config.bridgeStaleSeconds, no block
---                             data yet (blocks_age null) or blocks_age over it) or "fake" (fake generator)
+--                             "offline" (see linkStatus, or still pending) or "fake" (fake generator)
+--   StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge) -> "live" | "mock" | "offline",
+--                             the bridge part of status() as a pure function
 --   StateStore.hello()     -> the bridge's hello frame, or nil
 --   StateStore.sendEvent(name, intensity, duration) -> true if it went to the robot, else false, reason
 --
@@ -72,20 +73,28 @@ function StateStore.hello()
 	return helloFrame
 end
 
+-- The bridge link: "offline" when there is no frame yet (sinceFrame nil), none for
+-- Config.bridgeStaleSeconds, blocks_age over that, or either age null (the server sends null until
+-- that part has published once: teleop without --vision never publishes blocks). Otherwise "mock" for
+-- hello source "mock" and "live" for any other source (teleop, follower, auto, anything new, or none).
+function StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge)
+	local stale = Config.bridgeStaleSeconds
+	blocksAge, armAge = tonumber(blocksAge), tonumber(armAge)
+	if type(sinceFrame) ~= "number" or sinceFrame > stale or blocksAge == nil or blocksAge > stale or armAge == nil then
+		return "offline"
+	end
+	return helloSource == "mock" and "mock" or "live"
+end
+
 function StateStore.status()
 	if source == "fake" then
 		return "fake"
 	end
-	if source ~= "bridge" or lastFrameAt == nil then
+	if source ~= "bridge" then
 		return "offline"
 	end
-	local stale = Config.bridgeStaleSeconds
-	-- blocks_age is null until the camera has published once (teleop without --vision): no table data.
-	local blocksAge = tonumber(state.blocks_age)
-	if os.clock() - lastFrameAt > stale or blocksAge == nil or blocksAge > stale then
-		return "offline"
-	end
-	return helloFrame and helloFrame.source == "mock" and "mock" or "live"
+	return StateStore.linkStatus(helloFrame and helloFrame.source, lastFrameAt and os.clock() - lastFrameAt,
+		state.blocks_age, state.arm_age)
 end
 
 function StateStore.sendEvent(name, intensity, duration)
@@ -189,7 +198,7 @@ local function publish(blocks, arm)
 	end
 	StateStore.update({
 		t = "state", seq = state.seq + 1, ts = DateTime.now().UnixTimestampMillis / 1000,
-		arm = arm, blocks = blocks, blocks_age = 0,
+		arm = arm, arm_age = arm and 0 or nil, blocks = blocks, blocks_age = 0, -- fake data is always fresh
 	})
 end
 

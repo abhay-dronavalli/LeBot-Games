@@ -87,8 +87,21 @@ local function open()
 		return false
 	end
 	ws = client
-	connected = true
-	print("[Bridge] connected to " .. url)
+	connected = true -- a live client, open or still opening; Closed (below) clears it
+
+	-- Creating the client is not connecting: it returns at once, server or no server, and a
+	-- failed attempt only shows up as Error then Closed. So "connected" waits for Opened. Read the
+	-- signal under pcall, since a member an engine version lacks throws instead of reading nil.
+	local hasOpened, opened = pcall(function()
+		return (client :: any).Opened
+	end)
+	if hasOpened and opened then
+		opened:Connect(function()
+			print("[Bridge] connected to " .. url)
+		end)
+	else
+		print("[Bridge] connecting to " .. url)
+	end
 
 	ws.MessageReceived:Connect(handle)
 	-- Not every engine version exposes the same closure signal, so bind whatever is there.

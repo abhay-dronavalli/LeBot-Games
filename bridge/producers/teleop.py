@@ -136,6 +136,8 @@ def run(bus, tracker, inbox, effects, stop, hz=30.0, vision=False, actual=False)
     """Leader drives follower. Effects bend the command. Torque goes on."""
     ws = Workspace()
     ranges = calibrated_ranges()
+    if not ranges:   # {} means no calibration file: never drive the arm without the range clamp
+        raise SystemExit("teleop: no follower calibration (lerobot my_follower.json); refusing to drive the arm")
 
     follower = SO101Follower(SO101FollowerConfig(
         port=FOLLOWER_PORT, id="my_follower", max_relative_target=MAX_STEP_DEG))

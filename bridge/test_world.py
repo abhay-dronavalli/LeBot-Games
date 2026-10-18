@@ -375,6 +375,135 @@ def scenario_resting_blocks_snap_to_the_grid():
     return ok
 
 
+# Cell centres on the 3x4 sheet (origin 25.4, 22.225; 57.15 mm cells).
+A1, A2, A3, B1, C3 = (54.0, 50.8), (111.1, 50.8), (168.3, 50.8), (54.0, 107.9), (168.3, 165.1)
+
+
+def scenario_same_colour_side_by_side():
+    """Two red cubes in neighbouring cells, both named plain "red" (perception no longer
+    renames a repeated colour). Each keeps its id through jitter and detection-order swaps, and
+    picking one up is not mistaken for an empty jaw: the other red sits within GRAB_RADIUS_MM of
+    the pick-up spot once it is a few mm off centre, and it used to cancel the carry."""
+    print("same colour: two reds side by side, then one is carried away")
+    t = BlockTracker()
+    now = 0.0
+    left = (A1[0] + 3.0, A1[1])          # 54 mm from the other red: inside GRAB_RADIUS_MM
+    for k in range(10):
+        now += 0.1
+        j = 2.0 if k % 2 else -2.0
+        pair = [obj("red_cube", left[0] + j, left[1]), obj("red_cube", A2[0], A2[1] - j)]
+        blocks = t.update(pair[::-1] if k % 2 else pair, arm(0, 0, 200, OPEN), now)
+    by_id = ids(blocks)
+    ok = check("two tracks, both red", (len(by_id), sorted(b["color"] for b in blocks)), (2, ["red", "red"]))
+    ok &= check("ids pinned to their cells through the swaps", (by_id[1][:2], by_id[2][:2]), (A1, A2))
+
+    # Pick the left red: the jaw covers it, the right red stays in view the whole time.
+    now += 0.1
+    t.update([obj("red_cube", *left), obj("red_cube", *A2)], arm(left[0], left[1], 14, OPEN), now)
+    now += 0.1
+    t.update([obj("red_cube", *A2)], arm(left[0], left[1], 14, CLOSED), now)
+    for k in range(1, 6):
+        now += 0.1
+        blocks = t.update([obj("red_cube", *A2)],
+                          arm(left[0] + 23 * k, left[1] + 23 * k, 150, CLOSED), now)
+    by_id = ids(blocks)
+    ok &= check("the carry is confirmed, not cancelled by the other red", by_id[1][4], True)
+    now += 0.1
+    t.update([obj("red_cube", *A2)], arm(C3[0], C3[1], 60, CLOSED), now)
+    now += 0.1
+    blocks = t.update([obj("red_cube", *A2), obj("red_cube", *C3)], arm(C3[0], C3[1], 60, OPEN), now)
+    for _ in range(10):
+        now += 0.1
+        blocks = t.update([obj("red_cube", *A2), obj("red_cube", *C3)], arm(0, 0, 200, OPEN), now)
+    by_id = ids(blocks)
+    ok &= check("still two tracks", len(by_id), 2)
+    ok &= check("id 1 landed in C3, id 2 never moved from A2", (by_id[1][:2], by_id[2][:2]), (C3, A2))
+    return ok
+
+
+def scenario_same_colour_stack():
+    """A red cube carried onto a red cube, then taken back off. The camera only ever sees one
+    red blob at that spot, so the stack lives on occlusion memory and the arm's own release."""
+    print("same colour: red stacked on red, then unstacked")
+    t = BlockTracker()
+    now = 0.0
+    for _ in range(6):
+        now += 0.1
+        t.update([obj("red_cube", *C3), obj("red_cube", *A1)], arm(0, 0, 200, OPEN), now)
+    now += 0.1
+    t.update([obj("red_cube", *C3), obj("red_cube", *A1)], arm(A1[0], A1[1], 14, OPEN), now)
+    now += 0.1
+    t.update([obj("red_cube", *C3)], arm(A1[0], A1[1], 14, CLOSED), now)
+    for k in range(1, 6):
+        now += 0.1
+        t.update([obj("red_cube", *C3)], arm(A1[0] + 23 * k, A1[1] + 23 * k, 150, CLOSED), now)
+    now += 0.1
+    t.update([obj("red_cube", *C3)], arm(C3[0], C3[1], 62, CLOSED), now)
+    now += 0.1
+    blocks = t.update([obj("red_cube", C3[0] + 1, C3[1] + 1)], arm(C3[0], C3[1], 62, OPEN), now)
+    for _ in range(45):                      # well past DROP_AFTER_S
+        now += 0.1
+        blocks = t.update([obj("red_cube", C3[0] + 1, C3[1] + 1)], arm(0, 0, 200, OPEN), now)
+    by_id = ids(blocks)
+    ok = check("both reds tracked after 4.5 s", len(by_id), 2)
+    ok &= check("id 1 (first there) level 0, id 2 (carried on) level 1, both at C3",
+                (by_id[1][3], by_id[2][3], by_id[1][:2], by_id[2][:2]), (0, 1, C3, C3))
+    ok &= check("the buried red is still reported present", by_id[1][5], True)
+
+    # Take the top one back off to A1. After a real pick the camera still sees a red cube at
+    # C3 (the bottom one), which must not read as the claimed cube left behind.
+    now += 0.1
+    t.update([obj("red_cube", *C3)], arm(C3[0], C3[1], 62, OPEN), now)
+    now += 0.1
+    t.update([obj("red_cube", *C3)], arm(C3[0], C3[1], 62, CLOSED), now)
+    for k in range(1, 6):
+        now += 0.1
+        blocks = t.update([obj("red_cube", *C3)], arm(C3[0] - 23 * k, C3[1] - 23 * k, 150, CLOSED), now)
+    ok &= check("the top red is carried (held)", [b["held"] for b in blocks if b["id"] == 2], [True])
+    now += 0.1
+    t.update([obj("red_cube", *C3)], arm(A1[0], A1[1], 14, CLOSED), now)
+    now += 0.1
+    t.update([obj("red_cube", *C3), obj("red_cube", *A1)], arm(A1[0], A1[1], 14, OPEN), now)
+    for _ in range(10):
+        now += 0.1
+        blocks = t.update([obj("red_cube", *C3), obj("red_cube", *A1)], arm(0, 0, 200, OPEN), now)
+    by_id = ids(blocks)
+    ok &= check("unstacked: id 2 back at A1, id 1 at C3, both level 0",
+                (by_id[2][:2], by_id[2][3], by_id[1][:2], by_id[1][3]), (A1, 0, C3, 0))
+    return ok
+
+
+def scenario_moved_block_keeps_id():
+    """A red cube slid across the sheet by hand, past another red one, keeps its id; so does
+    one that jumps 40 mm between two camera frames."""
+    print("same colour: a block moved between frames keeps its id")
+    t = BlockTracker()
+    now = 0.0
+    for _ in range(3):
+        now += 0.1
+        t.update([obj("red_cube", *B1), obj("red_cube", *A3)], arm(0, 0, 250, OPEN), now)
+    # Slide the B1 red 12 mm a frame toward B3 (one cell under the A3 red).
+    x = B1[0]
+    while x < C3[0]:
+        x = min(x + 12.0, C3[0])
+        now += 0.1
+        blocks = t.update([obj("red_cube", x, B1[1]), obj("red_cube", *A3)], arm(0, 0, 250, OPEN), now)
+    for _ in range(5):
+        now += 0.1
+        blocks = t.update([obj("red_cube", x, B1[1]), obj("red_cube", *A3)], arm(0, 0, 250, OPEN), now)
+    by_id = ids(blocks)
+    ok = check("slid along row B: still id 1, now in B3; id 2 untouched in A3",
+               (len(by_id), by_id[1][:2], by_id[2][:2]), (2, (168.3, 107.9), A3))
+    now += 0.1
+    t.update([obj("red_cube", x, B1[1] + 40.0), obj("red_cube", *A3)], arm(0, 0, 250, OPEN), now)
+    for _ in range(8):
+        now += 0.1
+        blocks = t.update([obj("red_cube", x, B1[1] + 40.0), obj("red_cube", *A3)], arm(0, 0, 250, OPEN), now)
+    ids_now = sorted(b["id"] for b in blocks)
+    ok &= check("a 40 mm jump between frames: same two ids, no new track", ids_now, [1, 2])
+    return ok
+
+
 def main():
     results = [
         scenario_identity_survives_a_swap(),
@@ -389,6 +518,9 @@ def main():
         scenario_stack_a_different_colour_on_top(),
         scenario_empty_jaw_carries_nothing(),
         scenario_resting_blocks_snap_to_the_grid(),
+        scenario_same_colour_side_by_side(),
+        scenario_same_colour_stack(),
+        scenario_moved_block_keeps_id(),
     ]
     print(f"\n{sum(1 for r in results if r)}/{len(results)} scenarios passed")
     return 0 if all(results) else 1

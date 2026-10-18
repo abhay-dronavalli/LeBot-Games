@@ -44,6 +44,7 @@ _DEBUG = bool(os.environ.get("WORLD_DEBUG"))
 GATE_MM = 45.0                 # just under a cube edge: adjacent blocks stay distinguishable
 COLOR_GATE_MM = 70.0           # a same-colour match is allowed to be looser
 COLOR_PENALTY_MM = 15.0        # ...but at equal distance, prefer the same-colour match
+CLAIM_PENALTY_MM = 35.0        # an unconfirmed grab loses a tie for the blob at its pick-up spot
 MISS_HOLD_S = 0.5              # keep a vanished block's last pose this long before dimming it
 DROP_AFTER_S = 3.0             # ...then forget it entirely, unless it is held
 DROP_UNCOVERED_S = 0.8         # ...but much sooner if nothing could be hiding it
@@ -262,7 +263,7 @@ class BlockTracker:
             self._debug(tip, grip, closed, open_jaw, obs, t)
         self._resolve_unseen(matched_tracks, tip, closed, open_jaw, t)
         self._try_grab(tip, closed, t)
-        self._settle_pending(tip, obs, t)
+        self._settle_pending(tip, obs, t, {id(o): track.id for track, o in pairs})
 
         # A held block is rigid in the jaw, so its pose is the tip's - whether or not the
         # camera happened to see it this frame. Doing this in one place after association
@@ -318,6 +319,16 @@ class BlockTracker:
         track can re-attach, but only within the tight grab radius.
         """
         candidates = []
+        # Tracks with a resting block on top of them. An overhead camera cannot see a buried
+        # cube, so a blob at a stack is its top cube: with two cubes of one colour stacked, the
+        # blob must go to the top track, or the top one goes unseen, counts as uncovered, and is
+        # forgotten within DROP_UNCOVERED_S - the stack collapsing to its bottom cube. A held
+        # cube (claimed or carried) covers nothing: it is on its way off the stack.
+        covered = {track.id for track in self._tracks
+                   if not track.held and any(other is not track and not other.held
+                                             and other.settled_at > track.settled_at
+                                             and _same_stack(track, other)
+                                             for other in self._tracks)}
         for track in self._tracks:
             # While the jaw reads closed a held block is inside it, so a nearby blob is some
             # *other* block and must not be matched. The exception is a blob of the held
@@ -342,6 +353,14 @@ class BlockTracker:
                 gate = GRAB_RADIUS_MM if track.carrying else (COLOR_GATE_MM if same else GATE_MM)
                 if d <= gate:
                     cost = d + (0.0 if same else COLOR_PENALTY_MM)
+                    if track.held and track.pending:
+                        # Two cubes of one colour stacked, and the top one just claimed: after a
+                        # real pick the camera sees the bottom cube at the same spot. That blob
+                        # belongs to the bottom track, which is still there, not to the claim -
+                        # otherwise _settle_pending reads it as the claimed cube left behind.
+                        cost += CLAIM_PENALTY_MM
+                    if track.id in covered:
+                        cost += CLAIM_PENALTY_MM    # buried: the camera sees the cube above it
                     candidates.append((cost, track, o))
         candidates.sort(key=lambda c: c[0])
 
@@ -474,7 +493,7 @@ class BlockTracker:
             if age > limit:
                 self._tracks.remove(track)
 
-    def _settle_pending(self, tip, obs, t):
+    def _settle_pending(self, tip, obs, t, owners=None):
         """Decide whether a claimed grab really picked the block up, and keep deciding.
 
         Jaw width plus proximity cannot tell "closed on the cube" from "closed on air two
@@ -494,9 +513,18 @@ class BlockTracker:
 
         This is what stopped phantom carries - a track towed across the board by an empty jaw
         while the real cube sat still, spawning a fresh track behind it every time.
+
+        Only a blob this track could own counts as left behind: `owners` maps id(blob) to the
+        track it was associated with this frame, and a blob another track owns is that other
+        cube - the one underneath a same-colour stack, or a same-colour neighbour in the next
+        cell (cell centres are 57 mm apart, inside GRAB_RADIUS_MM once a cube sits a few mm off
+        centre). Without this, picking a cube next to or off a cube of its own colour cancelled
+        every real carry. What stays ambiguous is a jaw closing on air over a same-colour stack:
+        the camera sees one cube of that colour at that spot either way, so the claim stands.
         """
         if tip is None:
             return
+        owners = owners or {}
         for track in self._tracks:
             if not track.held:
                 continue
@@ -511,6 +539,7 @@ class BlockTracker:
             # Both tests are in xy, because that is all the camera measures.
             left_behind = any(
                 o["color"] == track.color
+                and owners.get(id(o), track.id) == track.id
                 and _dist(o["x"], o["y"], track.grab_x, track.grab_y) <= GRAB_RADIUS_MM
                 and _dist(o["x"], o["y"], tip["x"], tip["y"]) > GRAB_RADIUS_MM
                 for o in obs)

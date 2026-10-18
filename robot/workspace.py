@@ -17,11 +17,17 @@ ROBOT_ID = "my_follower"
 
 
 def calibrated_ranges(robot_id=ROBOT_ID):
-    """Each joint's reading range (deg) from the LeRobot follower calibration file."""
-    from lerobot.utils.constants import HF_LEROBOT_CALIBRATION
+    """Each joint's reading range (deg) from the LeRobot follower calibration file, or {} when
+    this machine has no lerobot or no calibration file (mock mode on a laptop with no robot):
+    Workspace then keeps the URDF's nominal limits. Anything that drives the real arm must check
+    for {} itself - teleop refuses to start without ranges."""
+    try:
+        from lerobot.utils.constants import HF_LEROBOT_CALIBRATION
 
-    path = HF_LEROBOT_CALIBRATION / "robots" / "so_follower" / f"{robot_id}.json"
-    cal = json.loads(path.read_text())
+        path = HF_LEROBOT_CALIBRATION / "robots" / "so_follower" / f"{robot_id}.json"
+        cal = json.loads(path.read_text())
+    except (ImportError, OSError):
+        return {}
     return {j: (cal[j]["range_max"] - cal[j]["range_min"]) / 2 * 360 / 4095 for j in ARM_JOINTS}
 
 

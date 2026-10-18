@@ -40,6 +40,9 @@ return {
 	ticketIntervalMin = 12, ticketIntervalMax = 20, -- seconds between ticket arrivals (random in this range)
 	ticketRailMax = 4,                   -- tickets the rail holds; the arrival timer pauses while it is full
 	ticketBlocksMin = 2, ticketBlocksMax = 4, -- blocks per ticket, towers included (towers up to maxStackGlobal)
+	uniqueColorsPerTicket = false,       -- true: no color twice in one pattern (tickets and the attract demo),
+	                                     --   towers included. Off since core perception names repeated colors
+	                                     --   (robot/perception/naming.py); kept as a fallback
 	stackChanceStart = 0.2,              -- chance a ticket block goes on top of another, ramping linearly over
 	stackChanceEnd = 0.6,                --   the shift from start to end
 	ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket

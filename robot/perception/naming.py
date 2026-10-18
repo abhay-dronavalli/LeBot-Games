@@ -2,9 +2,11 @@
 
 Order of preference for every frame:
 1. ColorMemory (what each colour looked like earlier in this setup): instant, offline.
-2. The vision model (gemini_namer), only if some block is unfamiliar, ambiguous between two
-   remembered colours, or two blocks would get the same name (tasks use all-different colours).
-   Its answer is learned, so the next frames are local again.
+2. The vision model (gemini_namer), only if some block is unfamiliar or ambiguous between two
+   remembered colours. Its answer is learned, so the next frames are local again.
+   Two blocks confidently matched to the same colour both keep it: the rig has more than one
+   cube of a colour, and block identity is the tracker's job (bridge/world.py keys on
+   position, not colour), so a repeated name is not a clash.
 3. PRIOR hue guess, if the model isn't available. Logged, because it can be wrong.
 """
 
@@ -40,8 +42,7 @@ class ColorNamer:
         names = [self.memory.classify(s, ACTIVE_COLORS)[0] for s in sigs]
 
         unsure = [i for i, n in enumerate(names) if n is None]
-        clashes = {n for n in names if n is not None and names.count(n) > 1}
-        if not unsure and not clashes:
+        if not unsure:
             self.last_source = "memory"
             return names
 
@@ -61,12 +62,14 @@ class ColorNamer:
             except gemini_namer.NamerUnavailable as e:
                 self.log(f"  ({e}; using colour guesses)")
 
-        # No model: name the rest jointly, each name used once (blocks in a task are all different
-        # colours). Candidates are the calibrated colours first (memory distance), then the rough
-        # prior for colours never calibrated. Closest pairs claim their names first, so two
-        # similar blocks split correctly: calibrated teal vs light blue in glare (distance 6,
-        # "unsure" one at a time, 17:21), or orange-with-stars vs yellow (hue 97 vs 101, 17:01).
-        guessed = [i for i, n in enumerate(names) if n is None or n in clashes]
+        # No model: name the unsure blocks jointly, each name used once and not one a confident
+        # block already has. Only these guesses are kept apart - confident names may repeat (see
+        # the module docstring). Candidates are the calibrated colours first (memory distance),
+        # then the rough prior for colours never calibrated. Closest pairs claim their names
+        # first, so two similar blocks split correctly: calibrated teal vs light blue in glare
+        # (distance 6, "unsure" one at a time, 17:21), or orange-with-stars vs yellow (hue 97 vs
+        # 101, 17:01).
+        guessed = [i for i, n in enumerate(names) if n is None]
         taken = {n for i, n in enumerate(names) if i not in guessed}
         pairs = []
         done = set()

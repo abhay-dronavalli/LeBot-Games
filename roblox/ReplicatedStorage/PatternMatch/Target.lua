@@ -31,7 +31,9 @@ local function sortedKeys(set)
 end
 
 -- n blocks in towers no taller than maxHeight (1 = flat, clamped to Config.maxStackGlobal), on at most
--- every cell once, with random (possibly repeating) colors, within a tower too. After the first block,
+-- every cell once, with random colors. With Config.uniqueColorsPerTicket (the default) no color appears
+-- twice in the pattern, towers included, and n is capped at the number of Config.colors; without it colors
+-- may repeat, within a tower too. After the first block,
 -- each block goes on top of a tower that still has room with probability stackChance (default
 -- Config.stackChanceStart; always, once every cell is taken), otherwise on a fresh cell. rng is an
 -- optional Random, for repeatable tests.
@@ -44,10 +46,20 @@ function Target.generate(n, maxHeight, rng, stackChance)
 	assert(n >= 0 and n <= #free * maxHeight, "Target.generate: n must be between 0 and " .. #free * maxHeight)
 	assert(#colors > 0, "Target.generate: Config.colors is empty")
 
+	local unique = Config.uniqueColorsPerTicket
+	if unique then
+		n = math.min(n, #colors)
+	end
+
 	local target = {}
 	local open = {} -- target cells whose tower is still shorter than maxHeight
 	for _ = 1, n do
-		local color = colors[rng:NextInteger(1, #colors)]
+		local color
+		if unique then
+			color = table.remove(colors, rng:NextInteger(1, #colors)) -- drawn without replacement
+		else
+			color = colors[rng:NextInteger(1, #colors)]
+		end
 		local stack = #open > 0 and (#free == 0 or rng:NextNumber() < stackChance)
 		if stack then
 			local k = rng:NextInteger(1, #open)
