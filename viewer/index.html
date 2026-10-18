@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock Roblox</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b24; --line: #2a3240; --ink: #e6edf3;
+    --dim: #8b98a9; --accent: #4da3ff; --good: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: grid; grid-template-columns: 1fr 300px; height: 100vh; overflow: hidden;
+  }
+  #stage { position: relative; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #badge {
+    position: absolute; top: 12px; left: 16px; padding: 6px 12px; border-radius: 6px;
+    background: rgba(22,27,36,.9); border: 1px solid var(--line); font-size: 12px;
+  }
+  #badge b { color: var(--accent); }
+  .off { color: var(--bad); } .on { color: var(--good); }
+  aside {
+    background: var(--panel); border-left: 1px solid var(--line);
+    padding: 16px; overflow-y: auto;
+  }
+  h1 { font-size: 13px; margin: 0 0 4px; letter-spacing: .08em; text-transform: uppercase; }
+  h2 {
+    font-size: 11px; margin: 20px 0 8px; color: var(--dim);
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .sub { color: var(--dim); font-size: 11px; margin: 0 0 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 2px 0; }
+  td:last-child { text-align: right; color: var(--dim); }
+  button {
+    width: 100%; margin-bottom: 6px; padding: 7px 10px; border-radius: 5px;
+    border: 1px solid var(--line); background: #1d2430; color: var(--ink);
+    font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+    display: flex; justify-content: space-between;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); background: #222c3a; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button span { color: var(--dim); }
+  #kill { border-color: #5a2a2a; background: #2a1a1a; }
+  #kill:hover:not(:disabled) { border-color: var(--bad); }
+  #active:empty::after { content: "none"; color: var(--dim); }
+  .chip {
+    display: inline-block; padding: 2px 8px; margin: 0 4px 4px 0; border-radius: 10px;
+    background: #2d2410; border: 1px solid var(--warn); color: var(--warn); font-size: 11px;
+  }
+  #blocks td:first-child { color: var(--ink); }
+  .held { color: var(--warn) !important; }
+  .stale { opacity: .45; }
+  code { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="badge">
+    <span id="conn" class="off">connecting</span> &nbsp;·&nbsp;
+    seq <b id="seq">0</b> &nbsp;·&nbsp; <b id="rate">0</b> Hz &nbsp;·&nbsp;
+    rtt <b id="rtt">–</b> ms &nbsp;·&nbsp; <span id="script">–</span>
+  </div>
+</div>
+
+<aside>
+  <h1>Mock Roblox</h1>
+  <p class="sub">
+    Stand-in for the Roblox client. Speaks the same protocol over the same WebSocket, so
+    whatever renders here is what a Studio script receives.
+  </p>
+
+  <h2>Link</h2>
+  <table id="link"></table>
+
+  <h2>Blocks</h2>
+  <table id="blocks"></table>
+
+  <h2>Active effects</h2>
+  <div id="active"></div>
+
+  <h2>Send an event to the arm</h2>
+  <div id="buttons"></div>
+  <button id="kill">clear all effects <span>kill</span></button>
+
+  <h2>Mapping</h2>
+  <table id="map"></table>
+</aside>
+
+<script>
+// ---------------------------------------------------------------------------
+// The mm -> studs conversion a Roblox script would do. Sheet frame is +x right,
+// +y down the page, +z up. Roblox is Y-up, so sheet y becomes Roblox Z.
+// xy and height scale independently on purpose: see bridge/main.py.
+// ---------------------------------------------------------------------------
+let SCALE = 0.46;       // studs per mm, horizontal
+let LEVEL = 6.5;        // studs per stack level
+
+const toRoblox = (b, cube) => ({
+  X: +(b.x * SCALE).toFixed(1),
+  Z: +(b.y * SCALE).toFixed(1),
+  Y: +(b.level * LEVEL + (cube * SCALE) / 2).toFixed(1),
+});
+
+const COLORS = {
+  red: "#e5484d", orange: "#f76b15", yellow: "#ffe629", green: "#46a758",
+  teal: "#12a594", "light blue": "#5eb0ef", blue: "#3e63dd", purple: "#8e4ec6",
+  pink: "#e93d82",
+};
+
+// ---------------------------------------------------------------------------
+// Isometric projection. No 3D library: this has to work on a demo laptop with
+// no internet, and a hand-rolled projection is ~20 lines.
+// ---------------------------------------------------------------------------
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+const COS = Math.cos(Math.PI / 6), SIN = Math.sin(Math.PI / 6);
+let view = { s: 1.6, cx: 0, cy: 0 };
+
+function project(x, y, z) {
+  return [
+    view.cx + (x - y) * COS * view.s,
+    view.cy + (x + y) * SIN * view.s - z * view.s,
+  ];
+}
+const depth = (x, y) => x + y;   // bigger = nearer the viewer, so drawn later
+
+function resize() {
+  const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  cv.width = r.width * dpr; cv.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  view.s = Math.min(r.width / 560, r.height / 420);
+  view.cx = r.width / 2;
+  view.cy = r.height / 2 - 150 * view.s;
+}
+addEventListener("resize", resize);
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+function poly(pts, fill, stroke, width = 1) {
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke(); }
+}
+
+function drawSheet(space) {
+  const W = space?.sheet?.w_mm ?? 215.9, H = space?.sheet?.h_mm ?? 279.4;
+  poly([project(0, 0, 0), project(W, 0, 0), project(W, H, 0), project(0, H, 0)],
+       "#1b2130", "#39445a", 1.5);
+
+  const g = space?.grid;
+  if (!g) return;
+  const [ox, oy] = g.origin_mm, c = g.cell_mm;
+  ctx.strokeStyle = "#2f3a4a";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) {
+    let a = project(ox + i * c, oy, 0), b = project(ox + i * c, oy + 3 * c, 0);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    a = project(ox, oy + i * c, 0); b = project(ox + 3 * c, oy + i * c, 0);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+  ctx.fillStyle = "#54607a"; ctx.font = "11px ui-monospace";
+  for (let r = 0; r < 3; r++) for (let col = 0; col < 3; col++) {
+    const p = project(ox + (col + .5) * c, oy + (r + .5) * c, 0);
+    ctx.fillText("ABC"[r] + (col + 1), p[0] - 7, p[1] + 4);
+  }
+}
+
+function drawCube(b, cube) {
+  const h = cube, half = cube / 2;
+  const x0 = b.x - half, x1 = b.x + half, y0 = b.y - half, y1 = b.y + half;
+  const z0 = b.held ? b.z : b.level * cube, z1 = z0 + h;
+  const base = COLORS[b.color] || "#9aa4b2";
+  const a = ctx.globalAlpha;
+  if (!b.visible && !b.held) ctx.globalAlpha = a * 0.5;
+
+  // Only three faces of a cube are ever visible in this projection.
+  poly([project(x0, y1, z0), project(x1, y1, z0), project(x1, y1, z1), project(x0, y1, z1)],
+       shade(base, -0.35), "#00000055");
+  poly([project(x1, y0, z0), project(x1, y1, z0), project(x1, y1, z1), project(x1, y0, z1)],
+       shade(base, -0.18), "#00000055");
+  poly([project(x0, y0, z1), project(x1, y0, z1), project(x1, y1, z1), project(x0, y1, z1)],
+       base, b.held ? "#d29922" : "#00000055", b.held ? 2 : 1);
+
+  if (b.held) {   // a dropped line to the paper, so the carry height reads at a glance
+    ctx.strokeStyle = "#d2992288"; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(...project(b.x, b.y, 0)); ctx.lineTo(...project(b.x, b.y, z0));
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.globalAlpha = a;
+}
+
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => Math.max(0, Math.min(255, Math.round(v + 255 * k)));
+  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+}
+
+function drawArm(arm) {
+  const pts = arm.points.map((p) => project(p.x, p.y, p.z));
+
+  // Shadow on the paper first: it is the cue that sells the height.
+  ctx.strokeStyle = "#00000066"; ctx.lineWidth = 6; ctx.lineCap = "round";
+  ctx.beginPath();
+  arm.points.forEach((p, i) => {
+    const q = project(p.x, p.y, 0);
+    i ? ctx.lineTo(...q) : ctx.moveTo(...q);
+  });
+  ctx.stroke();
+
+  ctx.strokeStyle = "#7d8da3"; ctx.lineWidth = 9;
+  ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p)));
+  ctx.stroke();
+  ctx.strokeStyle = "#cfd8e3"; ctx.lineWidth = 4;
+  ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p)));
+  ctx.stroke();
+
+  pts.forEach(([x, y], i) => {
+    const last = i === pts.length - 1;
+    ctx.beginPath(); ctx.arc(x, y, last ? 6 : 5, 0, 7);
+    ctx.fillStyle = last ? "#4da3ff" : "#9fb0c6"; ctx.fill();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let hello = null, state = null, frames = 0, rate = 0, rtt = null, pingAt = 0, pingId = 1;
+setInterval(() => { rate = frames; frames = 0; }, 1000);
+
+function frame() {
+  resizeIfNeeded();
+  const r = cv.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  drawSheet(hello?.space);
+
+  if (state) {
+    const cube = hello?.space?.cube_mm ?? 48;
+    const arm = state.arm;
+    const items = [];
+    (state.blocks || []).forEach((b) => items.push({ d: depth(b.x, b.y), draw: () => drawCube(b, cube) }));
+    if (arm?.points?.length) {
+      const tip = arm.tip;
+      items.push({ d: depth(tip.x, tip.y) + 1, draw: () => drawArm(arm) });
+    }
+    items.sort((a, b) => a.d - b.d).forEach((i) => i.draw());
+  }
+  requestAnimationFrame(frame);
+}
+
+let lastW = 0, lastH = 0;
+function resizeIfNeeded() {
+  const r = cv.getBoundingClientRect();
+  if (r.width !== lastW || r.height !== lastH) { lastW = r.width; lastH = r.height; resize(); }
+}
+
+const row = (k, v, cls = "") => `<tr class="${cls}"><td>${k}</td><td>${v}</td></tr>`;
+
+function paint() {
+  const st = state, sp = hello?.space;
+  document.getElementById("seq").textContent = st?.seq ?? 0;
+  document.getElementById("rate").textContent = rate;
+  document.getElementById("rtt").textContent = rtt === null ? "–" : rtt;
+  document.getElementById("script").textContent = st?.notes?.script ?? hello?.source ?? "–";
+
+  const armAge = st?.arm_age, blkAge = st?.blocks_age;
+  document.getElementById("link").innerHTML =
+    row("source", hello?.source ?? "–") +
+    row("protocol", "v" + (hello?.v ?? "?")) +
+    row("arm age", armAge == null ? "–" : armAge.toFixed(2) + " s", armAge > 0.5 ? "stale" : "") +
+    row("blocks age", blkAge == null ? "–" : blkAge.toFixed(2) + " s", blkAge > 1.0 ? "stale" : "") +
+    row("gripper", st?.arm?.joints?.gripper?.toFixed(1) ?? "–") +
+    row("tip z", st?.arm?.tip ? st.arm.tip.z.toFixed(0) + " mm" : "–");
+
+  document.getElementById("blocks").innerHTML = (st?.blocks || []).map((b) => {
+    const r = toRoblox(b, sp?.cube_mm ?? 48);
+    const tag = b.held ? " HELD" : b.visible ? "" : " lost";
+    return row(`<span class="${b.held ? "held" : ""}">#${b.id} ${b.color}${tag}</span>`,
+               `L${b.level} · ${r.X},${r.Y},${r.Z}`,
+               !b.visible && !b.held ? "stale" : "");
+  }).join("") || row("<span style='color:var(--dim)'>none detected</span>", "");
+
+  document.getElementById("active").innerHTML = (st?.effects || [])
+    .map((e) => `<span class="chip">${e.name} ${e.intensity} · ${e.remaining}s</span>`).join("");
+
+  document.getElementById("map").innerHTML =
+    row("studs / mm", SCALE) + row("studs / level", LEVEL) +
+    row("sheet", sp ? `${(sp.sheet.w_mm * SCALE).toFixed(0)} × ${(sp.sheet.h_mm * SCALE).toFixed(0)} studs` : "–") +
+    row("cube", sp ? `${(sp.cube_mm * SCALE).toFixed(1)} studs wide` : "–") +
+    row("arm base", sp ? sp.arm_base_mm.join(", ") + " mm" : "–");
+}
+setInterval(paint, 100);
+
+// ---------------------------------------------------------------------------
+// The link. Exactly what a Roblox script does, in JS.
+// ---------------------------------------------------------------------------
+const port = new URLSearchParams(location.search).get("ws") || 8765;
+let ws = null;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.hostname}:${port}`);
+  const conn = document.getElementById("conn");
+
+  ws.onopen = () => {
+    conn.textContent = "connected"; conn.className = "on";
+    setInterval(() => {
+      if (ws?.readyState === 1) { pingAt = performance.now(); ws.send(JSON.stringify({ t: "ping", id: pingId++ })); }
+    }, 2000);
+  };
+  ws.onclose = () => {
+    conn.textContent = "disconnected"; conn.className = "off";
+    hello = null; state = null;
+    setTimeout(connect, 1000);     // the robot process restarts a lot during a hackathon
+  };
+  ws.onmessage = (ev) => {
+    const f = JSON.parse(ev.data);
+    if (f.t === "state") { state = f; frames++; }
+    else if (f.t === "hello") { hello = f; onHello(f); }
+    else if (f.t === "pong") { rtt = Math.round(performance.now() - pingAt); }
+    else if (f.t === "error") { console.warn("server:", f.message, f.frame ?? ""); }
+  };
+}
+
+// Effect buttons are built from the server's own list, so adding an effect in
+// bridge/effects.py makes a button appear here with no edit to this file.
+const PRESET = {
+  earthquake: { intensity: 0.7, duration: 4 }, fog: { intensity: 0.6, duration: 5 },
+  mirror: { intensity: 1.0, duration: 6 }, molasses: { intensity: 0.8, duration: 5 },
+  butterfingers: { intensity: 1.0, duration: 4 }, freeze: { intensity: 1.0, duration: 2.5 },
+};
+
+function onHello(f) {
+  const box = document.getElementById("buttons");
+  box.innerHTML = "";
+  (f.effects || []).forEach((name) => {
+    const p = PRESET[name] || { intensity: 1, duration: 3 };
+    const b = document.createElement("button");
+    b.innerHTML = `${name}<span>${p.intensity} · ${p.duration}s</span>`;
+    b.onclick = () => ws.send(JSON.stringify({ t: "event", name, ...p }));
+    box.appendChild(b);
+  });
+}
+
+document.getElementById("kill").onclick = () =>
+  (hello?.effects || []).forEach((name) =>
+    ws.send(JSON.stringify({ t: "event", name, intensity: 0, duration: 0 })));
+
+resize();
+connect();
+frame();
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+{
+  "source": "robot/scripts/make_sheet.py: 3x4 grid, tags on the mat",
+  "generated": "2026-10-17 17:38",
+  "frame": "sheet: origin at the grid sheet's top-left corner, x right (tag0->tag1), y down the page (tag0->tag3), mm. Tags sit on the mat outside the paper, so their coordinates are negative or past the sheet's width and height.",
+  "sheet": {
+    "w_mm": 279.4,
+    "h_mm": 215.9
+  },
+  "dictionary": "DICT_APRILTAG_36h11",
+  "tag_size_mm": 31.75,
+  "tag_gap_mm": 0.0,
+  "tags": {
+    "0": {
+      "center_mm": [
+        2.69,
+        -4.91
+      ],
+      "corners_mm": [
+        [
+          18.87,
+          10.65
+        ],
+        [
+          -12.88,
+          11.26
+        ],
+        [
+          -13.49,
+          -20.48
+        ],
+        [
+          18.26,
+          -21.09
+        ]
+      ]
+    },
+    "1": {
+      "center_mm": [
+        277.6,
+        -4.44
+      ],
+      "corners_mm": [
+        [
+          293.61,
+          11.3
+        ],
+        [
+          261.86,
+          11.57
+        ],
+        [
+          261.59,
+          -20.17
+        ],
+        [
+          293.34,
+          -20.44
+        ]
+      ]
+    },
+    "2": {
+      "center_mm": [
+        279.16,
+        218.49
+      ],
+      "corners_mm": [
+        [
+          294.98,
+          234.42
+        ],
+        [
+          263.23,
+          234.3
+        ],
+        [
+          263.35,
+          202.55
+        ],
+        [
+          295.1,
+          202.67
+        ]
+      ]
+    },
+    "3": {
+      "center_mm": [
+        1.18,
+        218.93
+      ],
+      "corners_mm": [
+        [
+          16.62,
+          235.22
+        ],
+        [
+          -15.12,
+          234.38
+        ],
+        [
+          -14.27,
+          202.64
+        ],
+        [
+          17.47,
+          203.48
+        ]
+      ]
+    }
+  },
+  "grid": {
+    "origin_mm": [
+      25.4,
+      22.225
+    ],
+    "cell_mm": 57.15,
+    "rows": [
+      "A",
+      "B",
+      "C"
+    ],
+    "cols": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "naming": "letter is the row (A nearest the arm), number is the column"
+  },
+  "print_check": "the scale bar must measure 50.8 mm (2.00 in)",
+  "tags_note": "tag centres, rotations and corner ORDER measured against the printed grid on 2026-10-17 (grid residual 0.18 mm). corners_mm is in the order cv2.aruco reports them for each marker, which is the marker's own rotation, not the sheet axes - matching a rotated tag to an axis-aligned square costs a full tag diagonal (~45 mm) of fit error. Re-measure if the tags are re-taped."
+}
