@@ -325,3 +325,50 @@ BUILDERS.Laser = function(i, folder, info, state)
 	end
 end
 
+-- LAVA: rises on a timer and forces the player to keep moving. Blocks stand proud of the
+-- maximum level, so a placed path stays dry. Solving freezes the rise (cryo) but the lava
+-- itself stays lethal -- the blocks are the way across.
+BUILDERS.Lava = function(i, folder, info, state)
+	local maxY = 3.2 -- crates are 4 tall, so their tops stay dry
+	local riseFor = (info.level == 2) and 12 or 20
+
+	-- pool only covers `coverRows`, so the bay stays crossable on a 2-cube budget
+	local rows = info.coverRows or {0, 1, 2}
+	local poolStart = math.min(table.unpack(rows)) * CELL
+	local poolDepth = (#rows) * CELL
+	local centre = Vector3.new(Config.BayWidth / 2, 0,
+		bayZStart(i) + poolStart + poolDepth / 2)
+
+	local lava = newPart("Lava", Vector3.new(Config.BayWidth - 0.5, 0.6, poolDepth - 0.5),
+		Vector3.new(centre.X, 0.2, centre.Z), Color3.fromRGB(255, 94, 12),
+		Enum.Material.Neon, folder)
+	makeLethal(lava, state)
+	local poolWidth = Config.BayWidth - 0.5
+	local poolSpan = poolDepth - 0.5
+
+	local glow = Instance.new("PointLight")
+	glow.Color = Color3.fromRGB(255, 130, 40)
+	-- kept short-range on purpose: at Range 30 this flooded the neighbouring laser bay with
+	-- orange and made the red beams read salmon
+	glow.Range = 15
+	glow.Brightness = 2
+	glow.Parent = lava
+
+	task.spawn(function()
+		local t = 0
+		while folder.Parent do
+			if not state.solved then
+				t = math.min(t + 0.1, riseFor)
+				local h = (t / riseFor) * maxY
+				lava.Size = Vector3.new(poolWidth, 0.6 + h, poolSpan)
+				lava.CFrame = CFrame.new(centre.X, (0.6 + h) / 2 - 0.1, centre.Z)
+			end
+			task.wait(0.1)
+		end
+	end)
+
+	function state.onSolved()
+		lava.Color = Color3.fromRGB(255, 150, 60)
+	end
+end
+
