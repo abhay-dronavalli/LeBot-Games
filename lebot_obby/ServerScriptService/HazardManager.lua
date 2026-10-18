@@ -313,8 +313,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 		-- with the wall it sits a couple of studs short of the crate's edge
 		lv.mount = newPart("Lever" .. spec.id .. "Mount", Vector3.new(3.5, 3.4, 3.4),
 			Vector3.new(x, y, z), Color3.fromRGB(40, 40, 46), Enum.Material.DiamondPlate, folder)
-		lv.beacon = newPart("Lever" .. spec.id .. "Beacon", Vector3.new(0.34, 5.2, 0.34),
-			Vector3.new(x, y + 1.4, z + 2.4), Color3.fromRGB(34, 34, 38),
+		lv.beacon = newPart("Lever" .. spec.id .. "Beacon", Vector3.new(0.6, 0.6, 3.2),
+			Vector3.new(x, y + 2.2, z), Color3.fromRGB(34, 34, 38),
 			Enum.Material.Neon, folder, {CanQuery = false})
 
 		lv.pivot = Vector3.new(x + inward * 1.4, y - 1.0, z)
@@ -324,8 +324,12 @@ BUILDERS.Saw = function(i, folder, info, state)
 			lv.pivot, Color3.fromRGB(235, 80, 68), Enum.Material.SmoothPlastic, folder,
 			{Shape = Enum.PartType.Ball})
 
+		-- Swing the handle out into the bay, not along it. Rotating about X tipped the lever
+		-- down the lane, which is why the levers looked like they were aimed at nothing in
+		-- particular -- a wall lever has to flip toward whoever is standing in front of it.
+		-- About Z, +Y turns toward -X, so the left wall (inward = +1) needs the negative.
 		function lv.setAngle(deg)
-			local base = CFrame.new(lv.pivot) * CFrame.Angles(math.rad(inward * deg), 0, 0)
+			local base = CFrame.new(lv.pivot) * CFrame.Angles(0, 0, math.rad(-inward * deg))
 			lv.handle.CFrame = base * CFrame.new(0, HANDLE_LEN / 2, 0)
 			lv.knob.CFrame = base * CFrame.new(0, HANDLE_LEN, 0)
 		end
@@ -338,7 +342,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		lv.light.Parent = lv.mount
 
 		lv.label = addLabel(folder, "LEVER " .. spec.id,
-			Vector3.new(x + inward * 1.8, y + 3.6, z), Color3.fromRGB(130, 130, 140))
+			Vector3.new(x + inward * 1.0, y + 3.6, z), Color3.fromRGB(130, 130, 140))
 
 		-- A real wall lever: climb to it and hold E. ProximityPrompt gives the hold-to-act UI
 		-- and the key binding for free, and brushing past no longer throws anything -- the old
