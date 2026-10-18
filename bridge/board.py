@@ -364,7 +364,12 @@ class Board:
 # ---- the model --------------------------------------------------------------------
 
 API = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "gpt-4o"        # override with OPENAI_MODEL; any vision model will do
+# Override with OPENAI_MODEL. Not just "any vision model will do": on this rig gpt-4o read a
+# cube sitting in A4 as B4 three times out of three - the right colour in the wrong row, which
+# is the failure that looks like a calibration problem and is not. gpt-5.1 read A4 three times
+# out of three, no slower (~1.6 s) and on slightly fewer tokens. Re-check with
+# `robot/scripts/tests/board_check.py` before changing this.
+DEFAULT_MODEL = "gpt-5.1"
 TIMEOUT_S = 40
 MAX_WIDTH = 1280                # the printed labels stay legible; a 1920 frame is wasted tokens
 
