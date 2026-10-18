@@ -275,11 +275,33 @@ refresh(); setInterval(refresh, 1500);
 </script></body></html>"""
 
 
+class Quiet(ThreadingHTTPServer):
+    """A browser that reloads or closes a tab aborts the MJPEG connection mid-write, and
+    socketserver's default handler prints a full ConnectionAbortedError traceback for it. That
+    is normal operation here, not a fault, and a wall of tracebacks hides the sampling output
+    this tool exists to show."""
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
         pass   # the console is for the tuning readout, not a request log
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
 
     def _send(self, body, ctype="application/json"):
         if isinstance(body, str):
@@ -425,8 +447,7 @@ def main():
     stop = threading.Event()
     threading.Thread(target=grab_loop, args=(stop,), daemon=True).start()
 
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    srv.daemon_threads = True
+    srv = Quiet(("127.0.0.1", PORT), Handler)
     url = f"http://localhost:{PORT}"
     print(f"  open {url}   (Ctrl-C here when you are done)")
     print(f"  settings file: {SETTINGS_PATH}")
