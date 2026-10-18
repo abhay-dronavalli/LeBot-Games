@@ -158,15 +158,77 @@ local function positionCrate(crateModel, worldCFrame, level)
 end
 
 ----------------------------------------------------------------
--- Public: diff + apply a new `cells` snapshot for a given bay (Section 5.2)
+-- Placement guards
+--
+-- An obstacle can refuse deliveries into its own bay -- the saw wall turns away crates dropped
+-- in front of live blades, because stalling the wall is meant to be a reward for killing them
+-- first. HazardManager registers the guard, so the dependency still only points one way.
+--
+-- A refusal is not a discard: the operator's cube is still sitting on the real table, so the
+-- game owes them that crate the moment the guard changes its mind. Rejects are parked per bay
+-- and retryRejected() delivers them.
 ----------------------------------------------------------------
-function BlockSync.applyCells(bayModel, newCellsList)
-	local last = lastAppliedByBay[bayModel] or {}
+local placementGuards = setmetatable({}, {__mode = "k"})
+local rejectedByBay = setmetatable({}, {__mode = "k"})
+
+local rejectedEvent = Instance.new("BindableEvent")
+BlockSync.PlacementRejected = rejectedEvent.Event
+
+function BlockSync.setPlacementGuard(bayModel, fn)
+	placementGuards[bayModel] = fn
+end
+
+local function allowed(bayModel, cell)
+	local guard = placementGuards[bayModel]
+	if not guard then
+		return true
+	end
+	return guard(cell)
+end
+
+local function liveTableFor(bayModel)
 	local live = liveCratesByBay[bayModel]
 	if not live then
 		live = {}
 		liveCratesByBay[bayModel] = live
 	end
+	return live
+end
+
+local function deliver(bayModel, live, key, cell)
+	local worldCFrame = BlockSync.cellToWorld(bayModel, cell.col, cell.row)
+	local crateModel = buildCrateModel(cell.color, cell.level)
+	live[key] = crateModel
+	SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, cell.level, function()
+		if not crateModel.Parent then
+			return -- superseded by a newer edit while the arm was in flight
+		end
+		positionCrate(crateModel, worldCFrame, cell.level)
+		spawnShockwave(bayModel, worldCFrame, cell.level, cell.color)
+	end)
+end
+
+-- Re-offer everything a guard turned away earlier, for whichever cells it now accepts.
+function BlockSync.retryRejected(bayModel)
+	local rej = rejectedByBay[bayModel]
+	if not rej then
+		return
+	end
+	local live = liveTableFor(bayModel)
+	for key, cell in pairs(rej) do
+		if allowed(bayModel, cell) then
+			rej[key] = nil
+			deliver(bayModel, live, key, cell)
+		end
+	end
+end
+
+----------------------------------------------------------------
+-- Public: diff + apply a new `cells` snapshot for a given bay (Section 5.2)
+----------------------------------------------------------------
+function BlockSync.applyCells(bayModel, newCellsList)
+	local last = lastAppliedByBay[bayModel] or {}
+	local live = liveTableFor(bayModel)
 
 	local newByKey = {}
 	for _, c in ipairs(newCellsList) do
@@ -178,6 +240,11 @@ function BlockSync.applyCells(bayModel, newCellsList)
 		if not newByKey[key] then
 			local crateModel = live[key]
 			live[key] = nil
+			-- lifting the cube off the table voids any rejection parked for that cell
+			local rej = rejectedByBay[bayModel]
+			if rej then
+				rej[key] = nil
+			end
 			task.delay(Config.CrateRemoveDelay, function()
 				if crateModel and crateModel.Parent then
 					local worldCFrame = BlockSync.cellToWorld(bayModel, oldCell.col, oldCell.row)
@@ -195,19 +262,33 @@ function BlockSync.applyCells(bayModel, newCellsList)
 		if isNew or isChanged then
 			task.delay(Config.CrateConfirmDelay, function()
 				local existing = live[key]
-				if existing and existing.Parent then
-					existing:Destroy()
-				end
-				local worldCFrame = BlockSync.cellToWorld(bayModel, newCell.col, newCell.row)
-				local crateModel = buildCrateModel(newCell.color, newCell.level)
-				live[key] = crateModel
-				SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, newCell.level, function()
-					if not crateModel.Parent then
-						return -- superseded by a newer edit while the arm was in flight
+				if existing then
+					-- A crate still waiting its turn in the arm queue has no Parent yet, so
+					-- `.Parent` cannot tell "not placed yet" from "already destroyed" -- and
+					-- the old check skipped exactly the queued ones, so fast colour cycling
+					-- left several crates stacked in one cell. Flag it instead and let
+					-- whichever side reaches it first do the cleanup.
+					existing:SetAttribute("Superseded", true)
+					if existing.Parent then
+						existing:Destroy()
 					end
-					positionCrate(crateModel, worldCFrame, newCell.level)
-					spawnShockwave(bayModel, worldCFrame, newCell.level, newCell.color)
-				end)
+				end
+
+				local ok, reason = allowed(bayModel, newCell)
+				if not ok then
+					-- park it; the cube is still on the real table, so this is deferred
+					local rej = rejectedByBay[bayModel]
+					if not rej then
+						rej = {}
+						rejectedByBay[bayModel] = rej
+					end
+					rej[key] = newCell
+					live[key] = nil
+					rejectedEvent:Fire(bayModel, newCell, reason)
+					return
+				end
+
+				deliver(bayModel, live, key, newCell)
 			end)
 		end
 	end

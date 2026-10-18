@@ -372,6 +372,11 @@ end
 -- its own impact effect (shockwave) from inside that callback.
 function SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, level, onArrive)
 	enqueue(function()
+		-- a newer edit can replace this crate while it is still sitting in the queue
+		if crateModel:GetAttribute("Superseded") then
+			crateModel:Destroy()
+			return
+		end
 		busy = true
 		local cellPos = worldCFrame.Position
 		local grip = Vector3.new(cellPos.X, cellPos.Y + CRATE_GRIP_HEIGHT, cellPos.Z)

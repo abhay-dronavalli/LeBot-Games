@@ -20,9 +20,15 @@ One person owns the place file. When a script changes in Studio, mirror it here.
 | `ServerScriptService/GhostMode.lua` | `ServerScriptService.GhostMode` | Script |
 | `StarterPlayerScripts/DebugCellEditor.client.lua` | `StarterPlayer.StarterPlayerScripts.DebugCellEditor` | LocalScript |
 | `StarterPlayerScripts/GhostControl.client.lua` | `StarterPlayer.StarterPlayerScripts.GhostControl` | LocalScript |
+| `StarterPlayerScripts/ObjectiveHud.client.lua` | `StarterPlayer.StarterPlayerScripts.ObjectiveHud` | LocalScript |
 
 `ReplicatedStorage.Remotes` holds RemoteEvents (`CellEdit`, `CellsUpdated`, `DebugHotkey`,
-`GhostToggle`) and has no source of its own.
+`GhostToggle`, `Objective`) and has no source of its own.
+
+`Objective` is the on-screen task channel: an obstacle fires it with
+`{title, task, hint, tone, timer, timerLabel, timerTone, flash}` whenever its state changes,
+and with `nil` to clear the HUD. It's deliberately generic rather than saw-wall specific, so
+the other bays can drive the same HUD as they get built.
 
 ## World geometry
 

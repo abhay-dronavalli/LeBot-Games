@@ -43,12 +43,28 @@ title.TextSize = 14
 title.Text = "DEBUG CELLS -- click=cycle color, shift+click=level"
 title.Parent = screenGui
 
+-- the grid reads as a map of the bay ahead of you, so say which end is which
+local farLabel = Instance.new("TextLabel")
+farLabel.Size = UDim2.new(0, 260, 0, 16)
+farLabel.Position = UDim2.new(0, 20, 0, 46)
+farLabel.BackgroundTransparency = 1
+farLabel.TextColor3 = Color3.fromRGB(150, 150, 165)
+farLabel.Font = Enum.Font.SourceSansBold
+farLabel.TextSize = 12
+farLabel.Text = "^ FAR END OF BAY"
+farLabel.Parent = screenGui
+
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 260, 0, 200)
-frame.Position = UDim2.new(0, 20, 0, 50)
+frame.Position = UDim2.new(0, 20, 0, 64)
 frame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 frame.BackgroundTransparency = 0.2
 frame.Parent = screenGui
+
+local nearLabel = farLabel:Clone()
+nearLabel.Position = UDim2.new(0, 20, 0, 266)
+nearLabel.Text = "v ENTRANCE (where you came in)"
+nearLabel.Parent = screenGui
 
 local layout = Instance.new("UIGridLayout")
 layout.CellSize = UDim2.new(0, 56, 0, 56)
@@ -66,7 +82,14 @@ for row = 0, Config.BayRows - 1 do
 	for col = 0, Config.BayCols - 1 do
 		local btn = Instance.new("TextButton")
 		btn.Name = string.format("Cell_%d_%d", col, row)
-		btn.LayoutOrder = row * Config.BayCols + col
+		-- Lay the grid out as a MAP OF WHAT THE PLAYER SEES, not in raw index order.
+		-- Walking into a bay you face +Z, and a Roblox character facing +Z has its
+		-- RightVector pointing at -X -- so low columns are on your right, not your left, and
+		-- row 0 (the entrance) is behind you rather than ahead. Both axes therefore flip:
+		-- far row on top, high column on the left. Printed index order put the grid in a
+		-- mirror image of the bay.
+		btn.LayoutOrder = (Config.BayRows - 1 - row) * Config.BayCols
+			+ (Config.BayCols - 1 - col)
 		btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
 		btn.Text = string.format("%d,%d", col, row)
 		btn.TextColor3 = Color3.fromRGB(255, 255, 255)

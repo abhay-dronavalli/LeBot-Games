@@ -13,10 +13,38 @@
 return {
 	[1] = {
 		obstacle = "Saw",
+		-- Solved by throwing both levers, not by filling cells: here the crates are a LADDER
+		-- to the answer, not the answer. checkSolved skips this bay and the builder owns
+		-- state.solved itself. solveCells stays as the advisory "stack here" hint.
+		solveMode = "switches",
 		color = "orange",
 		level = 1,
-		solveCells = {{1, 1}},
-		note = "Block dropped onto the blade jams it; the block is then a safe step across.",
+		solveCells = {{0, 1}, {3, 0}},
+		-- Cube budget (2 per colour) is spent exactly: 1 orange for the Lever A step, 1 spare
+		-- orange for the optional brake crate, 2 red for the Lever B stack. Lever A needs 1
+		-- cube and B needs 2, so a single colour would need 3 -- over budget. That is what
+		-- forces the two levers onto different colours.
+		-- minStand is the crate-top height the player must be standing on, which is what
+		-- actually enforces the cube cost: a single crate tops out at 4, a stacked pair at 7.
+		--
+		-- The wall closes from the far end toward the entrance, so row 1 is reached before
+		-- row 0. Lever A sits deeper (row 1) and is therefore the timed one; Lever B sits by
+		-- the entrance, which the wall reaches last.
+		--
+		-- A's crate buys a stall when the wall meets it, but only Config.SawWallStallSeconds
+		-- and only once, so the whole bay stays a race -- and standing on that crate stops
+		-- being safe the moment its stall is spent.
+		levers = {
+			{id = "A", side = "left",  cell = {0, 1}, color = "orange", level = 1,
+				height = 8.6,  minStand = 3},
+			{id = "B", side = "right", cell = {3, 0}, color = "red",    level = 2,
+				height = 11.8, minStand = 6},
+		},
+		brakeColor = "orange",
+		note = "Bay seals behind you; a wall of chainsaws closes in from the exit end. Lever A"
+			.. " (reachable off one crate) kills the blades and arms Lever B (needs a stacked"
+			.. " pair), which halts the wall and sinks it into the floor -- that is the exit."
+			.. " Lever heights clear the wall, so it passes under them.",
 	},
 	[2] = {
 		obstacle = "Void",
