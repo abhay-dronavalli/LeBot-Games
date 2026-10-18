@@ -1,7 +1,18 @@
 -- ReplicatedStorage.PatternMatch.Game
--- The Pattern Match game loop, run on the server by ServerScriptService.PatternMode:
---   Idle -> ModeSelect -> Round 1 -> Intermission -> Round 2 -> Intermission -> Round 3 -> Results -> Idle
--- Easy and Hard modes, with events during rounds (PatternMatch.PatternEvents). Each state is an
+-- The Pattern Match game loop, a Papa's-style ticket shift, run on the server by
+-- ServerScriptService.PatternMode:
+--   Idle -> ModeSelect -> Shift -> Results -> Idle
+-- A shift is one countdown (Config.shiftSeconds). Tickets (target patterns) arrive on a rail: the first
+-- at shift start, then one every Config.ticketIntervalMin..Max seconds, the arrival timer paused while
+-- the rail holds Config.ticketRailMax. One ticket is ACTIVE (the oldest by default, or the one a player
+-- clicks): the TargetBoard shows it, and when the live board matches it exactly for Config.holdToClear
+-- it completes: ORDER UP, points, +Config.ticketTimeBonus seconds, off the rail, and the oldest
+-- remaining ticket becomes active (an empty rail gets the next ticket right away). Blocks stay on the
+-- board between tickets. The shift ends when the timer hits 0: Results, then Idle.
+-- While Idle, PatternMatch.Attract plays a demo loop on both boards (Config.attractEnabled); it stops and
+-- clears both boards the moment any other state starts, and the LiveBoard isn't drawn from StateStore
+-- while it runs.
+-- Easy and Hard modes; events (PatternMatch.PatternEvents) run during the shift. Each state is an
 -- enter/tick pair in `states`. Every 0.2 s, step() redraws the LiveBoard from StateStore (in every
 -- state, idle included), counts down, ticks the current state and pushes the HUD payload if anything
 -- on it changed.
@@ -12,11 +23,11 @@ local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
 local TargetBoard = require(script.Parent.TargetBoard)
 local PatternEvents = require(script.Parent.PatternEvents)
+local Attract = require(script.Parent.Attract)
+local Celebrate = require(script.Parent.Celebrate)
+local TicketStack = require(script.Parent.TicketStack)
 
 local TICK = 0.2
-local ROUNDS = #Config.blocksPerRound
-local INTERMISSION_MESSAGE = "Clear the grid. Swap seats if you want."
-local WAITING_MESSAGE = "Waiting for grid to clear"
 
 local Game = {}
 Game.__index = Game
@@ -25,6 +36,7 @@ Game.__index = Game
 local function seconds(s)
 	return Config.debugFastTimers and s / 4 or s
 end
+Game.seconds = seconds
 
 local function log(fmt, ...)
 	print("[PatternMode] " .. string.format(fmt, ...))
@@ -56,8 +68,28 @@ local function describeTarget(target)
 	return table.concat(parts, " ")
 end
 
--- Hard mode reveal cycle: seconds since round start -> "show" or "hide", and seconds left in that
--- phase. Every round starts with "show" for Config.hard.showSeconds, then "hide" for hideSeconds.
+-- Points a ticket is worth: Config.ticketPoints.ticket, plus .flat per level 0 block and .stacked per
+-- block above it. Default 1 + 1 per flat + 3 per stacked: 2 flat + 1 on top = 6.
+function Game.ticketPoints(target)
+	local P = Config.ticketPoints
+	local points = P.ticket
+	for _, tower in pairs(target) do
+		for i = 1, #tower do
+			points += i == 1 and P.flat or P.stacked
+		end
+	end
+	return points
+end
+
+-- Stack chance for a ticket arriving `elapsed` seconds into a shift `length` seconds long: a straight
+-- ramp from Config.stackChanceStart to Config.stackChanceEnd.
+function Game.stackChanceAt(elapsed, length)
+	local t = length > 0 and math.clamp(elapsed / length, 0, 1) or 0
+	return Config.stackChanceStart + (Config.stackChanceEnd - Config.stackChanceStart) * t
+end
+
+-- Hard mode reveal cycle: seconds since shift start -> "show" or "hide", and seconds left in that
+-- phase. The shift starts with "show" for Config.hard.showSeconds, then "hide" for hideSeconds.
 function Game.revealAt(elapsed)
 	local show, hide = seconds(Config.hard.showSeconds), seconds(Config.hard.hideSeconds)
 	local t = elapsed % (show + hide)
@@ -71,18 +103,23 @@ local states = {}
 
 states.Idle = {
 	enter = function(self)
-		self.mode, self.target = nil, nil -- score and roundScores stay, so the HUD shows the last game
-		self.targetBoard:show(nil)
+		self.mode = nil -- score and completed stay, so the HUD shows the last shift
+		self.tickets, self.activeId = {}, nil
+		if Config.attractEnabled then
+			self.attract:start() -- draws its own boards; a no-op when it is already running
+		else
+			self.targetBoard:show(nil)
+		end
 		self.message = "Walk up to the pad and press E to play Pattern Match."
 	end,
 }
 
 -- The player who started picks on the mode select screen (StarterGui.PatternModeSelect) through the
 -- PatternPick remote -> Game:pick. No pick by the end of the countdown means Easy. After a pick the
--- state holds for Config.modeConfirmSeconds ("HARD MODE") before round 1.
+-- state holds for Config.modeConfirmSeconds ("HARD MODE") before the shift.
 states.ModeSelect = {
 	enter = function(self)
-		self.mode, self.round, self.score, self.roundScores = nil, 0, 0, {}
+		self.mode, self.score, self.completed = nil, 0, {}
 		self.picked = false
 		self:startTimer(Config.modeSelectSeconds)
 		self.message = (self.chooserName or "Someone") .. " is choosing a mode"
@@ -91,8 +128,7 @@ states.ModeSelect = {
 		if self.picked then
 			self.confirmLeft -= dt
 			if self.confirmLeft <= 0 then
-				self.round = 1
-				self:setState("Round")
+				self:setState("Shift")
 			end
 		elseif self.timeLeft <= 0 then
 			self:choose("Easy", "auto-picked at 0")
@@ -100,82 +136,78 @@ states.ModeSelect = {
 	end,
 }
 
-states.Round = {
+states.Shift = {
 	enter = function(self)
-		self.target = Target.generate(Config.blocksPerRound[self.round], Config.maxStackByRound[self.round] or 1)
-		self:startTimer(Config.roundSeconds[self.round])
-		self.roundElapsed = 0
+		self.tickets, self.activeId, self.completed = {}, nil, {}
+		self.nextTicketId = 1 -- tickets are numbered from #1 every shift
+		self.score = 0
+		self.shiftElapsed = 0
+		self.shiftLength = seconds(Config.shiftSeconds)
 		self.clearFor = 0
 		self.lastCompare = nil
-		self.message = "Match the target!"
+		self.orderUp = nil
+		self:startTimer(Config.shiftSeconds)
+		self.message = "Tickets are coming in. Match the active ticket!"
 		if self.mode == "Hard" then
 			self.revealPhase, self.revealLeft = Game.revealAt(0)
 		end
-		self.targetBoard:show(self.target, false, self.mode == "Hard")
-		self.events:startRound(self.mode)
-		log("round %d target: %s", self.round, describeTarget(self.target))
+		self.events:start(self.mode)
+		self:addTicket() -- the first ticket arrives at shift start
+		self:scheduleArrival()
 	end,
 	tick = function(self, dt)
-		self.roundElapsed += dt
-		self.events:tick(dt, self.target, self.liveGrid)
-		if self.mode == "Hard" then
-			local phase, left = Game.revealAt(self.roundElapsed)
-			self.revealLeft = left
-			if phase ~= self.revealPhase then
-				self.revealPhase = phase
-				self.targetBoard:show(self.target, phase == "hide", true)
-				log("round %d colors %s at %.1f s", self.round, phase == "hide" and "hidden" or "visible", self.roundElapsed)
+		self.shiftElapsed += dt
+		-- Arrivals. The timer pauses while the rail is full.
+		if #self.tickets < Config.ticketRailMax then
+			self.arrivalIn -= dt
+			if self.arrivalIn <= 0 then
+				self:addTicket()
+				self:scheduleArrival()
 			end
 		end
 
-		local result = Target.compare(self.target, self.liveGrid, self.events.vanished)
-		self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and blocked blocks
-		local text = Target.describe(result)
-		if text ~= self.lastCompare then
-			self.lastCompare = text
-			log("round %d %s | live: %s", self.round, text, describeLive(self.liveGrid))
+		local active = self:activeTicket()
+		self.events:tick(dt, active and active.target or {}, self.liveGrid)
+		if self.mode == "Hard" then
+			local phase, left = Game.revealAt(self.shiftElapsed)
+			self.revealLeft = left
+			if phase ~= self.revealPhase then
+				self.revealPhase = phase
+				self:showActive()
+			end
 		end
 
-		self.clearFor = result.clear and self.clearFor + dt or 0
-		if self.clearFor >= seconds(Config.holdToClear) then
-			self:endRound(math.floor(self.timeLeft), "clear")
-		elseif self.timeLeft <= 0 then
-			self:endRound(0, "time up")
+		if active then
+			local result = Target.compare(active.target, self.liveGrid, self.events.vanished)
+			self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and blocked blocks
+			local text = Target.describe(result)
+			if text ~= self.lastCompare then
+				self.lastCompare = text
+				log("ticket #%d %s | live: %s", active.id, text, describeLive(self.liveGrid))
+			end
+			self.clearFor = result.clear and self.clearFor + dt or 0
+			if self.clearFor >= seconds(Config.holdToClear) then
+				self:completeTicket(active)
+			end
+		else
+			self.liveBoard:showProblems(nil)
+			self.clearFor = 0
 		end
-	end,
-}
 
-states.Intermission = {
-	enter = function(self)
-		self.targetBoard:show(self.target, false, false) -- full colors: the answer to the round just played
-		self:startTimer(Config.intermissionSeconds)
-		self.message = INTERMISSION_MESSAGE
-	end,
-	tick = function(self)
-		if self.timeLeft > 0 then
-			return
-		end
-		if next(self.liveGrid) == nil then
-			self.round += 1
-			self:setState("Round")
-		elseif self.message ~= WAITING_MESSAGE then
-			self.message = WAITING_MESSAGE
-			log("intermission over, waiting for grid to clear: %s", describeLive(self.liveGrid))
-			self:pushUI()
+		if self.timeLeft <= 0 then
+			self:setState("Results")
 		end
 	end,
 }
 
 states.Results = {
 	enter = function(self)
-		self.targetBoard:show(self.target, false, false)
-		local parts = {}
-		for r = 1, ROUNDS do
-			table.insert(parts, string.format("R%d %d", r, self.roundScores[r] or 0))
-		end
-		self.message = string.format("Final score %d  (%s)", self.score, table.concat(parts, ", "))
+		self.tickets, self.activeId = {}, nil
+		self.targetBoard:show(nil)
+		self.message = string.format("Shift over! %d ticket%s, %d points", #self.completed,
+			#self.completed == 1 and "" or "s", self.score)
 		self:startTimer(Config.resultsSeconds)
-		log("results (%s mode): %s", self.mode, self.message)
+		log("results (%s mode): %s", tostring(self.mode), self.message)
 	end,
 	tick = function(self)
 		if self.timeLeft <= 0 then
@@ -185,21 +217,31 @@ states.Results = {
 }
 
 -- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), core (Core.Events),
--- ui (PatternUI RemoteEvent), stateChanged (optional BindableEvent, fired with { state, round, target }
--- on every state change)
+-- ui (PatternUI RemoteEvent), stateChanged (optional BindableEvent, fired with
+-- { state, mode, activeId, target } on every state change and every active ticket change, where target
+-- is the active ticket's target), rng (optional Random for tickets, for repeatable tests), manualAttract
+-- (true: the attract demo only moves when tests call game.attract:advance(dt))
 function Game.new(opts)
 	local self = setmetatable({}, Game)
 	self.store = opts.store
 	self.ui = opts.ui
 	self.stateChanged = opts.stateChanged
+	self.rng = opts.rng or Random.new()
 	local targetModel = opts.cabinet:WaitForChild("TargetBoard")
 	local liveModel = opts.cabinet:WaitForChild("LiveBoard")
 	self.targetBoard = TargetBoard.new(targetModel)
 	self.liveBoard = LiveBoard.new(liveModel)
 	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard })
+	-- The shared "matched" moment: the attract demo's COMPLETE! and the shift's ORDER UP.
+	self.celebrate = Celebrate.new(opts.cabinet, { targetModel, liveModel })
+	self.attract = Attract.new({ cabinet = opts.cabinet, targetBoard = self.targetBoard, liveBoard = self.liveBoard,
+		celebrate = self.celebrate, manual = opts.manualAttract })
 	self.liveGrid = {}
 	self.state = "Idle"
-	self.mode, self.round, self.score, self.roundScores = nil, 0, 0, {}
+	self.mode, self.score, self.completed = nil, 0, {}
+	self.tickets, self.activeId, self.nextTicketId = {}, nil, 1
+	self.orderUpSeq = 0
+	self.shiftElapsed, self.shiftLength = 0, seconds(Config.shiftSeconds)
 	self.timeLeft, self.timerRunning, self.message = 0, false, ""
 	return self
 end
@@ -214,9 +256,9 @@ function Game:start(player)
 	self.chooserUserId = player and player.UserId or nil
 	local forced = Config.debugForceMode
 	if forced == "easy" or forced == "hard" then
-		self.mode, self.round, self.score, self.roundScores = forced == "hard" and "Hard" or "Easy", 1, 0, {}
+		self.mode = forced == "hard" and "Hard" or "Easy"
 		log("mode %s (debugForceMode)", self.mode)
-		self:setState("Round")
+		self:setState("Shift")
 	else
 		self:setState("ModeSelect")
 	end
@@ -246,6 +288,125 @@ function Game:choose(mode, why)
 	self:pushUI()
 end
 
+-- Tickets --------------------------------------------------------------------------------------------
+
+function Game:activeTicket()
+	for _, ticket in ipairs(self.tickets) do
+		if ticket.id == self.activeId then
+			return ticket
+		end
+	end
+	return nil
+end
+
+-- A new ticket on the right end of the rail: ticketBlocksMin..Max blocks, towers up to maxStackGlobal,
+-- stack chance from the ramp. It becomes active when nothing is.
+function Game:addTicket()
+	local n = self.rng:NextInteger(Config.ticketBlocksMin, Config.ticketBlocksMax)
+	local chance = Game.stackChanceAt(self.shiftElapsed, self.shiftLength)
+	local target = Target.generate(n, Config.maxStackGlobal, self.rng, chance)
+	local _, tallest = Target.count(target)
+	local ticket = {
+		id = self.nextTicketId, target = target, blocks = n, points = Game.ticketPoints(target),
+		stacked = tallest > 1, arrivedAt = self.shiftElapsed,
+	}
+	self.nextTicketId += 1
+	table.insert(self.tickets, ticket)
+	log("ticket #%d arrives (%d on the rail, stack chance %.2f): %s = %d points", ticket.id, #self.tickets,
+		chance, describeTarget(target), ticket.points)
+	if self.activeId == nil then
+		self:setActive(ticket.id, "first on the rail")
+	end
+	self:pushUI()
+	return ticket
+end
+
+function Game:scheduleArrival()
+	self.arrivalIn = seconds(self.rng:NextNumber(Config.ticketIntervalMin, Config.ticketIntervalMax))
+end
+
+-- Makes ticket `id` active: the TargetBoard shows it and the hold-to-clear count starts over.
+function Game:setActive(id, why)
+	self.activeId = id
+	self.clearFor = 0
+	self.lastCompare = nil
+	self:showActive()
+	log("ticket #%s active (%s)", tostring(id), why)
+	self:notify()
+end
+
+function Game:showActive()
+	local ticket = self:activeTicket()
+	local hard = self.mode == "Hard"
+	self.targetBoard:show(ticket and ticket.target or nil, hard and self.revealPhase == "hide", hard)
+end
+
+-- Makes ticket `id` active, if it is on the rail (during the shift). Any player may. Returns true if it
+-- changed the active ticket. Game:cycleTicket uses it; tests call it directly.
+function Game:selectTicket(player, id)
+	if self.state ~= "Shift" or type(id) ~= "number" or id == self.activeId then
+		return false
+	end
+	for _, ticket in ipairs(self.tickets) do
+		if ticket.id == id then
+			self:setActive(id, "picked by " .. (player and player.Name or "?"))
+			self:pushUI()
+			return true
+		end
+	end
+	return false
+end
+
+-- A player cycled the ticket stack (TicketCycle remote: Q / R keys or the < > arrows): dir -1 or +1
+-- through the rail, oldest first, wrapping around. Returns true if the active ticket changed.
+function Game:cycleTicket(player, dir)
+	if self.state ~= "Shift" or (dir ~= 1 and dir ~= -1) or #self.tickets < 2 then
+		return false
+	end
+	local ids = {}
+	for _, ticket in ipairs(self.tickets) do
+		table.insert(ids, ticket.id)
+	end
+	local nextId = TicketStack.cycledId(ids, self.activeId, dir)
+	if nextId == nil or nextId == self.activeId then
+		return false
+	end
+	self:setActive(nextId, string.format("%s by %s", dir > 0 and "next" or "previous", player and player.Name or "?"))
+	self:pushUI()
+	return true
+end
+
+-- The board matched the active ticket long enough: ORDER UP.
+function Game:completeTicket(ticket)
+	for i, t in ipairs(self.tickets) do
+		if t.id == ticket.id then
+			table.remove(self.tickets, i)
+			break
+		end
+	end
+	self.score += ticket.points
+	table.insert(self.completed, {
+		id = ticket.id, points = ticket.points, blocks = ticket.blocks, stacked = ticket.stacked,
+		seconds = math.floor(self.shiftElapsed - ticket.arrivedAt + 0.5),
+	})
+	self.timeLeft += seconds(Config.ticketTimeBonus)
+	self.orderUpSeq += 1
+	self.orderUp = { id = ticket.id, points = ticket.points, bonus = Config.ticketTimeBonus, seq = self.orderUpSeq }
+	self.message = string.format("ORDER UP! Ticket #%d +%d", ticket.id, ticket.points)
+	self.celebrate:burst(string.format("ORDER UP! +%d", ticket.points)) -- same moment as the demo's COMPLETE!
+	log("ORDER UP: ticket #%d, +%d points (score %d), +%d s", ticket.id, ticket.points, self.score, Config.ticketTimeBonus)
+	self.activeId = nil
+	if #self.tickets == 0 then
+		self:addTicket() -- the rail is empty: the next ticket arrives right away
+		self:scheduleArrival()
+	else
+		self:setActive(self.tickets[1].id, "oldest after ORDER UP")
+	end
+	self:pushUI()
+end
+
+-- Loop --------------------------------------------------------------------------------------------
+
 -- Runs forever, one step per tick.
 function Game:run()
 	self:setState("Idle")
@@ -256,7 +417,11 @@ end
 
 -- One tick: redraw the LiveBoard, count down, tick the current state, update the HUD if it changed.
 function Game:step(dt)
-	self.liveGrid = self.liveBoard:render(self.store.get().blocks)
+	if self.attract.running then
+		self.liveGrid = {} -- the attract demo owns the LiveBoard while it runs
+	else
+		self.liveGrid = self.liveBoard:render(self.store.get().blocks)
+	end
 	if self.timerRunning then
 		self.timeLeft = math.max(0, self.timeLeft - dt)
 	end
@@ -270,17 +435,27 @@ function Game:step(dt)
 end
 
 function Game:setState(name)
+	if name ~= "Idle" then
+		self.attract:stop() -- cancels its timers and animations and clears both boards
+	end
 	self.state = name
 	self.timerRunning = false
 	self.timeLeft = 0
 	self.revealPhase, self.revealLeft = nil, nil
-	self.events:stopRound()
+	self.events:stop()
 	self.liveBoard:showProblems(nil)
 	states[name].enter(self)
-	log("state %s%s", name, self.round > 0 and name ~= "Idle" and (" (round " .. self.round .. ", " .. tostring(self.mode) .. ")") or "")
+	log("state %s%s", name, self.mode and name ~= "Idle" and (" (" .. self.mode .. ")") or "")
 	self:pushUI()
+	self:notify()
+end
+
+-- Tells the stateChanged listener (the StateStore stand-in's debugAutoSolve) the state and active ticket.
+function Game:notify()
 	if self.stateChanged then
-		self.stateChanged:Fire({ state = name, round = self.round, target = self.target })
+		local ticket = self.state == "Shift" and self:activeTicket() or nil
+		self.stateChanged:Fire({ state = self.state, mode = self.mode, activeId = ticket and ticket.id or nil,
+			target = ticket and ticket.target or nil })
 	end
 end
 
@@ -289,23 +464,33 @@ function Game:startTimer(s)
 	self.timerRunning = true
 end
 
-function Game:endRound(points, why)
-	self.roundScores[self.round] = points
-	self.score += points
-	log("round %d %s: %d points (total %d)", self.round, why, points, self.score)
-	self:setState(self.round < ROUNDS and "Intermission" or "Results")
+-- A ticket as the HUD needs it: cells maps "B2" -> { bottom color, top color }.
+local function ticketCard(ticket, now)
+	local cells = {}
+	for cell, tower in pairs(ticket.target) do
+		cells[cell] = table.clone(tower)
+	end
+	return { id = ticket.id, points = ticket.points, blocks = ticket.blocks, age = math.floor(now - ticket.arrivedAt), cells = cells }
 end
 
 function Game:payload()
 	local event, vanishedCells = self.events:payload()
+	local tickets = {}
+	for _, ticket in ipairs(self.tickets) do
+		table.insert(tickets, ticketCard(ticket, self.shiftElapsed))
+	end
 	return {
 		state = self.state,
 		mode = self.mode,
-		round = self.round,
 		timeLeft = self.timerRunning and math.ceil(self.timeLeft) or 0,
 		score = self.score,
 		message = self.message,
-		roundScores = table.clone(self.roundScores),
+		tickets = tickets,             -- oldest first
+		activeId = self.activeId,
+		railMax = Config.ticketRailMax,
+		completedCount = #self.completed,
+		completed = table.clone(self.completed), -- { id, points, blocks, stacked, seconds } per completed ticket
+		orderUp = self.orderUp,        -- { id, points, bonus, seq } for the latest ORDER UP, or nil
 		revealPhase = self.revealPhase,
 		revealTimeLeft = self.revealPhase and math.ceil(self.revealLeft) or nil,
 		event = event,                 -- { name, banner, phase = "warning" | "active", timeLeft } or nil
@@ -320,8 +505,13 @@ end
 function Game:hudKey()
 	local p = self:payload()
 	local event = p.event and (p.event.name .. ":" .. p.event.phase .. ":" .. p.event.timeLeft) or "-"
-	return string.format("%d|%s|%s|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
-		event, table.concat(p.vanishedCells, ","))
+	local tickets = {}
+	for _, t in ipairs(p.tickets) do
+		table.insert(tickets, t.id .. "@" .. t.age)
+	end
+	return string.format("%d|%s|%s|%s|%s|%s|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
+		event, table.concat(p.vanishedCells, ","), table.concat(tickets, ","), tostring(p.activeId),
+		tostring(p.orderUp and p.orderUp.seq))
 end
 
 -- Sends the HUD payload to one player, or to everyone when player is nil.

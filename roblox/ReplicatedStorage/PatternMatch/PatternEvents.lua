@@ -1,12 +1,13 @@
 -- ReplicatedStorage.PatternMatch.PatternEvents
 -- Pattern Match events (spec section 4): the scheduler and the event implementations.
--- PatternMatch.Game owns one and drives it: startRound when a round starts, tick every 0.2 s during
--- the round, stopRound when it ends. So events only ever run inside a Round.
+-- PatternMatch.Game owns one and drives it: start when a shift starts, tick every 0.2 s during the
+-- shift, stop when it ends. So events only ever run inside a Shift. Vanish keeps clear of the ACTIVE
+-- ticket's cells (the target Game passes to tick).
 --   vanish   - 1-2 empty non-target LiveBoard tiles turn invisible for Config.vanishSeconds (Roblox only)
 --   tremor   - Core.Events.fire("earthquake", 0.5, 4); each client shakes the boards and its camera
 --              locally while the HUD payload says the tremor is active (PatternMatch.BoardShake)
 --   inverted - "ARM INVERTED" banner; Core.Events.fire("mirror", 1, 8)
--- The first event runs one interval into the round (Config.easy/hard.eventEvery, or debugEventEvery),
+-- The first event runs one interval into the shift (Config.easy/hard.eventEvery, or debugEventEvery),
 -- then one every interval. Each shows a 2 s warning banner first. One event at a time, and never the
 -- same event twice in a row.
 
@@ -66,9 +67,9 @@ function PatternEvents.new(opts)
 	return self
 end
 
--- A round starts: clear everything and schedule the first event one interval in.
-function PatternEvents:startRound(mode)
-	self:stopRound()
+-- A shift starts: clear everything and schedule the first event one interval in.
+function PatternEvents:start(mode)
+	self:stop()
 	local every = Config.debugEventEvery or (mode == "Hard" and Config.hard.eventEvery or Config.easy.eventEvery)
 	self.running = true
 	self.elapsed = 0
@@ -76,8 +77,8 @@ function PatternEvents:startRound(mode)
 	self.nextAt = self.every -- when the next event runs; its warning starts WARNING_SECONDS earlier
 end
 
--- The round is over: end any event, restore the vanished tiles, schedule nothing.
-function PatternEvents:stopRound()
+-- The shift is over: end any event, restore the vanished tiles, schedule nothing.
+function PatternEvents:stop()
 	self.running = false
 	self.current = nil
 	table.clear(self.vanished)
@@ -87,7 +88,8 @@ function PatternEvents:stopRound()
 	end
 end
 
--- One round tick. target and liveGrid are the round's target and the live grid just drawn.
+-- One shift tick. target is the active ticket's target ({} when the rail is empty) and liveGrid the
+-- live grid just drawn.
 function PatternEvents:tick(dt, target, liveGrid)
 	if not self.running then
 		return
@@ -188,7 +190,7 @@ function PatternEvents:finish(event, liveGrid)
 	if event.name == "vanish" then
 		for _, cell in ipairs(event.cells) do
 			if liveGrid[cell] ~= nil then
-				self.sticky[cell] = true -- stays vanished, and blocks the round, until its block is removed
+				self.sticky[cell] = true -- stays vanished, and blocks the ticket, until its block is removed
 			else
 				self.vanished[cell] = nil
 			end

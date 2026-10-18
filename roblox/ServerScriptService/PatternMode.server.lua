@@ -27,6 +27,7 @@ end
 local remotes = getOrCreate(PatternMatch, "Folder", "Remotes")
 local patternUI = getOrCreate(remotes, "RemoteEvent", "PatternUI")          -- server -> clients: HUD payload
 local patternPick = getOrCreate(remotes, "RemoteEvent", "PatternPick")      -- chooser -> server: "easy" / "hard"
+local ticketCycle = getOrCreate(remotes, "RemoteEvent", "TicketCycle")      -- any player -> server: -1 / +1 through the tickets
 local patternState = getOrCreate(remotes, "BindableEvent", "PatternState")  -- server only: state changes
 local armPose = getOrCreate(remotes, "UnreliableRemoteEvent", "ArmPose")    -- server -> clients: arm angles, 20 Hz
 
@@ -51,6 +52,10 @@ patternPick.OnServerEvent:Connect(function(player, choice)
 	patternGame:pick(player, choice)
 end)
 
+ticketCycle.OnServerEvent:Connect(function(player, dir)
+	patternGame:cycleTicket(player, dir)
+end)
+
 -- Click the TargetBoard to spin it 90 degrees. Spins wait while clients are shaking the boards for a
 -- tremor. The LiveBoard never spins: it and the arm twin stay fixed, like the real table.
 for _, name in ipairs({ "TargetBoard" }) do -- the LiveBoard and its arm twin never spin
@@ -66,7 +71,11 @@ for _, name in ipairs({ "TargetBoard" }) do -- the LiveBoard and its arm twin ne
 end
 
 -- The arm twin: clients drive their copy of the rig from these samples (StarterPlayerScripts.ArmTwinClient).
+-- While the attract demo runs (Idle) no arm data goes out, so the twin rests in its folded pose.
 TwinDriver.serve(armPose, function()
+	if patternGame.attract.running then
+		return nil
+	end
 	return StateStore.get().arm
 end, 20)
 

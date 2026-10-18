@@ -32,10 +32,12 @@ end
 
 -- n blocks in towers no taller than maxHeight (1 = flat, clamped to Config.maxStackGlobal), on at most
 -- every cell once, with random (possibly repeating) colors, within a tower too. After the first block,
--- each block goes on top of a tower that still has room with probability Config.stackChance (always,
--- once every cell is taken), otherwise on a fresh cell. rng is an optional Random, for repeatable tests.
-function Target.generate(n, maxHeight, rng)
+-- each block goes on top of a tower that still has room with probability stackChance (default
+-- Config.stackChanceStart; always, once every cell is taken), otherwise on a fresh cell. rng is an
+-- optional Random, for repeatable tests.
+function Target.generate(n, maxHeight, rng, stackChance)
 	rng = rng or Random.new()
+	stackChance = stackChance or Config.stackChanceStart
 	maxHeight = math.clamp(maxHeight or 1, 1, Config.maxStackGlobal)
 	local free = Grid.allCells()
 	local colors = palette()
@@ -46,7 +48,7 @@ function Target.generate(n, maxHeight, rng)
 	local open = {} -- target cells whose tower is still shorter than maxHeight
 	for _ = 1, n do
 		local color = colors[rng:NextInteger(1, #colors)]
-		local stack = #open > 0 and (#free == 0 or rng:NextNumber() < Config.stackChance)
+		local stack = #open > 0 and (#free == 0 or rng:NextNumber() < stackChance)
 		if stack then
 			local k = rng:NextInteger(1, #open)
 			local cell = open[k]
