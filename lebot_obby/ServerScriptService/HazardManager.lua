@@ -129,7 +129,9 @@ local BUILDERS = {}
 -- Stalling the wall is a REWARD for killing the blades, never a way to skip that step:
 --   blades live -> the wall cuts straight through a crate without slowing, and a crate cannot
 --                  even be placed within Config.SawWallNoPlaceBand of the blades
---   blades dead -> nothing cuts, so the first crate in the path jams the wall solid
+--   blades dead -> nothing cuts, so the first crate in the path jams the wall, but only for
+--                  Config.SawWallStallSeconds -- a crate buys a reprieve, never a permanent
+--                  shield, and each crate's stall is spent once
 -- A crate is never destroyed, because the real cube is still on the operator's table and the
 -- game has to mirror it. That also makes the Lever B stack a shield once A is thrown, so the
 -- player is never killed standing on the block that saved them.
@@ -199,6 +201,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 	-- closes over it; left further down it resolved to a nil global and the guard allowed
 	-- everything through
 	local running = false
+	-- a stall is spent per crate, so the wall cannot sit on the same one forever
+	local stallSpent, stallCrate, stallStart = {}, nil, 0
 
 	local function placeWall(z)
 		if sunk then
@@ -257,15 +261,15 @@ BUILDERS.Saw = function(i, folder, info, state)
 	-- measured from the blades, so a crate placed early -- while the wall is still far away --
 	-- is fine; it is only dropping one just in front of live blades that is turned away.
 	-- Rejections are parked by BlockSync and re-offered when Lever A changes the answer.
-	local rejectNotice
+	local showNotice
 	BlockSync.setPlacementGuard(folder.Parent, function(cell)
 		if not running or not bladesLive then
 			return true
 		end
 		local cellZ = cellCenter(i, cell.col, cell.row).Z
 		if cellZ > wallZ - Config.SawWallNoPlaceBand then
-			if rejectNotice then
-				rejectNotice("BLADES LIVE - CANNOT DROP THERE")
+			if showNotice then
+				showNotice("BLADES LIVE - CANNOT DROP THERE")
 			end
 			return false, "blades live"
 		end
@@ -446,6 +450,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	local function resetRun()
 		running = false
 		sunk = false
+		stallSpent, stallCrate, stallStart = {}, nil, 0
 		frame.CanCollide = true
 		wallZ = WALL_START
 		setBladesLive(true)
@@ -492,7 +497,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		Color3.fromRGB(255, 140, 90))
 	notice.Text = ""
 	local noticeUntil = 0
-	function rejectNotice(text)
+	function showNotice(text)
 		notice.Text = text
 		noticeUntil = os.clock() + 2.5
 	end
@@ -525,8 +530,19 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 				local blocker = crateInPath(wallZ)
 				local advance = studsPerSecond * dt
-				if blocker and not bladesLive then
-					advance = 0 -- jammed: no spinning blade left to cut with
+				if blocker and not bladesLive and not stallSpent[blocker] then
+					if stallCrate ~= blocker then
+						stallCrate, stallStart = blocker, now
+					end
+					local left = Config.SawWallStallSeconds - (now - stallStart)
+					if left > 0 then
+						advance = 0 -- jammed: no spinning blade left to cut with
+						showNotice(string.format("WALL STALLED - %ds", math.ceil(left)))
+					else
+						-- that crate's reprieve is used up; the wall grinds past it
+						stallSpent[blocker] = true
+						stallCrate = nil
+					end
 				end
 				-- sparks while live blades are cutting through a crate they cannot stop on
 				sparks.Transparency = (blocker and bladesLive) and (0.25 + math.random() * 0.5) or 1
