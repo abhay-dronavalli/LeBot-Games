@@ -17,8 +17,13 @@ Two levers are the way out, both mounted too high to reach from the floor:
 
 | Lever | Where | Needs | Does |
 |---|---|---|---|
-| **A** | left wall, row 1 (deeper in) | stand on **1 crate** | kills the spinning blades, arms Lever B |
-| **B** | right wall, row 0 (by the door) | stand on a **stacked pair** | halts the wall and **sinks it into the floor** |
+| **A** | left wall, row 1 (deeper in) | stand on **1 crate**, hold **E** | kills the spinning blades, arms Lever B |
+| **B** | right wall, row 0 (by the door) | stand on a **stacked pair**, hold **E** | halts the wall and **sinks it into the floor** |
+
+Each lever is a `ProximityPrompt` on the housing: climb to it and hold **E** for
+`Config.SawLeverHoldSeconds`. The prompt is only enabled while that lever is armed. An
+earlier version threw on `Touched`, which fired the moment any body part grazed the
+housing — you could flip a lever by brushing past it.
 
 The sunken wall *is* the exit. There is no separate exit gate — you walk out over
 where the wall was.
@@ -58,22 +63,28 @@ Every cube in the inventory has a job. Nothing left over.
 
 ---
 
-## 3. The brake crate
+## 3. Stalling the wall
 
 A crate **can never be destroyed** — the real cube is still sitting on the operator's
-table and the game has to mirror it. So what happens when the wall meets a crate is
-resolved by whether there's anything to cut with:
+table and the game has to mirror it. So stalling is gated on the blades instead, and it
+is a **reward for killing them, never a way to skip that step**:
 
-- **Blades live** → they chew through. Wall slows to `SawWallGrindFactor` (25%), sparks fly.
-- **Blades dead** (after Lever A) → nothing cuts. Wall **jams solid**.
+- **Blades live** → the wall cuts straight through without slowing, *and* a crate cannot
+  even be placed within `SawWallNoPlaceBand` studs of the blades. The delivery is refused.
+- **Blades dead** (after Lever A) → nothing cuts, so the first crate in the path **jams
+  the wall solid**.
 
-This does two jobs at once. It gives the spare cube a real purpose — buy time when
-you're behind — and it makes the Lever B stack a **shield** once A is thrown, so the
-player is never killed standing on the block that saved them. (That rule comes from
-the original brief: *"obv make it make sense so my cahracter doesnt jst die standing
-on the block."*)
+The band is measured from the blades, so placing a crate *early*, while the wall is still
+far away, is fine. It's only dropping one just in front of live blades that gets turned
+away.
 
-**Measured:** 0.164 studs/s grinding vs 0.163 target; 0.000 studs/s jammed.
+A refusal is **deferred, not discarded** — the operator's cube is still on the table, so
+`BlockSync` parks it and `retryRejected()` delivers it the moment Lever A changes the
+answer.
+
+This also makes the Lever B stack a **shield** once A is thrown, so the player is never
+killed standing on the block that saved them. (From the original brief: *"obv make it
+make sense so my cahracter doesnt jst die standing on the block."*)
 
 ---
 
@@ -137,16 +148,15 @@ sit a couple of studs short of the crate's edge and be unreachable.
 
 ## 7. Timing
 
-`Config.SawWallSeconds = 30` is the whole bay's difficulty in one number.
+`Config.SawWallSeconds = 60` is the whole bay's difficulty in one number.
 
 The arithmetic that matters: one `SkyArm.reachAndPlace` is **~5.5s of animation**, and
 the job queue **serializes** them (no overlap). A level-2 cell is one arm trip, not two.
 So three placements cost **~17s of a 30s run** before the player has climbed anything.
 
-**At 30s the brake crate is effectively compulsory, not a choice.** That's fine for a
-demo where you want the mechanic shown every time. Nearer **45s** it becomes a real
-decision. Retune after the first real teleop run — the number is a placeholder for human
-fumbling time, which hasn't been measured yet.
+30s played too fast once the no-place band went in, because stalling is no longer
+available to buy that time back — hence 60. Retune after the first real teleop run; the
+number is still a placeholder for human fumbling time, which hasn't been measured.
 
 The wall advances off **measured elapsed time**, not tick count. `task.wait(0.05)` sleeps
 longer than 0.05s, which made a nominal 30s traverse take ~34s before this was fixed.
@@ -189,8 +199,12 @@ gets a *different instance* and proves nothing.
 | Player on that crate | survived |
 | Lever B from the pair | wall sank to y=−5, `CanCollide = false` |
 | Console | `Lever A thrown` → `Lever B thrown` → `Saw SOLVED` |
-| Grind rate | 0.164 studs/s vs 0.163 target |
-| Jam rate | 0.000 studs/s |
+| Wall speed at 60s | 0.328 studs/s vs 0.325 target |
+| Crate in front of live blades | **refused**, not delivered |
+| Crate clear of the wall | delivered normally |
+| Lever A via E-hold | threw; blades dead, B's prompt enabled |
+| Parked rejection after A | delivered by `retryRejected` |
+| Jam after A | 0.000 studs/s, held at z=15.1 |
 
 ---
 
@@ -214,11 +228,19 @@ gets a *different instance* and proves nothing.
    overrides it. Use geometric checks (raycast / `GetPartBoundsInBox`) to prove a path
    is walkable.
 
+5. **A closure captured a nil global.** The placement guard reads `running`, which was
+   declared *below* it, so inside the closure it resolved to a nil global — `not running`
+   was always true and the guard allowed every placement. It looked like the guard simply
+   didn't work. Lua locals are only visible to closures created *after* the declaration.
+
+6. **`ProximityPrompt:InputHoldBegin()` is client-side.** Calling it from the server does
+   nothing; `Triggered` only fires when a real client completes the hold.
+
 ---
 
 ## 11. Open
 
-- **30s is unvalidated.** Needs a real teleop run to tune.
+- **60s is unvalidated.** Needs a real teleop run to tune.
 - **Lever heights (8.6 / 11.8) are unplaytested.** The `minStand` gate is what actually
   enforces the cube cost, so the heights are cosmetic within a range — but they should
   still feel right.
@@ -228,3 +250,6 @@ gets a *different instance* and proves nothing.
   wired to the arm.
 - **Two players** — not yet decided whether to fold into `ActiveBayTracker` or stay
   single-runner.
+- **The guard allows everything while the bay is dormant** (`not running`). Harmless
+  today — on arming the blades are live, so a pre-placed crate is cut through rather than
+  stalling anything — but worth revisiting if the arming rules change.
