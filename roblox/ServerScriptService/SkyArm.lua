@@ -1,9 +1,10 @@
--- SkyArm -- a giant SO-101-style arm hanging from the ceiling gantry rails that physically
--- carries crates into place. Idle motion and the reach/grip/carry/release sequence both run
--- through the same forward-kinematics rig, so swapping the fake idle driver for the real robot
--- feed later only changes where target angles come from, not how the rig renders.
--- Not a true 6-DOF solver: the IK is a simplified 2-link-planar-arm-plus-azimuth solve, enough
--- to reach convincingly into any of the 12 cells while keeping real-robot-style joint
+-- SkyArm (Section 2.1, 7, 10.2 step 8 pulled forward) -- a giant SO-101-style arm hanging from
+-- the ceiling gantry rails that physically carries crates into place. Idle motion and the
+-- reach/grip/carry/release sequence both run through the same forward-kinematics rig, so
+-- swapping the fake idle driver for the real robot feed later (Section 9) only changes where
+-- target angles come from, not how the rig renders.
+-- Not a true 6-DOF solver: the IK below is a simplified 2-link-planar-arm-plus-azimuth solve,
+-- enough to reach convincingly into any of the 12 cells while keeping real-robot-style joint
 -- names/conventions (shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -211,8 +212,8 @@ local function solveIKWithGripper(pos, gripperVal)
 	return angles
 end
 
--- Debug helpers -- quick numeric verification instead of guessing from screenshots.
--- Safe to leave in; harmless if never called.
+-- Debug helpers (Section 10.1 spirit -- quick numeric verification instead of guessing from
+-- screenshots). Safe to leave in; harmless if never called.
 function SkyArm.debugGripperPos()
 	return gripperTipWorld
 end

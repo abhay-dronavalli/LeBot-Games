@@ -1,7 +1,7 @@
--- BlockSync -- nothing else in the game hard-codes a world position. cellToWorld reads the
--- Cell_c_r anchor parts baked into each bay prefab, so moving a bay moves everything with it.
--- Also owns the crate props themselves, and diffs `cells` snapshots per bay, handing the
--- actual delivery and removal off to SkyArm which physically carries each crate.
+-- BlockSync (Section 7, 10.2 steps 1, 3 & 8) -- nothing else hard-codes world positions;
+-- cellToWorld reads the Cell_c_r anchor parts baked into each bay prefab. Also diffs `cells`
+-- snapshots per bay and hands the actual crate delivery/removal off to SkyArm, which physically
+-- carries each crate into (or out of) its cell (Section 3.2, 5.2).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local TweenService = game:GetService("TweenService")
@@ -44,7 +44,7 @@ function BlockSync.cellToWorld(bayModel, col, row)
 end
 
 ----------------------------------------------------------------
--- Crate spawning / removal
+-- Crate spawning / removal (Section 3.2, 5.2)
 ----------------------------------------------------------------
 local lastAppliedByBay = setmetatable({}, {__mode = "k"})
 local liveCratesByBay = setmetatable({}, {__mode = "k"})
@@ -158,7 +158,7 @@ local function positionCrate(crateModel, worldCFrame, level)
 end
 
 ----------------------------------------------------------------
--- Public: diff + apply a new `cells` snapshot for a given bay
+-- Public: diff + apply a new `cells` snapshot for a given bay (Section 5.2)
 ----------------------------------------------------------------
 function BlockSync.applyCells(bayModel, newCellsList)
 	local last = lastAppliedByBay[bayModel] or {}
@@ -173,7 +173,7 @@ function BlockSync.applyCells(bayModel, newCellsList)
 		newByKey[keyFor(c)] = c
 	end
 
-	-- Removed cells: wait out the grace delay, then have the arm lift the crate out
+	-- Removed cells: wait 0.4s, then have the arm lift the crate out (Section 5.2.3)
 	for key, oldCell in pairs(last) do
 		if not newByKey[key] then
 			local crateModel = live[key]
@@ -187,7 +187,7 @@ function BlockSync.applyCells(bayModel, newCellsList)
 		end
 	end
 
-	-- Added / changed cells: confirm, then have the arm deliver (or swap) the crate
+	-- Added / changed cells: wait 0.2s, then have the arm deliver (or swap) the crate (Section 5.2.2, 5.2.4)
 	for key, newCell in pairs(newByKey) do
 		local oldCell = last[key]
 		local isNew = not oldCell
