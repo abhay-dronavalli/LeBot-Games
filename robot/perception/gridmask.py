@@ -65,6 +65,15 @@ CUBE_MM = CUBE_SIZE_MM or 48.0
 # its centre on the cube's centre regardless of which way the camera leans.
 SAMPLE_HEIGHT_MM = CUBE_MM / 2
 
+# A cell is scored over the middle of its square, not the whole of it. A 48 mm cube in a 57 mm
+# cell leaves almost no gap, and what the camera sees of it is wider than the cube itself - the
+# silhouette of the B1 cube measured 65x83 mm - so a cube spills over its own borders into its
+# neighbours. Measured with six cubes on the sheet (2026-10-18), scoring whole cells left EMPTY
+# A2 at 0.46 against a 0.50 threshold: one sloppy placement from a phantom block. Scoring the
+# middle 75% pushes every real cube to 0.97+ and costs nothing, because a cube is only in a cell
+# at all if it covers the middle of it.
+CELL_SAMPLE = 0.75
+
 # Lab chroma distance from the paper's measured colour before a pixel counts as "not paper".
 # Measured 2026-10-18: inside the sheet the paper's own pixels sit under 13 even at the 90th
 # percentile while cube pixels sit near 37, and every threshold from 12 to 30 gave the same
@@ -72,10 +81,16 @@ SAMPLE_HEIGHT_MM = CUBE_MM / 2
 # dimmer room nor a more saturated one walks off the edge of it.
 CHROMA_T = 20.0
 
-# How much of a cell must be covered before a cube is called present. In the same frame the
-# occupied cell scored 0.97 and its most-shadowed neighbour 0.24, so this sits in the middle
-# of a wide empty gap rather than near either population.
-COVERAGE_T = 0.5
+# How much of that middle must be covered before a cube is called present. With six cubes out,
+# every occupied cell scored 0.97 or better and the worst empty one 0.29, so this sits in a
+# wide gap. It is deliberately nearer the empty side: a cube has to be placed about 14 mm off
+# centre - half way out of its cell - before it drops this low, while a phantom needs an empty
+# cell to gain 0.31.
+COVERAGE_T = 0.6
+
+# Padding on the silhouette subtracted once a cube is claimed, mm. Covers the few mm the mask
+# bleeds past the cube's true outline through shadow and JPEG ringing.
+CLAIM_PAD_MM = 4.0
 
 # Speckle removal. Printed grid lines and label text are thin and dark, and survive the chroma
 # test only where JPEG ringing tints them; an open of this radius clears them while taking a
@@ -139,38 +154,122 @@ def cube_mask(frame_bgr, pose):
     return mask, (pa, pb)
 
 
+def cube_silhouette(pose, centre_mm, pad_mm=CLAIM_PAD_MM, top_mm=None):
+    """Everything a cube standing in this cell could darken: its base square and its top
+    square, projected and hulled together.
+
+    Deliberately a single cube's height and not a stack's. Erasing a two-cube column was tried
+    and is worse: the taller hull reaches across into the next cell and eats the evidence for a
+    cube that is really there (B2 fell from 1.00 to 0.84 in the six-cube frame).
+    """
+    top = CUBE_MM if top_mm is None else top_mm
+    x, y = centre_mm
+    h = CUBE_MM / 2 + pad_mm
+    sq = np.float64([(x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h)])
+    both = np.vstack([pose.to_image(sq, height_mm=0.0),
+                      pose.to_image(sq, height_mm=top + pad_mm)])
+    return cv2.convexHull(both.astype(np.int32))
+
+
+def _coverage(mask, frame_bgr, pose, centre, cell_mm):
+    """(coverage, median bgr) for one cell's middle. (0.0, None) if it is out of frame."""
+    poly = cell_polygon(pose, centre, cell_mm * CELL_SAMPLE)
+    h_img, w_img = mask.shape
+    # Work inside the cell's bounding box. A full-frame buffer per cell is twelve 2-megapixel
+    # allocations per read for twelve little squares, and it showed: half a second of the
+    # budget went here, next to a model call that is the whole point of the read.
+    x, y, w, h = cv2.boundingRect(poly)
+    x0, y0 = max(x, 0), max(y, 0)
+    x1, y1 = min(x + w, w_img), min(y + h, h_img)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0, None
+    area = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    cv2.fillPoly(area, [poly - [x0, y0]], 1)
+    total = int(area.sum())
+    if total <= 0:
+        return 0.0, None
+    hit = area.astype(bool) & (mask[y0:y1, x0:x1] > 0)
+    px = frame_bgr[y0:y1, x0:x1][hit]
+    bgr = tuple(np.median(px, axis=0)) if len(px) >= MIN_COLOR_PX else None
+    return float(hit.sum()) / total, bgr
+
+
 def occupied_cells(frame_bgr, pose, cell_centres, cell_mm, mask=None):
     """Which of `cell_centres` hold a cube. `cell_centres` maps "B1" -> (x_mm, y_mm).
 
-    Returns a list of `Found`, in the order the cells were given.
+    Cells are claimed one at a time, strongest first, and each claimed cube's silhouette is
+    erased from the mask before the rest are scored again. Scoring every cell once against the
+    same mask does not work: a cube is seen partly from the side, so it darkens a slice of its
+    downhill neighbour too, and with six cubes out that left an empty cell at 0.46 - close
+    enough to the threshold to invent a block. Subtracting a cube once it is accounted for
+    drops the worst empty cell to 0.29 and lifts every real one to 0.97 or better.
+
+    Returns a list of `Found`, ordered by cell name.
     """
     if mask is None:
         mask, _ = cube_mask(frame_bgr, pose)
+    work = mask.copy()
     out = []
-    h_img, w_img = mask.shape
-    for cell, centre in cell_centres.items():
-        poly = cell_polygon(pose, centre, cell_mm)
-        # Work inside the cell's bounding box. A full-frame buffer per cell is twelve 2-megapixel
-        # allocations per read for twelve little squares, and it showed: half a second of the
-        # budget went here, next to a model call that is the whole point of the read.
-        x, y, w, h = cv2.boundingRect(poly)
-        x0, y0 = max(x, 0), max(y, 0)
-        x1, y1 = min(x + w, w_img), min(y + h, h_img)
-        if x1 <= x0 or y1 <= y0:                # the cell is off the edge of the image
-            continue
-        area = np.zeros((y1 - y0, x1 - x0), np.uint8)
-        cv2.fillPoly(area, [poly - [x0, y0]], 1)
-        total = int(area.sum())
-        if total <= 0:
-            continue
-        hit = area.astype(bool) & (mask[y0:y1, x0:x1] > 0)
-        coverage = float(hit.sum()) / total
+    left = dict(cell_centres)
+    # Scores are kept between rounds and only recomputed where the mask actually changed.
+    # Rescoring all twelve every round is twelve times the work for a handful of cells that
+    # could have moved, and it showed: 0.70 s against 0.26 s for the same six cubes.
+    score = {c: _coverage(work, frame_bgr, pose, centre, cell_mm)
+             for c, centre in left.items()}
+    while left:
+        cell = max(left, key=lambda c: score[c][0])
+        coverage, bgr = score[cell]
         if coverage < COVERAGE_T:
-            continue
-        px = frame_bgr[y0:y1, x0:x1][hit]
-        bgr = tuple(np.median(px, axis=0)) if len(px) >= MIN_COLOR_PX else None
+            break
         out.append(Found(cell, round(coverage, 3), bgr))
-    return out
+        hull = cube_silhouette(pose, left.pop(cell))
+        cv2.fillPoly(work, [hull], 0)
+        hx, hy, hw, hh = cv2.boundingRect(hull)
+        for c, centre in left.items():
+            cx, cy, cw, ch = cv2.boundingRect(cell_polygon(pose, centre, cell_mm * CELL_SAMPLE))
+            if cx < hx + hw and hx < cx + cw and cy < hy + hh and hy < cy + ch:
+                score[c] = _coverage(work, frame_bgr, pose, centre, cell_mm)
+    return sorted(out, key=lambda f: f.cell)
+
+
+def overlay(frame_bgr, pose, cell_centres, cell_mm, margin_mm=14.0):
+    """Crop to the sheet and redraw the grid, deciding nothing about what is on it.
+
+    Everything here comes from the four tags, so it is the same picture the camera took with
+    the board made easier to read. Nothing in it is an opinion about where a cube is.
+
+    Two things it fixes for a model that has to answer the position question itself:
+
+      * **The crop.** The sheet is about a quarter of a 1920-wide frame and the rest is table,
+        mat and cable. Downscaling the whole frame to the model's width spends most of the
+        pixels on things the question is not about and shrinks the printed labels toward
+        illegible; cropping first gives the board the whole budget.
+      * **The labels.** A cube sits on top of the label that names its own cell, so in the raw
+        photo the evidence for the answer is underneath the thing being asked about. These are
+        drawn at each cell's corner instead of its centre, where a cube does not reach, so
+        every cell stays named however the board is filled.
+
+    The grid is drawn on the table plane, so it lands exactly on the printed grid rather than
+    floating above it.
+    """
+    vis = frame_bgr.copy()
+    for cell, centre in cell_centres.items():
+        poly = cell_polygon(pose, centre, cell_mm, height_mm=0.0)
+        cv2.polylines(vis, [poly], True, (60, 200, 60), 2, cv2.LINE_AA)
+        x, y = poly[0]                              # the cell's top-left corner on the paper
+        for colour, weight in (((255, 255, 255), 5), ((20, 140, 20), 2)):
+            cv2.putText(vis, cell, (int(x) + 6, int(y) + 26), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, colour, weight, cv2.LINE_AA)
+    return _crop_to_sheet(vis, pose, margin_mm)
+
+
+def _crop_to_sheet(vis, pose, margin_mm):
+    x, y, w, h = cv2.boundingRect(sheet_polygon(pose, margin_mm))
+    x, y = max(x, 0), max(y, 0)
+    w, h = min(w, vis.shape[1] - x), min(h, vis.shape[0] - y)
+    if w < 50 or h < 50:                            # degenerate pose: better the whole frame
+        return vis
+    return vis[y:y + h, x:x + w]
 
 
 def annotate(frame_bgr, pose, cell_centres, cell_mm, found, margin_mm=14.0):
@@ -199,10 +298,4 @@ def annotate(frame_bgr, pose, cell_centres, cell_mm, found, margin_mm=14.0):
             cv2.putText(vis, f.cell, (int(x) - 4, int(y) - 8), cv2.FONT_HERSHEY_SIMPLEX,
                         0.9, colour, weight, cv2.LINE_AA)
 
-    poly = sheet_polygon(pose, margin_mm)
-    x, y, w, h = cv2.boundingRect(poly)
-    x, y = max(x, 0), max(y, 0)
-    w, h = min(w, vis.shape[1] - x), min(h, vis.shape[0] - y)
-    if w < 50 or h < 50:                        # degenerate pose: better the whole frame
-        return vis
-    return vis[y:y + h, x:x + w]
+    return _crop_to_sheet(vis, pose, margin_mm)
