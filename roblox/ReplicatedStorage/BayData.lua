@@ -55,4 +55,12 @@ return {
 		solveCells = {{0, 1}, {3, 1}},
 		note = "Blocks seal the two wall spawners so the mobs stop coming; the lane stays open.",
 	},
+	[7] = {
+		obstacle = "ArrowTurrets",
+		color = "yellow",
+		level = 1,
+		solveCells = {{1, 1}, {2, 1}},
+		note = "Wall dispensers fire volleys across the bay. The blocks are hard cover -- arrows die"
+			.. " against them -- and placing both shuts the turrets down.",
+	},
 }
