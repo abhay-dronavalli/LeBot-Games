@@ -142,3 +142,39 @@ CellEdit.OnServerEvent:Connect(function(player, col, row, action)
 end)
 
 ----------------------------------------------------------------
+-- Hotkeys (Section 10.1) -- most are stubs until their owning systems (GameState,
+-- ActiveBayTracker, Events, SkyArm) exist; they print so the mapping can be verified now.
+----------------------------------------------------------------
+local craneActive = false
+
+DebugHotkey.OnServerEvent:Connect(function(player, key)
+	if key == "R" then
+		cellState = {}
+		applyAndBroadcast()
+		print("[DebugMode] R: reset run (cells cleared; GameState reset not wired yet)")
+	elseif key == "H" then
+		craneActive = not craneActive
+		print("[DebugMode] H: held Purple crane ->", craneActive)
+	elseif key == "T" then
+		print("[DebugMode] T: +10s (GameState clock not wired yet)")
+	elseif key == "K" then
+		print("[DebugMode] K: kill active malfunction (Events not wired yet)")
+	elseif key == "M" then
+		print("[DebugMode] M: trigger malfunction (Events not wired yet)")
+	elseif key == "N" then
+		print("[DebugMode] N: next bay (ActiveBayTracker not wired yet)")
+	elseif tonumber(key) then
+		local bayIndex = tonumber(key)
+		local bayModel = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", bayIndex))
+		local character = player.Character
+		local hrp = character and character:FindFirstChild("HumanoidRootPart")
+		if bayModel and hrp then
+			local zStart = (bayIndex - 1) * Config.BayPitch
+			hrp.CFrame = CFrame.new(Config.BayWidth / 2, 4, zStart + 2)
+			SkyArm.setActiveBay(bayModel)
+			print("[DebugMode] " .. key .. ": teleported to Bay " .. bayIndex .. " (quick-travel, not the real ActiveBayTracker)")
+		end
+	end
+end)
+
+----------------------------------------------------------------
