@@ -10,7 +10,9 @@
 -- to the head, never offsets applied to the rig. The dragon's position is DragonArm's business and
 -- comes only from arm.points.
 --
---   local fx = AttackFx.new(workspace, arena, dragon)
+--   local fx = AttackFx.new(arena.fx, arena, dragon, tasks, isTarget)
+--   (isTarget(player): only players alive in this round can be hit, pushed or shaken - never the
+--   lobby, the gallery or a player who already went back)
 --   fx.onHit = function(player, kind) ... end
 --   detect.onSlam = function(tip, speed) fx:slam(tip, speed) end
 
@@ -21,7 +23,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
-local Mapping = require(script.Parent.Parent.Mapping)
+local Mapping = require(script.Parent.Mapping)
 
 local AttackFx = {}
 AttackFx.__index = AttackFx
@@ -32,9 +34,11 @@ local SLAM_FLASH_S = 0.08
 local SLAM_RING_S = 0.45
 local SWEEP_TRAIL_S = 0.3
 
-function AttackFx.new(parent: Instance, arena: any, dragon: any)
+function AttackFx.new(parent: Instance, arena: any, dragon: any, tasks: any, isTarget: ((Player) -> boolean)?)
 	local self = setmetatable({}, AttackFx)
 	self.parent = parent
+	self.tasks = tasks
+	self.isTarget = isTarget
 	self.arena = arena
 	self.dragon = dragon
 	self.rng = Random.new()
@@ -54,7 +58,7 @@ function AttackFx.targets(self): { { player: Player, root: BasePart } }
 		local char = player.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if root and hum and hum.Health > 0 then
+		if root and hum and hum.Health > 0 and (self.isTarget == nil or self.isTarget(player)) then
 			table.insert(out, { player = player, root = root :: BasePart })
 		end
 	end
@@ -74,6 +78,9 @@ function AttackFx.canHit(self, player: Player): boolean
 end
 
 function AttackFx.hit(self, player: Player, kind: string, knockback: Vector3?)
+	if self.isTarget and not self.isTarget(player) then
+		return
+	end
 	if not self:canHit(player) then
 		return
 	end
@@ -155,7 +162,7 @@ function AttackFx.slamRing(self, ground: Vector3)
 		chunks[k] = chunk
 	end
 
-	task.spawn(function()
+	self.tasks:spawn(function()
 		local t0 = os.clock()
 		local hitAlready = {} :: { [Player]: boolean }
 		local startR, endR = 7, ArenaConfig.SLAM_RADIUS

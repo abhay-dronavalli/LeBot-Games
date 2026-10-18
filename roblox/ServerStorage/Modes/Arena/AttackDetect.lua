@@ -18,7 +18,7 @@
 --
 --   local detect = AttackDetect.new()
 --   detect.onSlam = function(tipMm, speed) ... end
---   Bridge.onState(function(s) detect:update(s) end)
+--   every new state frame: detect:update(s)   (Module, from Link.state())
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

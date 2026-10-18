@@ -16,8 +16,12 @@
 -- caps, so this module's request is a request. The HUD shows `state.effects[].remaining`, which is
 -- the truth, and never the duration asked for here.
 --
---   local pickups = Pickups.new(workspace, arena, bridge)
---   Bridge.onHello(function(h) pickups:setEffects(h.effects) end)
+--   local pickups = Pickups.new(map, arena, Link, tasks, canUse)
+--   pickups:setEffects(hello and hello.effects)   -- ArenaConfig.DEFAULT_EFFECTS with no hello
+--
+-- `bridge` is anything with sendEvent(name, intensity, duration) -> boolean: in the arcade that is
+-- the mode's Link, which sends through ServerStorage.Shared.Bridge. canUse(player) says who may
+-- pick up and fire: the players alive in this round, never the lobby or the gallery.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,9 +36,12 @@ Pickups.__index = Pickups
 
 local C = Theme.Color
 
-function Pickups.new(parent: Instance, arena: any, bridge: any)
+function Pickups.new(parent: Instance, arena: any, bridge: any, tasks: any, canUse: ((Player) -> boolean)?)
 	local self = setmetatable({}, Pickups)
 	self.parent = parent
+	self.canUse = canUse or function()
+		return true
+	end
 	self.arena = arena
 	self.bridge = bridge
 	self.rng = Random.new()
@@ -55,17 +62,22 @@ function Pickups.new(parent: Instance, arena: any, bridge: any)
 	-- Fires when a player lands a debuff, for the toast and the sound.
 	self.onLanded = nil :: ((player: Player, name: string) -> ())?
 
-	Remotes.SlotFire.OnServerEvent:Connect(function(player, index)
-		self:fireSlot(player, index)
+	tasks:connect(Remotes.SlotFire.OnServerEvent, function(player, index)
+		if self.canUse(player) then
+			self:fireSlot(player, index)
+		end
 	end)
-	Players.PlayerRemoving:Connect(function(player)
+	tasks:connect(Players.PlayerRemoving, function(player)
 		self.slots[player] = nil
 	end)
 	return self
 end
 
 function Pickups.setEffects(self, effects: { string }?)
-	self.effects = effects or {}
+	if effects == nil or #effects == 0 then
+		effects = ArenaConfig.DEFAULT_EFFECTS
+	end
+	self.effects = table.clone(effects :: { string })
 	print(("[Pickups] %d effects from hello: %s")
 		:format(#self.effects, table.concat(self.effects, ", ")))
 end
@@ -183,7 +195,7 @@ function Pickups.spawnOne(self)
 			return
 		end
 		local player = Players:GetPlayerFromCharacter(hit.Parent)
-		if player then
+		if player and self.canUse(player) then
 			self:grant(player, entry)
 		end
 	end)
@@ -265,6 +277,11 @@ end
 
 function Pickups.stop(self)
 	self.running = false
+end
+
+-- A player who went back to the lobby keeps nothing.
+function Pickups.forget(self, player: Player)
+	self.slots[player] = nil
 end
 
 function Pickups.clear(self)

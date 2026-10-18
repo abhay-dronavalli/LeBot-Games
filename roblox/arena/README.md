@@ -9,10 +9,41 @@ the dragon wins.
 The look is set by [`../../concepts/dragon-arena-style-guide.md`](../../concepts/dragon-arena-style-guide.md).
 The wire format is [`../../PROTOCOL.md`](../../PROTOCOL.md). This file covers how to run it.
 
-This mode shares `Bridge.lua` and `Mapping.lua` with the obby build in `../`. It does not touch
-`Main.server.lua`, `SkyArm.lua` or `BlockSync.lua` — paste either that mode or this one, not both.
+## In the arcade (current)
 
-## Setup
+Dragon Arena is now an arcade mode (`docs/arcade-plan.md`, "Mode contract"). The standalone place,
+`ArenaMain`, the `V` key and the Rojo project are gone; the sections from **Setup** down describe that
+standalone build and are kept for the design notes (thresholds, hit volumes, icons), which still hold.
+
+| Studio | Repo |
+|---|---|
+| `ServerStorage.Modes.Arena.Module` + server modules | `roblox/ServerStorage/Modes/Arena/` |
+| `ReplicatedStorage.Arena` (config, theme, icons, remotes, `Client`, `Views`) | `roblox/ReplicatedStorage/Arena/` |
+| `ReplicatedStorage.Core.Games.Arena` (GameRegistry entry) | `roblox/ReplicatedStorage/Core/Games/Arena.lua` |
+
+**Install:** run `roblox/tools/install_arena_mode.lua` in Studio (command bar or `execute_luau`). It is
+generated from the files above by `python roblox/tools/build_install_arena.py`; re-run that after any
+change.
+
+- `Start(players)` builds everything under `workspace.DragonArena` (Persistent) around `ArenaConfig.CENTER`
+  (0, 0, 400), puts the players on spawn spots at the front of the floor and runs one round: 4 s intro,
+  3 s countdown, 120 s round, 5 s result, then `Finished` (one `{player, won}` per player; won = alive at
+  the end). `MaxDuration` is 152 s.
+- The robot operator (Core role `robot`) is the dragon: no character, and `Views.RobotView` is the old
+  aerial view with the aiming aids. Players see `Views.PlayerView`, only while they are in the round.
+- Robot data comes from `ServerStorage.Shared.StateStore` (`raw()` / `hello()`, falling back to
+  `Core.StateStore` in a place whose shared wrapper predates them); power-ups go out through
+  `ServerStorage.Shared.Bridge`. No socket of its own. With no robot hello the floor is the Letter sheet
+  and the pickups use `ArenaConfig.DEFAULT_EFFECTS` (firing one hands the slot back).
+- Lighting is never touched. Bloom and a night colour grade are made per client under the camera
+  (`Client/Look.lua`); atmosphere, sky, clock time and ambient cannot be, so the arena uses the arcade's.
+- Lobby pad: the part tagged `LobbyTeleporter` (attribute `Enabled`: on before and after the round, off
+  during it). The arcade calls `Mode.PlayerLeft(player)` for whoever uses it.
+- New in the conversion: the lava is fatal during the round (before, it was a safe floor around the
+  arena), and eliminated players respawn on a walled gallery past the far lava.
+- Testing: `ReplicatedStorage.Arena.Debug:Fire({ op = "endRound" })` or `{ op = "eliminate", name = ... }`.
+
+## Setup (standalone, historical)
 
 There are three ways in. All three produce the same tree; the difference is what happens when two
 people change things at once.

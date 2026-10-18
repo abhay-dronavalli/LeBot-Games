@@ -110,12 +110,33 @@ ArenaConfig.CLIFF_HEIGHT = 90         -- studs, the back wall the pedestal is se
 ArenaConfig.ARENA_SCALE = 0.68
 ArenaConfig.ARENA_WIDTH_SCALE = 0.78  -- the same, across the sheet rather than away from the arm
 
--- Round flow. The designer's numbers.
-ArenaConfig.ROUND_SECONDS = 120
-ArenaConfig.INTERMISSION_SECONDS = 12
+-- Where the arena sits in the arcade place: the floor's centre, its top surface at this Y. Clear of
+-- the lobby at the origin, Rising Flood at (400, 0, 0) and Pattern Match at (0, 0, -400). The whole
+-- build (lava ring, cliff, spires, gallery) spans roughly 180 studs either side of it in X and Z.
+ArenaConfig.CENTER = Vector3.new(0, 0, 400)
+
+-- Round flow. The designer's numbers. One round per arcade game: intro, countdown, the round, then
+-- the result banner, and Finished goes to the arcade.
+ArenaConfig.INTRO_SECONDS = 4         -- players on their spots, the lobby pad on, before the countdown
 ArenaConfig.COUNTDOWN_SECONDS = 3
-ArenaConfig.MIN_PLAYERS = 1
+ArenaConfig.ROUND_SECONDS = 120
+ArenaConfig.RESULT_SECONDS = 5        -- SURVIVORS WIN / THE DRAGON WINS on screen before Finished
+ArenaConfig.MAX_DURATION_MARGIN = 20  -- Module.MaxDuration = all of the above plus this
 ArenaConfig.MAX_PLAYERS = 12
+
+-- Spawning. Characters are 1.5x in the arcade (ServerScriptService.CharacterScale), about 7.5 studs
+-- tall and 3 wide, so spots are a body and a half apart.
+ArenaConfig.SPAWN_SPACING = 9         -- studs between spawn spots (and gallery spots)
+ArenaConfig.SPAWN_FRAC = 0.84         -- how far down the floor the front spawn row is, 0 = the dragon's end
+ArenaConfig.PAD_FRAC = 0.93           -- the lobby pad, same measure: the front edge of the floor
+ArenaConfig.PAD_SIZE = 9              -- studs across
+ArenaConfig.GALLERY_HEIGHT = 30       -- studs above the floor: the eliminated watch from here
+ArenaConfig.GALLERY_SIZE = Vector2.new(64, 16) -- studs, across x deep
+
+-- With no robot hello (the core's fake generator, or no robot yet) there is no effects list to
+-- build pickups from. These are the effects bridge/effects.py has; firing one with no robot hands
+-- the slot back (Pickups.fireSlot), so the crystals still show and nothing is lost.
+ArenaConfig.DEFAULT_EFFECTS = { "butterfingers", "earthquake", "fog", "freeze", "mirror", "molasses" }
 
 -- Damage. A hit kills outright: the dragon is 8-10x a player's height and the fantasy is dodging,
 -- not trading blows. Changing this to a health model is a design decision, not a visual one.
@@ -163,6 +184,9 @@ ArenaConfig.AIM_SHOW = true           -- false strips the aids back to a bare ov
 -- Lighting levels, separate from the colours in Theme. The style guide asks for a dark arena lit
 -- almost entirely by lava, and these are the knobs for deciding how far to take that. Dark enough
 -- that the fire reads, bright enough to see the dragon's armour and where you are standing.
+-- In the arcade nothing may set Lighting (the arcade owns it): the views build what they can of
+-- this look on the client, as effects under the camera (ReplicatedStorage.Arena.Client), and the
+-- rest (Brightness, exposure, ambient, atmosphere, sky) cannot be reproduced there.
 ArenaConfig.LIGHTING = {
 	Brightness = 2.6,
 	ExposureCompensation = 0.35,

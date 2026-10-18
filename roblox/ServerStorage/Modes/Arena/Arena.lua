@@ -1,5 +1,12 @@
 --!strict
--- The volcanic arena: floor, lava, cliffs, cover, background, lighting and impact marks.
+-- The volcanic arena: floor, lava, cliffs, cover, background, impact marks, and the arcade's pieces
+-- (the lobby pad, the spawn spots and the gallery the eliminated watch from).
+--
+-- IN THE ARCADE. Everything is built under the map Model the mode passes in (workspace.DragonArena),
+-- around ArenaConfig.CENTER: build() moves Mapping.ORIGIN so the floor's centre lands there, with
+-- its top surface at CENTER.Y. Nothing here touches Lighting any more - the arcade owns it. The look
+-- the old applyLighting gave the scene (night, bloom, a warm grade) is made on each client by the
+-- views instead (ReplicatedStorage.Arena.Client), while they are near the arena.
 --
 -- THE FLOOR IS THE PRINTED SHEET. The style guide (section 5) asks for the floor to be the outline
 -- the real tip can reach, logged by driving the arm around with the jaw near the table. Nobody has
@@ -19,16 +26,16 @@
 -- the dragon's head hits the in-game floor while the real jaw is still safely in the air. The
 -- operator must never have to bang the arm into the table to land a slam.
 --
---   local arena = Arena.new(workspace)
---   Bridge.onHello(function(h) arena:build(h.space) end)
+--   local arena = Arena.new(map, tasks)
+--   arena:build(hello and hello.space)   -- defaults to the Letter sheet with no hello
 
-local Lighting = game:GetService("Lighting")
+local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
-local Mapping = require(script.Parent.Parent.Mapping)
+local Mapping = require(script.Parent.Mapping)
 
 local Arena = {}
 Arena.__index = Arena
@@ -53,11 +60,19 @@ local function part(parent: Instance, name: string, color: Color3, material: Enu
 	return p
 end
 
-function Arena.new(parent: Instance)
+-- parent: the map Model. tasks: the session's Tasks (threads for the crater cooling).
+function Arena.new(parent: Instance, tasks: any)
 	local self = setmetatable({}, Arena)
+	self.tasks = tasks
+	self.map = parent
 	self.model = Instance.new("Model")
 	self.model.Name = "Arena"
 	self.model.Parent = parent
+	-- Runtime effects (attacks, bursts, sounds) go here rather than loose in Workspace.
+	self.fx = Instance.new("Folder")
+	self.fx.Name = "Fx"
+	self.fx.Parent = parent
+	self.pad = nil :: BasePart?
 	self.marks = {} :: { BasePart }      -- newest last; the oldest is removed past the budget
 	self.lights = 0
 	self.floorTopY = 0
@@ -117,6 +132,13 @@ function Arena.build(self, space: any)
 	self.built = true
 	local b = self:floorFromSheet(space)
 	self.bounds = b
+	-- Centre the floor on ArenaConfig.CENTER, its top surface at CENTER.Y. Everything below works
+	-- through Mapping, so moving the origin moves the whole arena, the dragon and the hit tests.
+	do
+		local sc = Mapping.STUDS_PER_MM
+		Mapping.ORIGIN = ArenaConfig.CENTER - Vector3.new((b.x0 + b.x1) / 2 * sc,
+			ArenaConfig.ARENA_FLOOR_MM * sc, (b.y0 + b.y1) / 2 * sc)
+	end
 	-- Platform heights are in units of the player's jump, which is in turn scaled to the real cube
 	-- size from `hello`. Hardcoding either one puts a ledge out of reach the moment the scale or
 	-- the block size changes.
@@ -155,7 +177,9 @@ function Arena.build(self, space: any)
 	self:buildCliffs(b, s, floorY)
 	self:buildCover(b, s, floorY)
 	self:buildBackground(b, s, floorY)
-	self:applyLighting()
+	self:buildEmbers()
+	self:buildPad(b, s, floorY)
+	self:buildGallery(b, s, floorY)
 end
 
 -- Lava surrounds the reachable floor: everything the dragon cannot hit must be fatal, or players
@@ -274,57 +298,6 @@ function Arena.buildBackground(self, b: any, s: number, floorY: number)
 	end
 end
 
-function Arena.applyLighting(self)
-	-- Technology is set in the Studio Properties panel, not from a script: Future needs a restart
-	-- of the lighting pass to take effect properly and scripting it mid-session gives a different
-	-- result than shipping it. See the arena README.
-	local L = ArenaConfig.LIGHTING
-	Lighting.ClockTime = 0
-	Lighting.Brightness = L.Brightness
-	Lighting.ExposureCompensation = L.ExposureCompensation
-	Lighting.Ambient = Theme.Lighting.Ambient
-	Lighting.OutdoorAmbient = Theme.Lighting.OutdoorAmbient
-	Lighting.EnvironmentDiffuseScale = L.EnvironmentDiffuseScale
-	Lighting.EnvironmentSpecularScale = L.EnvironmentSpecularScale
-	Lighting.GlobalShadows = true
-
-	local function ensure(class: string, name: string): Instance
-		local inst = Lighting:FindFirstChild(name)
-		if not inst then
-			inst = Instance.new(class)
-			inst.Name = name
-			inst.Parent = Lighting
-		end
-		return inst
-	end
-
-	local atm = ensure("Atmosphere", "ArenaAtmosphere") :: Atmosphere
-	atm.Density = L.AtmosphereDensity
-	atm.Offset = 0.1
-	atm.Color = Theme.Lighting.AtmosphereTint
-	atm.Decay = Theme.Lighting.AtmosphereDecay
-	atm.Glare = L.AtmosphereGlare
-	atm.Haze = L.AtmosphereHaze
-
-	-- Neon has to actually glow, or the whole brightness order collapses: the hazards stop out-
-	-- ranking the dragon and the scene reads flat.
-	local bloom = ensure("BloomEffect", "ArenaBloom") :: BloomEffect
-	bloom.Intensity = L.BloomIntensity
-	bloom.Size = 28
-	bloom.Threshold = L.BloomThreshold
-
-	local cc = ensure("ColorCorrectionEffect", "ArenaGrade") :: ColorCorrectionEffect
-	cc.Contrast = L.Contrast
-	cc.Saturation = L.Saturation
-	cc.TintColor = Theme.Lighting.GradeTint
-
-	local sky = ensure("Sky", "ArenaSky") :: Sky
-	sky.CelestialBodiesShown = false
-	sky.StarCount = 0
-
-	self:buildEmbers()
-end
-
 -- Ambient embers drifting up over the arena. One emitter, low rate: this is atmosphere, and it has
 -- to leave room in the ~400-particle budget for the fire and the slams.
 function Arena.buildEmbers(self)
@@ -398,7 +371,7 @@ function Arena.addCrater(self, at: Vector3, radius: number)
 
 	-- The rim cools from Ember to Scorch. This is the mark changing after the fact, not the dragon
 	-- being animated, so hard rule 2 is untouched.
-	task.spawn(function()
+	self.tasks:spawn(function()
 		local t0 = os.clock()
 		local cool = ArenaConfig.IMPACT_MARK_COOL_S
 		while rim.Parent and os.clock() - t0 < cool do
@@ -452,6 +425,153 @@ function Arena.randomFloorPoint(self, rng: Random): Vector3
 	-- it. Players must never find a spot the dragon cannot hit.
 	local yMm = b.y0 + (b.y1 - b.y0) * rng:NextNumber(0.3, 0.94)
 	return Mapping.ORIGIN + Vector3.new(xMm * s, self.floorTopY + 3, yMm * s)
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- The arcade's pieces
+-- ---------------------------------------------------------------------------------------------
+
+-- The lobby pad: the arcade's way back (a part tagged "LobbyTeleporter" with an "Enabled"
+-- attribute; the arcade moves whoever steps on it while Enabled and calls Mode.PlayerLeft). It sits
+-- at the front of the floor, the far end from the dragon, among the spawn spots.
+function Arena.buildPad(self, b: any, s: number, floorY: number)
+	local at = Mapping.ORIGIN + Vector3.new((b.x0 + b.x1) / 2 * s, floorY + 0.15,
+		(b.y0 + (b.y1 - b.y0) * ArenaConfig.PAD_FRAC) * s)
+	local pad = part(self.map, "LobbyTeleporter", C.Power, Enum.Material.Neon,
+		Vector3.new(0.3, ArenaConfig.PAD_SIZE, ArenaConfig.PAD_SIZE),
+		CFrame.new(at) * CFrame.Angles(0, 0, math.pi / 2), false)
+	pad.Shape = Enum.PartType.Cylinder
+	pad.CanTouch = true
+	pad.CanQuery = true
+	pad.Transparency = 0.35
+	pad:SetAttribute("Enabled", false)
+	CollectionService:AddTag(pad, "LobbyTeleporter")
+
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "Label"
+	gui.Size = UDim2.fromOffset(180, 36)
+	gui.StudsOffsetWorldSpace = Vector3.new(0, 6, 0)
+	gui.MaxDistance = 140
+	gui.Parent = pad
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.FontFace = Theme.Font.Display
+	label.TextScaled = true
+	label.TextColor3 = C.UiText
+	label.TextStrokeTransparency = 0.3
+	label.Text = "BACK TO LOBBY"
+	label.Parent = gui
+	self.pad = pad
+	self.padLabel = label
+end
+
+-- On before and after the round, off during it.
+function Arena.setPad(self, on: boolean)
+	local pad = self.pad
+	if not pad then
+		return
+	end
+	pad:SetAttribute("Enabled", on)
+	pad.Transparency = if on then 0.35 else 0.85
+	if self.padLabel then
+		self.padLabel.Visible = on
+	end
+end
+
+-- n spawn spots in rows across the front of the floor, ArenaConfig.SPAWN_SPACING apart (sized for
+-- the arcade's 1.5x characters), either side of the pad and clear of it. Floor surface points.
+function Arena.spawnPoints(self, n: number): { Vector3 }
+	local b = self.bounds
+	local s = Mapping.STUDS_PER_MM
+	local spacing = ArenaConfig.SPAWN_SPACING
+	local perRow = math.max(2, math.floor((b.x1 - b.x0) * s * 0.84 / spacing))
+	local cx = (b.x0 + b.x1) / 2 * s
+	local frontZ = (b.y0 + (b.y1 - b.y0) * ArenaConfig.SPAWN_FRAC) * s
+	local padAt = self.pad and self.pad.Position
+	local out = {}
+	local k = 0
+	while #out < math.max(n, 1) and k < 400 do
+		local row = k // perRow
+		local col = k % perRow
+		k += 1
+		-- Columns fill outward from the middle: 0, -1, +1, -2, +2 ... so a small group stands together.
+		local side = if col % 2 == 0 then col // 2 else -(col // 2 + 1)
+		local at = Mapping.ORIGIN + Vector3.new(cx + (side + 0.5) * spacing, 0, frontZ - row * spacing)
+		at = Vector3.new(at.X, self.floorTopY, at.Z)
+		local clear = padAt == nil
+			or (Vector3.new(at.X - padAt.X, 0, at.Z - padAt.Z)).Magnitude > ArenaConfig.PAD_SIZE / 2 + spacing / 2
+		if clear and self:inBounds(at) then
+			table.insert(out, at)
+		end
+	end
+	while #out < n do
+		table.insert(out, out[(#out % math.max(#out, 1)) + 1] or self:floorCentre())
+	end
+	return out
+end
+
+-- Where the dragon stands (the pedestal), for facing players toward it.
+function Arena.dragonEnd(self): Vector3
+	local b = self.bounds
+	local s = Mapping.STUDS_PER_MM
+	return Mapping.ORIGIN + Vector3.new(b.baseX * s, self.floorTopY, b.baseY * s)
+end
+
+function Arena.floorCentre(self): Vector3
+	local b = self.bounds
+	local s = Mapping.STUDS_PER_MM
+	return Mapping.ORIGIN + Vector3.new((b.x0 + b.x1) / 2 * s, self.floorTopY, (b.y0 + b.y1) / 2 * s)
+end
+
+-- The gallery: a walled ledge past the far lava, GALLERY_HEIGHT above the floor, facing the dragon.
+-- The eliminated respawn here (Rounds.toGallery). It is out of reach both ways: the dragon cannot
+-- get to it, and a spectator cannot drop onto the floor and get back in the way.
+function Arena.buildGallery(self, b: any, s: number, floorY: number)
+	local lw = ArenaConfig.LAVA_WIDTH_MM
+	local w = ArenaConfig.GALLERY_SIZE.X
+	local d = ArenaConfig.GALLERY_SIZE.Y
+	local y = floorY + ArenaConfig.GALLERY_HEIGHT
+	local at = Mapping.ORIGIN + Vector3.new((b.x0 + b.x1) / 2 * s, y - 1, (b.y1 + lw) * s + d / 2)
+	local g = Instance.new("Model")
+	g.Name = "Gallery"
+	g.Parent = self.model
+	part(g, "Deck", C.Basalt, Enum.Material.Slate, Vector3.new(w, 2, d), CFrame.new(at))
+	local wallH = 10
+	local walls = {
+		{ Vector3.new(w, wallH, 1), Vector3.new(0, wallH / 2 + 1, -d / 2) }, -- the arena side
+		{ Vector3.new(w, wallH, 1), Vector3.new(0, wallH / 2 + 1, d / 2) },
+		{ Vector3.new(1, wallH, d), Vector3.new(-w / 2, wallH / 2 + 1, 0) },
+		{ Vector3.new(1, wallH, d), Vector3.new(w / 2, wallH / 2 + 1, 0) },
+	}
+	for i, spec in walls do
+		local wall = part(g, "Wall" .. i, C.BasaltEdge, Enum.Material.Glass, spec[1], CFrame.new(at + spec[2]))
+		wall.Transparency = if i == 1 then 0.8 else 0.3
+	end
+	-- Columns down into the lava, so it stands on something.
+	for i, dx in { -w / 2 + 3, w / 2 - 3 } do
+		part(g, "Column" .. i, C.Basalt, Enum.Material.Rock, Vector3.new(4, ArenaConfig.GALLERY_HEIGHT + 4, 4),
+			CFrame.new(at + Vector3.new(dx, -ArenaConfig.GALLERY_HEIGHT / 2 - 1, 0)), false)
+	end
+	self.gallery = { centre = at + Vector3.new(0, 1, 0), w = w, d = d }
+end
+
+-- A standing spot on the gallery deck: column col of perRow, row row (rows go back from the rail).
+function Arena.galleryPoint(self, col: number, row: number, perRow: number): Vector3
+	local g = self.gallery
+	local spacing = math.min(ArenaConfig.SPAWN_SPACING, (g.w - 4) / perRow)
+	local x = (col - (perRow - 1) / 2) * spacing
+	local z = -g.d / 2 + 4 + (row % 3) * 5
+	return g.centre + Vector3.new(x, 0, z)
+end
+
+-- Off the playable floor and down at its surface: in the lava. The rocks and platforms are all
+-- inside the floor's bounds, so standing on them never counts.
+function Arena.offFloor(self, at: Vector3): boolean
+	if not self.bounds then
+		return false
+	end
+	return not self:inBounds(at) and at.Y < self.floorTopY + 12
 end
 
 return Arena

@@ -1,16 +1,14 @@
 --!strict
 -- The server <-> client channel for the arena. Required from both sides.
 --
--- The server creates the RemoteEvents on first require; the client waits for them. That ordering
--- is safe because ArenaMain requires this module before any player can have loaded, but the client
--- still uses WaitForChild rather than assuming - a client that joins during a server restart would
--- otherwise error on a missing remote and lose its HUD for the session.
+-- The server creates the RemoteEvents on first require (ServerStorage.Modes.Arena.Module requires
+-- this when the arcade loads it, before any game starts); the client waits for them, so a view that
+-- enters first still finds them.
 --
--- The operator flag is deliberately NOT here. It is a player attribute instead, because it is set
--- the moment the player joins - before their LocalScript has had a chance to connect - and a
--- RemoteEvent fired at a client that is not listening yet is simply lost. An attribute is state
--- rather than an event: the client reads it whenever it gets around to starting, and still hears
--- about a later change.
+-- Who is the dragon is not here: it is the robot role (ReplicatedStorage.Core.Roles), which has no
+-- character and sees Views.RobotView. Who is in the round and still alive are Player attributes
+-- ("ArenaInGame", "ArenaAlive") set by the server, because they are state a view can read whenever it
+-- starts, not events it might miss.
 --
 -- Everything here is display or intent. No damage decision crosses this boundary: the server
 -- decides who was hit (AttackFx), and the client is only told what to draw. A client that lies on
@@ -25,18 +23,19 @@ local NAMES = {
 	"Banner",     -- one-off centre text: countdown, round end, debuff toast
 	"Shake",      -- camera shake for a slam: (strength 0..1, seconds)
 	-- Client -> server
-	"SlotFire",     -- "spend ability slot n"
-	"SetOperator",  -- "I am the dragon now" / "I am a player again" (the V key)
+	"SlotFire",     -- "spend ability slot n" (alive players in the round only; re-checked server side)
 }
 
 local Remotes = {}
 
 local folder: Folder
 if RunService:IsServer() then
-	folder = ReplicatedStorage.Arena:FindFirstChild("Remotes") :: Folder
+	-- "Events", not "Remotes": this ModuleScript is already ReplicatedStorage.Arena.Remotes, and a
+	-- Folder of the same name next to it would make FindFirstChild pick whichever came first.
+	folder = ReplicatedStorage.Arena:FindFirstChild("Events") :: Folder
 	if not folder then
 		folder = Instance.new("Folder")
-		folder.Name = "Remotes"
+		folder.Name = "Events"
 		folder.Parent = ReplicatedStorage.Arena
 	end
 	for _, name in NAMES do
@@ -47,7 +46,7 @@ if RunService:IsServer() then
 		end
 	end
 else
-	folder = ReplicatedStorage:WaitForChild("Arena"):WaitForChild("Remotes") :: Folder
+	folder = ReplicatedStorage:WaitForChild("Arena"):WaitForChild("Events") :: Folder
 end
 
 for _, name in NAMES do

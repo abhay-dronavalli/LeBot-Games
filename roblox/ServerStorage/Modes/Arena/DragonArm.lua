@@ -6,8 +6,8 @@
 -- already ran the kinematics against the arm's URDF and fitted calibration, so there are no link
 -- lengths here, no Motor6D assembly, and no per-joint sign to discover by wiggling.
 --
---   local dragon = DragonArm.new(workspace)
---   Bridge.onState(function(s) dragon:update(s.arm, s.arm_age) end)
+--   local dragon = DragonArm.new(map)
+--   every new state frame: dragon:update(s.arm, s.arm_age)   (Module, from Link.state())
 --
 -- Four things in here exist because the obvious version is wrong:
 --
@@ -39,7 +39,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
-local Mapping = require(script.Parent.Parent.Mapping)
+local Mapping = require(script.Parent.Mapping)
 
 local DragonArm = {}
 DragonArm.__index = DragonArm

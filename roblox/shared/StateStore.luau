@@ -23,6 +23,7 @@
 	is connected (core status "live" or "mock"); never for the core's fake generator, so with no robot the
 	arcade's arm holds still.
 	StateStore.update(msg) is kept for old callers and does nothing: only the core writes robot state.
+	StateStore.raw() / StateStore.hello() hand back the core's own state and hello frame, unconverted.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -99,6 +100,18 @@ function StateStore.get()
 		state = StateStore.convert(core)
 	end
 	return state
+end
+
+-- The core state as the core keeps it (sheet mm, arm.points, arm_age, effects), for modes that need
+-- more than the arcade shape above (Dragon Arena drives its dragon from arm.points). Read only.
+function StateStore.raw()
+	return Core.get()
+end
+
+-- The bridge's hello frame (space, effects, source), or nil while there is none (no robot, or the
+-- core's fake generator). Read only.
+function StateStore.hello()
+	return Core.hello()
 end
 
 -- True if a core state update came within maxAge seconds (default 1) and a robot is connected.

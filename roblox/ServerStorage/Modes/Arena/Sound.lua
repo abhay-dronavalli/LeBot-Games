@@ -8,11 +8,10 @@
 -- and check the licence on anything you add - no copyrighted music. Every call here no-ops on a
 -- zero id, so the mode runs silent until they are filled rather than erroring.
 --
---   local sound = Sound.new(workspace)
+--   local sound = Sound.new(arena.fx)
 --   sound:ambience(); sound:slam(at); sound:fireStart(head)
 
 local Debris = game:GetService("Debris")
-local SoundService = game:GetService("SoundService")
 
 local Sound = {}
 Sound.__index = Sound
@@ -77,7 +76,9 @@ function Sound.ui(self, key: string, volume: number?)
 	if not id or id == 0 then
 		return
 	end
-	local s = make(id, SoundService, volume or 0.5)
+	-- Under the map, not SoundService: a Sound in a Folder plays everywhere like a SoundService one,
+	-- but it goes when the map does, and lobby players are not part of the arena's soundscape.
+	local s = make(id, self.parent, volume or 0.5)
 	if s then
 		s:Play()
 		Debris:AddItem(s, 6)
@@ -106,7 +107,14 @@ function Sound.stopLoop(self, key: string)
 end
 
 function Sound.ambience(self)
-	self:startLoop("ambience", SoundService, 0.35)
+	self:startLoop("ambience", self.parent, 0.35)
+end
+
+-- Stop(): every loop off. The one-offs go with the map.
+function Sound.stopAll(self)
+	for key in self.loops do
+		self:stopLoop(key)
+	end
 end
 
 return Sound

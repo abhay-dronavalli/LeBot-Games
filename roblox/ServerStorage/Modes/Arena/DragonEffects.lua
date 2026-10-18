@@ -18,7 +18,7 @@
 -- arm.points, so the visible wobble is real. Adding any on top would double it.
 --
 --   local fx = DragonEffects.new(dragon)
---   Bridge.onState(function(s) fx:update(s.effects) end)
+--   every new state frame: fx:update(s.effects)   (Module, from Link.state())
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -243,7 +243,7 @@ function Builders.freeze(self)
 				Vector3.new(1, 1, 1))
 			host.Transparency = 1
 			host.CFrame = CFrame.new(tip)
-			host.Parent = workspace
+			host.Parent = self.dragon.model.Parent or self.folder
 			local burst = Instance.new("ParticleEmitter")
 			burst.Color = ColorSequence.new(C.Frozen)
 			burst.Size = NumberSequence.new(2.2, 0.2)
