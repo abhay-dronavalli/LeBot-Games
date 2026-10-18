@@ -83,3 +83,17 @@ for row = 0, Config.BayRows - 1 do
 	end
 end
 
+CellsUpdated.OnClientEvent:Connect(function(cellsList)
+	for key, btn in pairs(buttons) do
+		btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+		btn.Text = key
+	end
+	for _, cell in ipairs(cellsList) do
+		local btn = buttons[cell.col .. "," .. cell.row]
+		if btn then
+			btn.BackgroundColor3 = COLOR_SWATCH[cell.color] or Color3.fromRGB(80, 80, 80)
+			btn.Text = string.format("%d,%d L%d", cell.col, cell.row, cell.level)
+		end
+	end
+end)
+
