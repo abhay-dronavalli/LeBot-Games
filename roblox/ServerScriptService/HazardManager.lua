@@ -690,3 +690,65 @@ BUILDERS.ArrowTurrets = function(i, folder, info, state)
 	end
 end
 
+-- DARK ZONE: lights out, with pits you cannot see until something lights them. The only
+-- obstacle solved by what the block EMITS rather than what it blocks.
+BUILDERS.DarkZone = function(i, folder, info, state)
+	local centre = bayCenter(i)
+
+	-- kill the overhead lights above this bay
+	local dimmed = {}
+	local rails = Workspace.Warehouse:FindFirstChild("SkyRails")
+	if rails then
+		for _, t in ipairs(rails:GetChildren()) do
+			if string.match(t.Name, "^Truss")
+				and math.abs(t.Position.Z - centre.Z) < Config.BayDepth / 2 + 8 then
+				for _, l in ipairs(t:GetChildren()) do
+					if l:IsA("SpotLight") then
+						l.Enabled = false
+						table.insert(dimmed, l)
+					end
+				end
+			end
+		end
+	end
+
+	local murk = newPart("Darkness", Vector3.new(Config.BayWidth + 12, 22, Config.BayDepth),
+		Vector3.new(centre.X, 11, centre.Z), Color3.fromRGB(0, 0, 3),
+		Enum.Material.SmoothPlastic, folder, {Transparency = 0.5, CanQuery = false})
+
+	-- pits hidden in the dark
+	local pits = {}
+	for _, cell in ipairs({{0, 0}, {3, 0}, {2, 1}, {1, 2}, {3, 2}}) do
+		local c = cellCenter(i, cell[1], cell[2])
+		local pit = newPart("HiddenPit", Vector3.new(CELL - 1.5, 0.4, CELL - 1.5),
+			Vector3.new(c.X, 0.15, c.Z), Color3.fromRGB(30, 0, 0),
+			Enum.Material.Neon, folder, {Transparency = 0.92})
+		makeLethal(pit, state)
+		table.insert(pits, pit)
+	end
+
+	function state.onSolved()
+		TweenService:Create(murk, TweenInfo.new(0.9), {Transparency = 1}):Play()
+		for _, l in ipairs(dimmed) do
+			l.Enabled = true
+		end
+		for _, p in ipairs(pits) do
+			p.Transparency = 0.25
+			p.Color = Color3.fromRGB(255, 70, 70)
+		end
+		-- the teal crates themselves become the light source
+		for _, c in ipairs(folder.Parent:GetChildren()) do
+			if c.Name == "Crate" then
+				local b = c:FindFirstChild("Base")
+				if b and not b:FindFirstChildOfClass("PointLight") then
+					local l = Instance.new("PointLight")
+					l.Color = Color3.fromRGB(130, 255, 240)
+					l.Range = 30
+					l.Brightness = 3.5
+					l.Parent = b
+				end
+			end
+		end
+	end
+end
+
