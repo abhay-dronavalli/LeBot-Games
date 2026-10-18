@@ -10,6 +10,26 @@
 
 ---
 
+> ## ⚠️ Read this before trusting the rest
+>
+> **This is the original plan, not a description of what exists.** The Roblox side has
+> diverged from it. Parts I and II below are the *intent*; for what is actually built, see
+> **[README.md](README.md)** (current state) and the per-scenario docs beside it.
+>
+> The divergences that matter:
+>
+> | Plan says | Reality |
+> |---|---|
+> | One block = one hazard, several hazards per bay (§4) | **One obstacle per 4×3 bay.** §4.1-4.2 are superseded — see README.md |
+> | A bay is cleared by filling the right cells | Still true for bays 2-9. **Bay 1 is cleared by an action** (`solveMode = "switches"`), with the crates as a ladder to reach it |
+> | `Bridge` feeds `cells` from the robot | Not built. `DebugMode` emits the same structure, so nothing downstream can tell |
+> | 14 cubes, "peak blocks" up to 6 per bay | Hard rule now: **2 cubes per colour**, so a bay may never ask for more than 2 of one |
+> | Section 12 protocol | Unchanged, still the contract. The robot side is untouched by this work |
+>
+> Part III (robot, vision, protocol) is **not** affected by any of this.
+
+---
+
 ## 0. Decisions That Resolve Earlier Inconsistencies
 
 These are fixed for the rest of this document.
@@ -107,6 +127,13 @@ Obstacles don't simply disappear; crates visibly overpower them.
 ---
 
 ## 4. Bay Layouts (`BayData`)
+
+> **⚠️ §4.1 and §4.2 are superseded.** They describe the original one-block-one-hazard
+> model with several hazards per bay. The game now runs **one obstacle per bay**, and the live
+> layout is in `lebot_obby/ReplicatedStorage/BayData.lua`, summarised in
+> [README.md](README.md). What survived: the block budget (max 2 of any colour per bay) and
+> the callout labels in §4.3. Kept for the reasoning and the hazard vocabulary, which the
+> obstacle builders still draw on.
 
 ### 4.1 Lane-gate rule
 Every hazard row has static barriers (pallet racks or walls) closing every column except one **gate lane**. The hazard sits in the gate lane, so the player must deal with it, and the callout is unambiguous ("Row 1, column 2, red").
@@ -328,6 +355,12 @@ You will spend most of the weekend without the robot.
 | 10 | `Events` with fairness rules and kill switch | A malfunction telegraphs, fires, ends |
 | 11 | Purple crane lift and Bay 9 | Finale works with real `crane` data |
 | 12 | Demo Run, audio pass, polish | A full Demo Run is reliable |
+
+**Progress against this order** (detail in [README.md](README.md)): steps 1-3 done; step 5
+reinterpreted as one obstacle per bay and done for all nine; step 6 partly — the bays exist
+but `ActiveBayTracker` does not, so only Bay 1 is wired; step 7 partly — an objective HUD with
+a live timer exists, scoring and win/fail screens do not; step 8 done against the mock feed.
+Steps 4, 9, 10, 11 and 12 not started.
 
 **Cut order if time is tight:** spectator camera, scrap tokens, override panels, Teal side objectives, Bays 3 and 6, malfunction variety (keep `earthquake` and `freeze`), L2 effects for the lowest-impact colors. **Never cut** Debug Mode, the HUD, or the Demo Run.
 
