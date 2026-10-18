@@ -435,3 +435,173 @@ BUILDERS.CrusherRoof = function(i, folder, info, state)
 	function state.onSolved() end
 end
 
+-- MOBS: Minecraft-style zombies spawn from two wall openings and chase the player. Blocks
+-- seal the openings, which stops the spawns; the lane itself stays open to walk through.
+local ZOMBIE_SKIN = Color3.fromRGB(106, 140, 79)
+local ZOMBIE_SHIRT = Color3.fromRGB(58, 106, 118)
+local ZOMBIE_PANTS = Color3.fromRGB(58, 62, 104)
+
+local function buildZombie(spawnPos, parent)
+	local m = Instance.new("Model")
+	m.Name = "Zombie"
+
+	local function limb(name, size, color)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.Color = color
+		p.Material = Enum.Material.SmoothPlastic
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = m
+		return p
+	end
+
+	local root = limb("HumanoidRootPart", Vector3.new(2, 2, 1), ZOMBIE_SHIRT)
+	root.Transparency = 1
+	root.CFrame = CFrame.new(spawnPos)
+
+	local torso = limb("Torso", Vector3.new(2, 2, 1), ZOMBIE_SHIRT)
+	local head = limb("Head", Vector3.new(1.6, 1.6, 1.6), ZOMBIE_SKIN)
+	local la = limb("Left Arm", Vector3.new(1, 2, 1), ZOMBIE_SKIN)
+	local ra = limb("Right Arm", Vector3.new(1, 2, 1), ZOMBIE_SKIN)
+	local ll = limb("Left Leg", Vector3.new(1, 2, 1), ZOMBIE_PANTS)
+	local rl = limb("Right Leg", Vector3.new(1, 2, 1), ZOMBIE_PANTS)
+
+	-- dark sunken eyes
+	for _, sx in ipairs({-0.38, 0.38}) do
+		local eye = Instance.new("Part")
+		eye.Size = Vector3.new(0.34, 0.26, 0.1)
+		eye.Color = Color3.fromRGB(18, 28, 20)
+		eye.Material = Enum.Material.SmoothPlastic
+		eye.Name = "Eye"
+		eye.Parent = m
+		local w = Instance.new("Weld")
+		w.Part0 = head
+		w.Part1 = eye
+		w.C0 = CFrame.new(sx, 0.12, -0.82)
+		w.Parent = eye
+	end
+
+	local function joint(p1, c0, name)
+		local j = Instance.new("Motor6D")
+		j.Name = name
+		j.Part0 = torso
+		j.Part1 = p1
+		j.C0 = c0
+		j.Parent = torso
+		return j
+	end
+
+	local rootJoint = Instance.new("Motor6D")
+	rootJoint.Name = "RootJoint"
+	rootJoint.Part0 = root
+	rootJoint.Part1 = torso
+	rootJoint.Parent = root
+
+	joint(head, CFrame.new(0, 1.8, 0), "Neck")
+	local leftArm = joint(la, CFrame.new(-1.5, 0.4, 0), "LeftShoulder")
+	local rightArm = joint(ra, CFrame.new(1.5, 0.4, 0), "RightShoulder")
+	local leftLeg = joint(ll, CFrame.new(-0.5, -1.6, 0), "LeftHip")
+	local rightLeg = joint(rl, CFrame.new(0.5, -1.6, 0), "RightHip")
+
+	local hum = Instance.new("Humanoid")
+	hum.MaxHealth = 60
+	hum.Health = 60
+	hum.WalkSpeed = 7
+	hum.Parent = m
+
+	m.PrimaryPart = root
+	m.Parent = parent
+
+	-- arms out front + shambling leg swing
+	local baseLA, baseRA = leftArm.C0, rightArm.C0
+	local baseLL, baseRL = leftLeg.C0, rightLeg.C0
+	leftArm.C0 = baseLA * CFrame.Angles(math.rad(-80), 0, 0)
+	rightArm.C0 = baseRA * CFrame.Angles(math.rad(-80), 0, 0)
+
+	task.spawn(function()
+		while m.Parent and hum.Health > 0 do
+			local s = math.sin(os.clock() * 5) * 0.5
+			leftLeg.C0 = baseLL * CFrame.Angles(s, 0, 0)
+			rightLeg.C0 = baseRL * CFrame.Angles(-s, 0, 0)
+			leftArm.C0 = baseLA * CFrame.Angles(math.rad(-80) + s * 0.25, 0, 0)
+			rightArm.C0 = baseRA * CFrame.Angles(math.rad(-80) - s * 0.25, 0, 0)
+			task.wait(0.06)
+		end
+	end)
+
+	return m, hum, root
+end
+
+BUILDERS.Mobs = function(i, folder, info, state)
+	local z = cellCenter(i, 0, 1).Z
+	local mobs = {}
+
+	-- two spawner openings in the side walls
+	local spawners = {}
+	for _, sx in ipairs({-0.4, Config.BayWidth + 0.4}) do
+		local hole = newPart("Spawner", Vector3.new(1.2, 6, CELL - 1),
+			Vector3.new(sx, 3, z), Color3.fromRGB(18, 14, 24),
+			Enum.Material.Slate, folder)
+		local l = Instance.new("PointLight")
+		l.Color = Color3.fromRGB(120, 60, 200)
+		l.Range = 10
+		l.Brightness = 1.5
+		l.Parent = hole
+		table.insert(spawners, hole)
+	end
+
+	task.spawn(function()
+		while folder.Parent do
+			if not state.solved and #mobs < 4 then
+				local from = spawners[math.random(1, #spawners)]
+				local pos = from.Position + Vector3.new(from.Position.X < 0 and 3 or -3, 0, 0)
+				local m, hum, root = buildZombie(Vector3.new(pos.X, 4, pos.Z), folder)
+				table.insert(mobs, m)
+
+				-- chase + attack
+				task.spawn(function()
+					while m.Parent and hum.Health > 0 do
+						local best, bestD = nil, 1e9
+						for _, pl in ipairs(Players:GetPlayers()) do
+							local ch = pl.Character
+							local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+							-- ghosts are invisible to mobs
+							if hrp and not isGhost(ch) then
+								local d = (hrp.Position - root.Position).Magnitude
+								if d < bestD then best, bestD = ch, d end
+							end
+						end
+						if best and bestD < 60 then
+							hum:MoveTo(best.HumanoidRootPart.Position)
+							if bestD < 4 then
+								local ph = best:FindFirstChildOfClass("Humanoid")
+								if ph and ph.Health > 0 then
+									ph:TakeDamage(12)
+									task.wait(1)
+								end
+							end
+						end
+						task.wait(0.3)
+					end
+				end)
+			end
+			task.wait(3)
+		end
+	end)
+
+	function state.onSolved()
+		for _, s in ipairs(spawners) do
+			s.Color = Color3.fromRGB(70, 70, 78)
+			for _, d in ipairs(s:GetChildren()) do
+				if d:IsA("PointLight") then d.Enabled = false end
+			end
+		end
+		for _, m in ipairs(mobs) do
+			if m.Parent then m:Destroy() end
+		end
+		table.clear(mobs)
+	end
+end
+
