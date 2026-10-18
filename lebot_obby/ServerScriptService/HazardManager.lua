@@ -118,44 +118,376 @@ end
 ----------------------------------------------------------------
 local BUILDERS = {}
 
--- SAW: blade slot across row 1. A block dropped on the blade jams it, and that block is then
--- a safe step across the slot.
+-- SAW WALL: the bay seals and a wall of chainsaws creeps in from the entrance. Two levers,
+-- mounted too high to reach from the floor, are the way out -- so here the crates are a LADDER
+-- to the answer rather than the answer itself. Lever A kills the blades and arms Lever B;
+-- Lever B halts the wall and drops the exit gate. The advancing wall is the clock, which makes
+-- Config.SawWallSeconds the one knob for this bay's difficulty.
+--
+-- Why a crate can stall the wall, and why that isn't a free win: a crate can never be
+-- destroyed, because the real cube is still sitting on the operator's table and the game has
+-- to mirror it. So contact is resolved by whether there is anything to cut with --
+--   blades live -> they chew through, wall slows to Config.SawWallGrindFactor
+--   blades dead -> nothing cuts, wall jams solid
+-- That gives the spare cube a real job (buy time before Lever A) and makes the Lever B stack
+-- double as a shield afterwards, so the player is never killed standing on the block that
+-- saved them.
 BUILDERS.Saw = function(i, folder, info, state)
-	local c = cellCenter(i, 0, 1)
-	local slotZ = c.Z
+	local z0 = bayZStart(i)
+	local zEnd = z0 + Config.BayDepth
+	local midX = Config.BayWidth / 2
 
-	newPart("SawSlot", Vector3.new(Config.BayWidth, 0.6, CELL - 1.5),
-		Vector3.new(Config.BayWidth / 2, 0.05, slotZ), Color3.fromRGB(12, 12, 14),
-		Enum.Material.Metal, folder)
+	local WALL_START = z0 + 2
+	local WALL_END = zEnd - 2.5
+	local TICK = 0.05
+	-- Advance off measured elapsed time, not tick count: task.wait(0.05) actually sleeps a bit
+	-- longer, which made a nominal 30s traverse take about 34s. The wall is this bay's clock,
+	-- so SawWallSeconds has to mean real seconds.
+	local studsPerSecond = (WALL_END - WALL_START) / Config.SawWallSeconds
+	local lastTick = os.clock()
+
+	-- paint the sweep lane, so the operator can see where a brake crate actually intercepts
+	newPart("SweepLane", Vector3.new(Config.BayWidth - 1, 0.08, Config.BayDepth - 1),
+		Vector3.new(midX, 0.06, z0 + Config.BayDepth / 2), Color3.fromRGB(120, 92, 22),
+		Enum.Material.SmoothPlastic, folder, {Transparency = 0.6, CanQuery = false})
+
+	----------------------------------------------------------------
+	-- gates
+	----------------------------------------------------------------
+	local GATE_H = 14
+	local entryGate = newPart("EntryGate", Vector3.new(Config.BayWidth, GATE_H, 1),
+		Vector3.new(midX, -GATE_H / 2, z0), Color3.fromRGB(72, 68, 62),
+		Enum.Material.DiamondPlate, folder, {CanCollide = true})
+	local exitGate = newPart("ExitGate", Vector3.new(Config.BayWidth, GATE_H, 1),
+		Vector3.new(midX, GATE_H / 2, zEnd), Color3.fromRGB(72, 68, 62),
+		Enum.Material.DiamondPlate, folder, {CanCollide = true})
+
+	local function slideGate(gate, up)
+		TweenService:Create(gate, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{CFrame = CFrame.new(gate.Position.X, up and GATE_H / 2 or -GATE_H / 2, gate.Position.Z)}):Play()
+	end
+
+	----------------------------------------------------------------
+	-- the wall
+	----------------------------------------------------------------
+	local frame = newPart("WallFrame", Vector3.new(Config.BayWidth, 7.4, 1.2),
+		Vector3.new(midX, 3.8, WALL_START), Color3.fromRGB(58, 54, 50),
+		Enum.Material.DiamondPlate, folder, {CanCollide = true})
 
 	local blades = {}
-	for k = 0, 3 do
-		local blade = newPart("SawBlade" .. k, Vector3.new(0.4, 5, 5),
-			Vector3.new(k * CELL + CELL / 2, 1.4, slotZ), Color3.fromRGB(205, 208, 214),
+	for col = 0, Config.BayCols - 1 do
+		local bx = col * CELL + CELL / 2
+		-- a Cylinder's flat faces point along X, so this is a vertical disc facing sideways
+		-- and it spins about its own axis rather than tumbling
+		local blade = newPart("WallBlade" .. col, Vector3.new(0.4, 5.6, 5.6),
+			Vector3.new(bx, 3.4, WALL_START), Color3.fromRGB(208, 210, 216),
 			Enum.Material.Metal, folder, {Shape = Enum.PartType.Cylinder})
-		makeLethal(blade, state)
-		table.insert(blades, blade)
+		makeLethalPart(blade)
+		table.insert(blades, {part = blade, x = bx})
 	end
+
+	local sparks = newPart("Sparks", Vector3.new(Config.BayWidth - 2, 0.5, 0.5),
+		Vector3.new(midX, 1.2, WALL_START), Color3.fromRGB(255, 200, 70),
+		Enum.Material.Neon, folder, {Transparency = 1, CanQuery = false})
+
+	local wallZ, spin, bladesLive = WALL_START, 0, true
+
+	local function placeWall(z)
+		frame.CFrame = CFrame.new(midX, 3.8, z)
+		for _, b in ipairs(blades) do
+			b.part.CFrame = CFrame.new(b.x, 3.4, z) * CFrame.Angles(spin, 0, 0)
+		end
+		sparks.CFrame = CFrame.new(midX, 1.2, z + 1.2)
+	end
+
+	local function setBladesLive(live)
+		bladesLive = live
+		for _, b in ipairs(blades) do
+			b.part:SetAttribute("Live", live)
+			b.part.Color = live and Color3.fromRGB(208, 210, 216) or Color3.fromRGB(96, 98, 104)
+		end
+	end
+
+	-- nearest crate the wall is about to meet, or nil
+	local function crateInPath(z)
+		if not Config.SawWallBrakeEnabled then
+			return nil
+		end
+		for _, c in ipairs(folder.Parent:GetChildren()) do
+			if c.Name == "Crate" then
+				local b = c:FindFirstChild("Base")
+				if b and b.Position.Z > z and b.Position.Z - z < 3.1 then
+					return b
+				end
+			end
+		end
+		return nil
+	end
+
+	----------------------------------------------------------------
+	-- levers. Colour code is deliberate: green means "this is your target right now" and
+	-- nothing else is ever green, so a thrown lever goes cold blue instead of staying green.
+	----------------------------------------------------------------
+	local DORMANT, ARMED, THROWN = 0, 1, 2
+	local HANDLE_LEN = 2.4
+
+	-- A lever only responds if the player is standing on a crate tall enough for it. Gating on
+	-- the support, rather than mounting the lever out of jump range, keeps the cube requirement
+	-- exact -- Lever A needs any crate, Lever B needs a stacked pair. Without this check a
+	-- default jump from the floor reaches roughly 12.8 studs of head height and clears both.
+	local function supportHeight(character)
+		local hrp = character:FindFirstChild("HumanoidRootPart")
+		if not hrp then
+			return 0
+		end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = {character}
+		local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -9, 0), params)
+		if not hit or (hit.Instance.Name ~= "Base" and hit.Instance.Name ~= "Topper") then
+			return 0
+		end
+		return hit.Instance.Position.Y + hit.Instance.Size.Y / 2
+	end
+
+	local function buildLever(spec)
+		local inward = (spec.side == "left") and 1 or -1
+		local x = (spec.side == "left") and 1.75 or Config.BayWidth - 1.75
+		local z = cellCenter(i, spec.cell[1], spec.cell[2]).Z
+		local y = spec.height
+
+		local lv = {id = spec.id, phase = DORMANT, minStand = spec.minStand or 0}
+		-- the housing juts into the bay so it abuts the crate in that column; mounted flush
+		-- with the wall it sits a couple of studs short of the crate's edge
+		lv.mount = newPart("Lever" .. spec.id .. "Mount", Vector3.new(3.5, 3.4, 3.4),
+			Vector3.new(x, y, z), Color3.fromRGB(40, 40, 46), Enum.Material.DiamondPlate, folder)
+		lv.beacon = newPart("Lever" .. spec.id .. "Beacon", Vector3.new(0.34, 5.2, 0.34),
+			Vector3.new(x, y + 1.4, z + 2.4), Color3.fromRGB(34, 34, 38),
+			Enum.Material.Neon, folder, {CanQuery = false})
+
+		lv.pivot = Vector3.new(x + inward * 1.4, y - 1.0, z)
+		lv.handle = newPart("Lever" .. spec.id .. "Handle", Vector3.new(0.45, HANDLE_LEN, 0.45),
+			lv.pivot, Color3.fromRGB(190, 58, 52), Enum.Material.Metal, folder)
+
+		function lv.setAngle(deg)
+			lv.handle.CFrame = CFrame.new(lv.pivot)
+				* CFrame.Angles(math.rad(inward * deg), 0, 0)
+				* CFrame.new(0, HANDLE_LEN / 2, 0)
+		end
+		lv.setAngle(0)
+
+		lv.light = Instance.new("PointLight")
+		lv.light.Range = 18
+		lv.light.Brightness = 0
+		lv.light.Color = Color3.fromRGB(90, 255, 130)
+		lv.light.Parent = lv.mount
+
+		lv.label = addLabel(folder, "LEVER " .. spec.id,
+			Vector3.new(x + inward * 1.8, y + 3.6, z), Color3.fromRGB(130, 130, 140))
+
+		-- characterFrom already drops ghosts and non-players, so spectating can't cheat it
+		lv.mount.CanTouch = true
+		lv.mount.Touched:Connect(function(hit)
+			local ch, hum = characterFrom(hit)
+			if not (ch and hum and hum.Health > 0) or lv.phase ~= ARMED then
+				return
+			end
+			-- too low to count. No message here: a lever mounted for a stacked pair is
+			-- physically out of touch from a single crate, so this branch rarely even runs.
+			-- The proximity hint in the run loop is what actually tells the player why.
+			if supportHeight(ch) < lv.minStand then
+				return
+			end
+			if lv.onThrow then
+				lv.onThrow()
+			end
+		end)
+		return lv
+	end
+
+	local levers = {}
+	for _, spec in ipairs(info.levers or {}) do
+		levers[spec.id] = buildLever(spec)
+	end
+	local leverA, leverB = levers.A, levers.B
+
+	local function setPhase(lv, phase)
+		if not lv then
+			return
+		end
+		lv.phase = phase
+		if phase == DORMANT then
+			lv.mount.Color = Color3.fromRGB(40, 40, 46)
+			lv.beacon.Color = Color3.fromRGB(34, 34, 38)
+			lv.light.Brightness = 0
+			lv.label.Text = "LEVER " .. lv.id .. "  -  LOCKED"
+			lv.label.TextColor3 = Color3.fromRGB(125, 125, 135)
+			lv.setAngle(0)
+		elseif phase == ARMED then
+			lv.mount.Color = Color3.fromRGB(46, 72, 50)
+			lv.label.Text = "LEVER " .. lv.id .. "  -  LIVE"
+			lv.label.TextColor3 = Color3.fromRGB(120, 255, 150)
+		else
+			lv.light.Color = Color3.fromRGB(110, 180, 255)
+			lv.light.Brightness = 1.3
+			lv.mount.Color = Color3.fromRGB(48, 60, 76)
+			lv.beacon.Color = Color3.fromRGB(90, 170, 255)
+			lv.label.Text = "LEVER " .. lv.id .. "  -  THROWN"
+			lv.label.TextColor3 = Color3.fromRGB(130, 200, 255)
+			task.spawn(function()
+				for d = 0, 70, 7 do
+					lv.setAngle(d)
+					task.wait(0.02)
+				end
+			end)
+		end
+	end
+
+	----------------------------------------------------------------
+	-- run / reset. The obstacle stays dormant until someone is actually inside, which also
+	-- gives the reset for free: when the bay empties unsolved, everything goes back.
+	----------------------------------------------------------------
+	local running = false
+
+	local function playersInBay()
+		local found = {}
+		for _, pl in ipairs(Players:GetPlayers()) do
+			local ch = pl.Character
+			local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			if hrp and hum and hum.Health > 0 and not isGhost(ch) then
+				local p = hrp.Position
+				if p.Z > z0 and p.Z < zEnd and p.X > -2 and p.X < Config.BayWidth + 2 and p.Y > -8 then
+					table.insert(found, {character = ch, humanoid = hum, position = p})
+				end
+			end
+		end
+		return found
+	end
+
+	local function armRun()
+		running = true
+		wallZ = WALL_START
+		spin = 0
+		lastTick = os.clock()
+		setBladesLive(true)
+		placeWall(wallZ)
+		slideGate(entryGate, true)
+		setPhase(leverA, ARMED)
+		setPhase(leverB, DORMANT)
+	end
+
+	local function resetRun()
+		running = false
+		wallZ = WALL_START
+		setBladesLive(true)
+		placeWall(wallZ)
+		sparks.Transparency = 1
+		slideGate(entryGate, false)
+		slideGate(exitGate, true)
+		setPhase(leverA, DORMANT)
+		setPhase(leverB, DORMANT)
+	end
+
+	if leverA then
+		function leverA.onThrow()
+			setPhase(leverA, THROWN)
+			setBladesLive(false)
+			setPhase(leverB, ARMED)
+			print("[HazardManager] saw wall: Lever A thrown, blades dead")
+		end
+	end
+
+	if leverB then
+		function leverB.onThrow()
+			setPhase(leverB, THROWN)
+			running = false
+			sparks.Transparency = 1
+			slideGate(exitGate, false)
+			print("[HazardManager] saw wall: Lever B thrown, wall halted")
+			if state.setSolved then
+				state.setSolved(true)
+			end
+		end
+	end
+
+	placeWall(WALL_START)
+	setPhase(leverA, DORMANT)
+	setPhase(leverB, DORMANT)
 
 	task.spawn(function()
 		while folder.Parent do
-			if not state.solved then
-				for _, b in ipairs(blades) do
-					b.CFrame = b.CFrame * CFrame.Angles(0, 0, math.rad(22))
+			local occupants = playersInBay()
+
+			if state.solved then
+				-- cleared for good; leave the exit open and the wall where it stopped
+			elseif not running then
+				if #occupants > 0 then
+					armRun()
+				end
+			elseif #occupants == 0 then
+				resetRun()
+			else
+				local now = os.clock()
+				-- clamp, so a hitch or a resumed session can't teleport the wall forward
+				local dt = math.min(now - lastTick, 0.25)
+				lastTick = now
+
+				if bladesLive then
+					spin += math.rad(520) * dt
+				end
+
+				local blocker = crateInPath(wallZ)
+				local advance = studsPerSecond * dt
+				if blocker then
+					advance = bladesLive and advance * Config.SawWallGrindFactor or 0
+				end
+				-- sparks only while something is actually being chewed
+				sparks.Transparency = (blocker and bladesLive) and (0.25 + math.random() * 0.5) or 1
+
+				wallZ = math.min(wallZ + advance, WALL_END)
+				placeWall(wallZ)
+
+				for _, o in ipairs(occupants) do
+					-- behind the front face (tunnelled through), or pinned at the exit
+					if o.position.Z < wallZ - 0.8 or wallZ >= WALL_END - 0.05 then
+						o.humanoid.Health = 0
+					end
 				end
 			end
-			task.wait(0.03)
+
+			-- pulse whichever lever is the live target, and tell a player who is standing
+			-- near it on too short a stack why nothing is happening. Lever B is deliberately
+			-- mounted high enough that a single crate cannot even make contact, so without
+			-- this hint the obstacle just reads as broken.
+			for _, lv in pairs(levers) do
+				if lv.phase == ARMED then
+					local k = 0.5 + 0.5 * math.sin(os.clock() * 4)
+					lv.light.Brightness = 1.2 + k * 2.2
+					lv.beacon.Color = Color3.fromRGB(40 + 90 * k, 150 + 105 * k, 60 + 70 * k)
+
+					local tooLow = false
+					for _, o in ipairs(occupants) do
+						if (o.position - lv.mount.Position).Magnitude < 8
+							and supportHeight(o.character) < lv.minStand then
+							tooLow = true
+						end
+					end
+					if tooLow then
+						lv.label.Text = "LEVER " .. lv.id .. "  -  STACK HIGHER"
+						lv.label.TextColor3 = Color3.fromRGB(255, 150, 90)
+					else
+						lv.label.Text = "LEVER " .. lv.id .. "  -  LIVE"
+						lv.label.TextColor3 = Color3.fromRGB(120, 255, 150)
+					end
+				end
+			end
+
+			task.wait(TICK)
 		end
 	end)
 
-	function state.onSolved()
-		-- jam: blades tilt crooked and sink into the slot
-		for idx, b in ipairs(blades) do
-			TweenService:Create(b, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
-				CFrame = CFrame.new(b.Position - Vector3.new(0, 1.6, 0)) * CFrame.Angles(math.rad(12 * idx), 0, math.rad(70)),
-			}):Play()
-		end
-	end
+	function state.onSolved() end
 end
 
 -- VOID: the floor is gone over `coverRows`. The placed blocks ARE the bridge across.
@@ -818,6 +1150,30 @@ local function buildBay(i)
 	end
 
 	local state = {solved = false, info = info, folder = folder}
+
+	-- The one place a bay becomes solved or unsolved, so the two routes in -- cells filled
+	-- (checkSolved) and an obstacle deciding for itself (the saw wall's levers) -- share the
+	-- same presentation and the same edge-only onSolved call.
+	function state.setSolved(solved)
+		if solved == state.solved then
+			return
+		end
+		state.solved = solved
+		if solved then
+			print(string.format("[HazardManager] %s SOLVED", state.info.obstacle))
+			if state.label then
+				state.label.Text = state.info.obstacle:upper() .. "  -  CLEARED"
+				state.label.TextColor3 = Color3.fromRGB(120, 240, 140)
+			end
+			if state.onSolved then
+				state.onSolved()
+			end
+		elseif state.label then
+			state.label.Text = state.banner
+			state.label.TextColor3 = Color3.fromRGB(255, 180, 90)
+		end
+	end
+
 	builder(i, folder, info, state)
 
 	CollectionService:AddTag(folder, "Obstacle")
@@ -826,8 +1182,10 @@ local function buildBay(i)
 	folder:SetAttribute("Level", info.level)
 
 	local c = bayCenter(i)
-	state.label = addLabel(folder,
-		string.format("%s  -  %s x%d", info.obstacle:upper(), info.color:upper(), info.level),
+	state.banner = (info.solveMode == "switches")
+		and string.format("%s  -  THROW BOTH LEVERS", info.obstacle:upper())
+		or string.format("%s  -  %s x%d", info.obstacle:upper(), info.color:upper(), info.level)
+	state.label = addLabel(folder, state.banner,
 		Vector3.new(c.X, 11, c.Z), Color3.fromRGB(255, 180, 90))
 
 	states[bay] = state
@@ -868,28 +1226,13 @@ BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
 		return
 	end
 
-	local solved = checkSolved(state.info, cellsList)
-	if solved == state.solved then
+	-- Bays whose goal is an action rather than a placement own their own solved state; the
+	-- crates there are the means, so filling cells must not short-circuit them.
+	if state.info.solveMode == "switches" then
 		return
 	end
 
-	state.solved = solved
-	if solved then
-		print(string.format("[HazardManager] %s SOLVED", state.info.obstacle))
-		if state.label then
-			state.label.Text = state.info.obstacle:upper() .. "  -  CLEARED"
-			state.label.TextColor3 = Color3.fromRGB(120, 240, 140)
-		end
-		if state.onSolved then
-			state.onSolved()
-		end
-	else
-		if state.label then
-			state.label.Text = string.format("%s  -  %s x%d",
-				state.info.obstacle:upper(), state.info.color:upper(), state.info.level)
-			state.label.TextColor3 = Color3.fromRGB(255, 180, 90)
-		end
-	end
+	state.setSolved(checkSolved(state.info, cellsList))
 end)
 
 print("[HazardManager] one obstacle per bay built for all " .. Config.NumBays .. " bays")
