@@ -14,11 +14,29 @@ This mode shares `Bridge.lua` and `Mapping.lua` with the obby build in `../`. It
 
 ## Setup
 
+There are three ways in. All three produce the same tree; the difference is what happens when two
+people change things at once.
+
+**Open the place file.** `DragonArena.rbxlx` in this folder is a complete Studio place - open it,
+press Play. Fastest way to see the mode, and the right thing to hand someone who just wants to
+look at it. Read the warning under *Combining this with other games* before committing a saved
+copy of it.
+
+**Sync with [Rojo](https://rojo.space)** (`roblox/default.project.json`). Install Rojo and the
+Studio plugin, then from `roblox/`: `rojo serve`, and hit Connect in the plugin. The `.lua` files
+on disk become the tree in Studio and stay in sync as you edit. This is the one to use if you are
+going to change anything, and the only one that merges sanely with other people's work.
+
+**Paste by hand.** The tree is below if you would rather build it yourself.
+
+Either way, two settings:
+
 1. **Game Settings → Security → Allow HTTP Requests: on.** Nothing works without this.
 2. **Lighting → Technology: `Future`.** Set it in the Properties panel, not from a script. The
    arena's Neon-and-Bloom look depends on it, and scripting it mid-session does not give the same
    result as shipping it.
-3. Build this tree in Studio:
+
+The tree:
 
 ```
 ReplicatedStorage
@@ -55,6 +73,30 @@ to the robot laptop's LAN IP.
 
 To put someone on the overhead operator view, set `OPERATOR_NAME` in `ArenaMain` to their Roblox
 username. Left empty, nobody gets it — which is the right default for a public server.
+
+## Combining this with other games
+
+Several people are building separate modes in this repo, and they will eventually go into one
+place. **Do not make a committed `.rbxl` the thing everyone edits.** A binary `.rbxl` is opaque to
+git: it cannot be merged, cannot be diffed, and two people saving the same place means one of them
+loses their work with no warning and no way to recover it from the history. `.rbxlx` is XML, so git
+will *attempt* a merge, which is worse - referents and child ordering produce a file that merges
+cleanly and then will not open.
+
+The `.lua` files are the source of truth here. `DragonArena.rbxlx` is a build artifact, generated
+from them, and it is committed because it is genuinely useful for opening and for merging into a
+combined place - not because it is the master copy. If you edit in Studio against the place file,
+your changes live only in the place file and the modules here go stale.
+
+For the combined place, the path that works is Rojo: each mode keeps its own folder of `.lua`
+files and its own project file, one person owns the combined place, and each mode syncs into its
+own branch of the tree. The layout here is already shaped for that - `arena/` mirrors the Studio
+hierarchy exactly, and nothing in this mode writes outside `ReplicatedStorage.Arena`,
+`ServerScriptService.Arena`, `ServerScriptService.ArenaMain` and one LocalScript.
+
+The one real collision to watch for: `Bridge` and `Mapping` are shared with the obby and sit at the
+top of `ServerScriptService`. If two modes both ship a copy, the second one to sync wins. They
+should end up owned by one place in the combined tree, with every mode requiring that copy.
 
 ## Where the arena comes from
 

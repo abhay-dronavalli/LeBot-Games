@@ -1,0 +1,20 @@
+{
+  "name": "DragonArena",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Arena": { "$path": "arena/ReplicatedStorage/Arena" }
+    },
+
+    "ServerScriptService": {
+      "$path": "arena/ServerScriptService",
+      "Bridge": { "$path": "Bridge.lua" },
+      "Mapping": { "$path": "Mapping.lua" }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": { "$path": "arena/StarterPlayer/StarterPlayerScripts" }
+    }
+  }
+}
