@@ -328,4 +328,109 @@ local function enqueue(job)
 	processQueue()
 end
 
+----------------------------------------------------------------
+-- Public API
+----------------------------------------------------------------
+function SkyArm.setActiveBay(bayModel)
+	local floor = bayModel:FindFirstChild("Floor")
+	if not floor then
+		return
+	end
+	local goal = CFrame.new(carriage.Position.X, carriageY, floor.Position.Z)
+	local tween = TweenService:Create(carriage, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {CFrame = goal})
+	tween:Play()
+end
+
+-- Slides the trolley along the bridge so it sits above the target column before reaching.
+local function moveTrolleyTo(x)
+	local clamped = math.clamp(x, TROLLEY_MIN_X, TROLLEY_MAX_X)
+	local travel = math.abs(clamped - carriage.Position.X)
+	if travel < 0.05 then
+		return
+	end
+	local duration = math.clamp(travel / 14, 0.25, 1.0)
+	local goal = CFrame.new(clamped, carriageY, carriage.Position.Z)
+	TweenService:Create(carriage, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {CFrame = goal}):Play()
+	task.wait(duration)
+end
+
+-- Crates stay hidden until they're actually in the gripper, otherwise they flash at the world
+-- origin for a frame before the held-crate tracking positions them.
+local function setCrateVisible(crateModel, visible)
+	for _, d in ipairs(crateModel:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.Transparency = visible and 0 or 1
+		elseif d:IsA("SurfaceGui") then
+			d.Enabled = visible
+		end
+	end
+end
+
+-- Reaches to `worldCFrame`, "grips" the already-built (but staged) crateModel, carries it down,
+-- and calls onArrive right as it seats -- the caller snaps the crate's final CFrame and plays
+-- its own impact effect (shockwave) from inside that callback.
+function SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, level, onArrive)
+	enqueue(function()
+		busy = true
+		local cellPos = worldCFrame.Position
+		local grip = Vector3.new(cellPos.X, cellPos.Y + CRATE_GRIP_HEIGHT, cellPos.Z)
+		local hoverPos = grip + Vector3.new(0, 7, 0)
+
+		crateModel.Parent = bayModel
+		setCrateVisible(crateModel, false)
+
+		moveTrolleyTo(cellPos.X)
+		moveTo(solveIKWithGripper(hoverPos, 0), 1.2)
+
+		-- take hold first, let one frame place it at the gripper, then reveal
+		heldCrate = crateModel
+		task.wait()
+		setCrateVisible(crateModel, true)
+		moveTo(solveIKWithGripper(hoverPos, 100), 0.4)
+
+		moveTo(solveIKWithGripper(grip + Vector3.new(0, 2, 0), 100), 1.0)
+		moveTo(solveIKWithGripper(grip, 100), 0.5)
+
+		heldCrate = nil
+		if onArrive then
+			onArrive()
+		end
+
+		moveTo(solveIKWithGripper(hoverPos, 0), 0.8)
+		moveTo(IDLE_ANGLES, 1.0)
+		busy = false
+	end)
+end
+
+-- Reaches to the existing crate at `worldCFrame`, grips and lifts it clear (calling onLifted),
+-- carries it off, then destroys it.
+function SkyArm.reachAndRemove(bayModel, worldCFrame, crateModel, onLifted)
+	enqueue(function()
+		busy = true
+		local cellPos = worldCFrame.Position
+		local grip = Vector3.new(cellPos.X, cellPos.Y + CRATE_GRIP_HEIGHT, cellPos.Z)
+		local hoverPos = grip + Vector3.new(0, 7, 0)
+
+		moveTrolleyTo(cellPos.X)
+		moveTo(solveIKWithGripper(grip, 0), 1.0)
+		moveTo(solveIKWithGripper(grip, 100), 0.4)
+		heldCrate = crateModel
+
+		moveTo(solveIKWithGripper(hoverPos, 100), 1.0)
+		if onLifted then
+			onLifted()
+		end
+
+		local disposePos = hoverPos + Vector3.new(0, 0, -6)
+		moveTo(solveIKWithGripper(disposePos, 100), 0.8)
+		heldCrate = nil
+		if crateModel.Parent then
+			crateModel:Destroy()
+		end
+
+		moveTo(IDLE_ANGLES, 1.0)
+		busy = false
+	end)
+end
+
 return SkyArm
