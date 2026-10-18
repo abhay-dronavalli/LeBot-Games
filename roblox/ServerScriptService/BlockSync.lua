@@ -12,6 +12,12 @@ local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
 
 local BlockSync = {}
 
+-- Fired after every applied snapshot with (bayModel, cellsList). HazardManager listens to this
+-- to decide whether a bay's obstacle has been solved. One-directional: HazardManager depends
+-- on BlockSync, never the other way round.
+local cellsChangedEvent = Instance.new("BindableEvent")
+BlockSync.CellsChanged = cellsChangedEvent.Event
+
 local COLOR_RGB = {
 	red = Color3.fromRGB(210, 50, 50),
 	blue = Color3.fromRGB(60, 150, 220),
@@ -193,6 +199,7 @@ function BlockSync.applyCells(bayModel, newCellsList)
 	end
 
 	lastAppliedByBay[bayModel] = newByKey
+	cellsChangedEvent:Fire(bayModel, newCellsList)
 end
 
 return BlockSync
