@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Start the bridge without retyping the venv path, and without tripping over a stale server.
+#
+#   ./run mock                 no hardware, opens the viewer in a browser
+#   ./run follower             real arm, torque OFF, move it by hand
+#   ./run follower --vision    ...and the real overhead camera
+#   ./run teleop               leader drives the real follower
+#   ./run test                 the checks that need no hardware
+#   ./run stop                 free the ports and exit
+#
+# Any extra arguments are passed straight through to bridge.main.
+
+set -u
+cd "$(dirname "$0")"
+
+PY="$HOME/lerobot/.venv/Scripts/python.exe"
+[ -x "$PY" ] || { echo "no python at $PY -- see docs/SETUP_NOTES.md"; exit 1; }
+
+# A server left running from a previous attempt holds :8765 and the next start dies with
+# "only one usage of each socket address". Clear it first, every time.
+free_ports() {
+  local pids
+  pids=$(netstat -ano 2>/dev/null | grep LISTENING | grep -E ":8765|:8766" \
+         | awk '{print $NF}' | sort -u)
+  for pid in $pids; do
+    echo "  freeing port (pid $pid)"
+    taskkill //F //PID "$pid" >/dev/null 2>&1
+  done
+  [ -n "$pids" ] && sleep 1
+  return 0
+}
+
+mode="${1:-mock}"
+shift || true
+
+case "$mode" in
+  stop)
+    free_ports
+    echo "ports free."
+    ;;
+  test)
+    echo "== block tracker =="
+    "$PY" -m bridge.test_world || exit 1
+    echo
+    echo "== end to end (starts a mock server, then tears it down) =="
+    free_ports
+    "$PY" -m bridge.main --source mock >/dev/null 2>&1 &
+    sleep 5
+    "$PY" -m bridge.test_link
+    status=$?
+    free_ports
+    exit $status
+    ;;
+  mock)
+    free_ports
+    exec "$PY" -m bridge.main --source mock --open "$@"
+    ;;
+  follower|teleop)
+    free_ports
+    echo "  viewer: http://localhost:8766"
+    exec "$PY" -m bridge.main --source "$mode" "$@"
+    ;;
+  *)
+    sed -n "2,11p" "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

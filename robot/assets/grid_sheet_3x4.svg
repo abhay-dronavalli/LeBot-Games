@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="279.4mm" height="215.9mm" viewBox="0 0 279.4 215.9">
+<rect width="100%" height="100%" fill="#fff"/>
+<g stroke="#000" fill="none" stroke-linecap="square">
+<line x1="25.4000" y1="22.2250" x2="25.4000" y2="193.6750" stroke-width="0.3"/>
+<line x1="82.5500" y1="22.2250" x2="82.5500" y2="193.6750" stroke-width="0.3"/>
+<line x1="139.7000" y1="22.2250" x2="139.7000" y2="193.6750" stroke-width="0.3"/>
+<line x1="196.8500" y1="22.2250" x2="196.8500" y2="193.6750" stroke-width="0.3"/>
+<line x1="254.0000" y1="22.2250" x2="254.0000" y2="193.6750" stroke-width="0.3"/>
+<line x1="25.4000" y1="22.2250" x2="254.0000" y2="22.2250" stroke-width="0.3"/>
+<line x1="25.4000" y1="79.3750" x2="254.0000" y2="79.3750" stroke-width="0.3"/>
+<line x1="25.4000" y1="136.5250" x2="254.0000" y2="136.5250" stroke-width="0.3"/>
+<line x1="25.4000" y1="193.6750" x2="254.0000" y2="193.6750" stroke-width="0.3"/>
+<rect x="25.4000" y="22.2250" width="228.6000" height="171.4500" stroke-width="0.6"/>
+</g>
+<g font-family="Helvetica,Arial,sans-serif" fill="#b0b0b0" text-anchor="middle" font-size="7">
+<text x="53.9750" y="53.3000">A1</text>
+<text x="111.1250" y="53.3000">A2</text>
+<text x="168.2750" y="53.3000">A3</text>
+<text x="225.4250" y="53.3000">A4</text>
+<text x="53.9750" y="110.4500">B1</text>
+<text x="111.1250" y="110.4500">B2</text>
+<text x="168.2750" y="110.4500">B3</text>
+<text x="225.4250" y="110.4500">B4</text>
+<text x="53.9750" y="167.6000">C1</text>
+<text x="111.1250" y="167.6000">C2</text>
+<text x="168.2750" y="167.6000">C3</text>
+<text x="225.4250" y="167.6000">C4</text>
+</g>
+<g font-family="Helvetica,Arial,sans-serif" fill="#000" text-anchor="middle"><text x="139.7000" y="16.2250" font-size="5" letter-spacing="1.5">ARM THIS SIDE &#8593; &#8593; &#8593;</text></g>
+<g stroke="#bbb" fill="none" stroke-width="0.25" stroke-dasharray="2 1.5">
+<rect x="0.0000" y="0.0000" width="31.7500" height="31.7500"/>
+<rect x="247.6500" y="0.0000" width="31.7500" height="31.7500"/>
+<rect x="247.6500" y="184.1500" width="31.7500" height="31.7500"/>
+<rect x="0.0000" y="184.1500" width="31.7500" height="31.7500"/>
+</g>
+<g font-family="Helvetica,Arial,sans-serif" fill="#999" font-size="3.2">
+<text x="12.0000" y="12.0000" text-anchor="start">&#8598; tag 0</text>
+<text x="267.4000" y="12.0000" text-anchor="end">tag 1 &#8599;</text>
+<text x="267.4000" y="203.9000" text-anchor="end">tag 2 &#8600;</text>
+<text x="12.0000" y="203.9000" text-anchor="start">&#8601; tag 3</text>
+</g>
+<g stroke="#000" stroke-width="0.4"><line x1="25.4000" y1="201.9000" x2="76.2000" y2="201.9000"/><line x1="25.4000" y1="200.3000" x2="25.4000" y2="203.5000"/><line x1="76.2000" y1="200.3000" x2="76.2000" y2="203.5000"/></g><text x="79.2000" y="203.3000" font-family="Helvetica,Arial,sans-serif" font-size="3.2">this bar must measure 50.8 mm &#183; 3x4 grid of 57.15 mm cells &#183; grid origin (25.40, 22.23) mm</text>
+</svg>
