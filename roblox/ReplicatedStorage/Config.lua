@@ -38,4 +38,14 @@ Config.MalfunctionGraceAfterBayChange = 3
 Config.CrateConfirmDelay = 0.2
 Config.CrateRemoveDelay = 0.4
 
+-- Full playspace shell (Section 3.1, 7)
+Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
+Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area
+Config.WallHeight = 28   -- tall enough that the gantry doesn't feel cramped overhead
+Config.GantryHeight = 18 -- where the SkyArm rails/trolley ride; kept well below the ceiling
+-- so there's open air above the arm. Deliberately separate from WallHeight: room height and
+-- gantry height are different concerns, and the arm's reach math depends only on this one.
+Config.SideMargin = 6   -- aisle space between the bay floor edge and the outer wall, for pallet racks
+Config.WarehouseLength = (Config.NumBays - 1) * Config.BayPitch + Config.BayDepth
+
 return Config
