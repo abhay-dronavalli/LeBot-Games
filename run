@@ -46,7 +46,13 @@ case "$mode" in
     echo "== end to end (starts a mock server, then tears it down) =="
     free_ports
     "$PY" -m bridge.main --source mock >/dev/null 2>&1 &
-    sleep 5
+    # Wait for the port to actually accept, rather than guessing at a sleep: on a cold start
+    # the import of cv2 and lerobot can take well over five seconds, and a fixed wait turns
+    # that into a bogus "could not connect" failure.
+    for _ in $(seq 1 60); do
+      netstat -ano 2>/dev/null | grep -q "LISTENING.*:8765" && break
+      sleep 0.5
+    done
     "$PY" -m bridge.test_link
     status=$?
     free_ports
