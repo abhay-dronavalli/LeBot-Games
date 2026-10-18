@@ -8,12 +8,11 @@
 --                             arm is nil until the arm reports (the arm twin then shows its rest pose).
 --   StateStore.update(msg) -> store a new state message (what the Bridge calls) and fire changed
 --   StateStore.changed     -> signal (BindableEvent.Event) fired after every state update
--- With PatternMatch.Config.useFakeState = true, the server changes one thing every 2 s: it moves, adds
--- or removes a block on the 4x3 grid, stacks a block on top of a grid block (level = tower height so far,
--- up to Config.maxStackGlobal), or adds/drops one off-grid block (in the tray, or on a cell boundary) or
--- one held block so the game can be seen ignoring those. Moves and removes take a cell's top block.
+-- With PatternMatch.Config.useFakeState = true, the server publishes a fake arm (small waves around the
+-- twin's rest pose) 20 times a second. Blocks only change through the Debug hook below or debugAutoSolve
+-- (no random placements: the idle board is Pattern Match's attract-mode demo, which never writes here).
 -- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
--- no random changes during a shift, and 3 s after each ticket becomes active the board is rebuilt to
+-- 3 s after each ticket becomes active the board is rebuilt to
 -- match it, reusing the blocks already there (rebuiltBlocks; leftovers go to the tray). The delay
 -- ignores debugFastTimers.
 -- In fake mode a server-only BindableEvent StateStore.Debug takes test commands (see debugCommand).
@@ -45,20 +44,13 @@ end
 
 -- Fake mode ---------------------------------------------------------------
 
-local FAKE_INTERVAL = 2
 local FAKE_JITTER_CM = 0.5
-local FAKE_MAX_GRID_BLOCKS = 8
 local FAKE_HELD_Z_CM = 8
 local FAKE_BLOCK_CM = 3.5 -- block height: a level n block reports z = n * this (plan.md release rule)
 
 local rng = Random.new()
 local nextId = 10 -- block ids are ArUco marker ids, 10 and up
 local fakeCell = {} -- block id -> "B2" for on-grid fake blocks, "offgrid" or "held" for the others
-
--- Cell names match the printed sheet: row letter A-C, then column number 1-4.
-local function cellLabel(col, row)
-	return string.char(64 + row) .. col
-end
 
 local function cellCenterCm(col, row)
 	local size = Config.cellSizeCm
@@ -88,116 +80,6 @@ local function newBlock(x, y, tag, color, level)
 	nextId += 1
 	fakeCell[block.id] = tag
 	return block
-end
-
-local function pick(list)
-	return list[rng:NextInteger(1, #list)]
-end
-
-local function fakeStep()
-	local blocks = table.clone(state.blocks)
-	local onGrid, offGrid, held, towers = 0, nil, nil, {} -- towers: cell -> index of its top block, and height
-	for i, block in ipairs(blocks) do
-		local tag = fakeCell[block.id]
-		if tag == "offgrid" then
-			offGrid = i
-		elseif tag == "held" then
-			held = i
-		else
-			onGrid += 1
-			local tower = towers[tag]
-			if not tower then
-				tower = { top = i, height = 0 }
-				towers[tag] = tower
-			end
-			tower.height += 1
-			if (block.level or 0) >= (blocks[tower.top].level or 0) then
-				tower.top = i
-			end
-		end
-	end
-	local free, cells, stackable = {}, {}, {}
-	for col = 1, Config.gridCols do
-		for row = 1, Config.gridRows do
-			local cell = cellLabel(col, row)
-			local tower = towers[cell]
-			if not tower then
-				table.insert(free, { col, row })
-			else
-				table.insert(cells, cell)
-				if tower.height < Config.maxStackGlobal then
-					table.insert(stackable, cell)
-				end
-			end
-		end
-	end
-
-	local choices = { "offgrid", "held" }
-	if #free > 0 and onGrid < FAKE_MAX_GRID_BLOCKS then table.insert(choices, "add"); table.insert(choices, "add") end
-	if #stackable > 0 and onGrid < FAKE_MAX_GRID_BLOCKS then table.insert(choices, "stack") end
-	if #cells > 0 and #free > 0 then table.insert(choices, "move"); table.insert(choices, "move") end
-	if #cells > 0 then table.insert(choices, "remove") end
-	local action = pick(choices)
-
-	local msg
-	if action == "add" or action == "move" then
-		local spot = pick(free)
-		local cell = cellLabel(spot[1], spot[2])
-		local cx, cy = cellCenterCm(spot[1], spot[2])
-		local x = cx + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
-		local y = cy + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
-		if action == "add" then
-			local block = newBlock(x, y, cell)
-			table.insert(blocks, block)
-			msg = string.format("add %s %s at %s", block.id, block.color, cell)
-		else
-			local i = towers[pick(cells)].top
-			local block = table.clone(blocks[i])
-			msg = string.format("move %s %s %s (level %d) -> %s", block.id, block.color, fakeCell[block.id], block.level, cell)
-			block.x, block.y, block.z, block.level = x, y, 0, 0
-			fakeCell[block.id] = cell
-			blocks[i] = block
-		end
-	elseif action == "stack" then
-		local cell = pick(stackable)
-		local tower = towers[cell]
-		local under = blocks[tower.top]
-		local block = newBlock(under.x, under.y, cell, nil, tower.height)
-		table.insert(blocks, block)
-		msg = string.format("stack %s %s on %s at level %d", block.id, block.color, cell, block.level)
-	elseif action == "remove" then
-		local block = table.remove(blocks, towers[pick(cells)].top)
-		msg = string.format("remove %s %s from %s (level %d)", block.id, block.color, fakeCell[block.id], block.level)
-		fakeCell[block.id] = nil
-	elseif action == "offgrid" and offGrid then
-		local block = table.remove(blocks, offGrid)
-		msg = "remove off-grid " .. block.id
-		fakeCell[block.id] = nil
-	elseif action == "offgrid" then
-		-- Either parked in the tray strip past column 4, or right on a column boundary.
-		local inTray = rng:NextNumber() < 0.5
-		local _, y = cellCenterCm(1, rng:NextInteger(1, Config.gridRows))
-		local x = Config.gridOriginCm.X + Config.cellSizeCm
-			* (inTray and Config.gridCols + 0.5 or rng:NextInteger(1, Config.gridCols - 1))
-		local block = newBlock(x, y, "offgrid")
-		if inTray then
-			block.zone = "tray"
-		end
-		table.insert(blocks, block)
-		msg = string.format("add off-grid %s %s at (%.1f, %.1f) cm, zone %s", block.id, block.color, x, y, block.zone)
-	elseif held then
-		local block = table.remove(blocks, held)
-		msg = "drop held " .. block.id
-		fakeCell[block.id] = nil
-	else
-		local col, row = rng:NextInteger(1, Config.gridCols), rng:NextInteger(1, Config.gridRows)
-		local x, y = cellCenterCm(col, row)
-		local block = newBlock(x, y, "held")
-		table.insert(blocks, block)
-		msg = string.format("add held %s %s over %s", block.id, block.color, cellLabel(col, row))
-	end
-
-	return blocks, msg
 end
 
 -- Stores a new state message around the given block list (and arm angles, else the current ones;
@@ -319,8 +201,6 @@ local function rebuiltBlocks(target)
 		moved, added, math.min(#pool, FAKE_TRAY_MAX))
 end
 
-local autoSolvePaused = false -- debugAutoSolve: no random changes while a shift runs
-local debugPaused = false     -- set by the Debug hook's "pause" command
 local currentTarget = nil     -- the game's active ticket target, for the Debug hook's "solve"
 
 -- Follows the Pattern Match game (PatternMatch.Remotes.PatternState, fired on every state change and
@@ -336,7 +216,6 @@ local function followGame()
 		if not Config.debugAutoSolve then
 			return
 		end
-		autoSolvePaused = info.state == "Shift"
 		if info.state == "Shift" and info.target then
 			task.delay(AUTO_SOLVE_DELAY, function()
 				if generation == mine then
@@ -350,7 +229,6 @@ local function followGame()
 end
 
 -- Testing hook, server only: ReplicatedStorage.Core.StateStore.Debug:Fire(command) with
---   { op = "pause", on = true | false }        stop or resume the random changes
 --   { op = "add", cell = "B2", color = "red", level = 1 } add a block at that cell's center, at the given
 --                                              stack level (default 0, the table)
 --   { op = "remove", cell = "B2" }             remove the fake blocks on that cell, every level
@@ -361,9 +239,7 @@ end
 --   { op = "arm", off = true }                 stop sending arm data (state.arm = nil): the twin eases
 --                                              back to its rest pose after ArmTwin.Driver's stale timeout
 local function debugCommand(cmd)
-	if cmd.op == "pause" then
-		debugPaused = cmd.on ~= false
-	elseif cmd.op == "arm" then
+	if cmd.op == "arm" then
 		if cmd.off then
 			fixedArm = false
 		else
@@ -406,16 +282,6 @@ if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
 				publish(state.blocks, false)
 			else
 				publish(state.blocks, fixedArm or fakeArm(os.clock() - started))
-			end
-		end
-	end)
-	task.spawn(function()
-		while true do
-			task.wait(FAKE_INTERVAL)
-			if not autoSolvePaused and not debugPaused then
-				local blocks, msg = fakeStep()
-				print("[StateStore fake] " .. msg)
-				publish(blocks)
 			end
 		end
 	end)

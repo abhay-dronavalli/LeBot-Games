@@ -2,7 +2,7 @@
 -- Tunables for Pattern Match. See docs/pattern-match-v1.md section 8.
 
 return {
-	useFakeState = true,                 -- Core.StateStore stand-in invents blocks; set false once the real core is in
+	useFakeState = true,                 -- Core.StateStore stand-in (fake arm, Debug hook, debugAutoSolve); set false once the real core is in
 	gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)
 	gridOriginCm = Vector2.new(2.540, 2.223), -- table cm of cell A1's outer corner (the corner nearest tag 0)
 	cellSizeCm = 5.715,                  -- measured on the printed sheet
@@ -30,6 +30,9 @@ return {
 	ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
 	ticketPoints = { ticket = 1, flat = 1, stacked = 3 }, -- per ticket, per level 0 block, per level 1 block
 	holdToClear = 1,
+	attractEnabled = true,               -- Idle: demo loop on the boards (PatternMatch.Attract)
+	attractPlaceInterval = 0.7,          -- seconds between the demo's block placements
+	attractPatterns = 5,                 -- demo patterns per set before a fresh set is generated
 	modeSelectSeconds = 15,
 	modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
 	resultsSeconds = 10,

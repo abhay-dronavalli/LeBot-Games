@@ -71,7 +71,11 @@ for _, name in ipairs({ "TargetBoard" }) do -- the LiveBoard and its arm twin ne
 end
 
 -- The arm twin: clients drive their copy of the rig from these samples (StarterPlayerScripts.ArmTwinClient).
+-- While the attract demo runs (Idle) no arm data goes out, so the twin rests in its folded pose.
 TwinDriver.serve(armPose, function()
+	if patternGame.attract.running then
+		return nil
+	end
 	return StateStore.get().arm
 end, 20)
 

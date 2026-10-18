@@ -442,6 +442,7 @@ if cab then
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
 		stateChanged = { Fire = function(_, info) table.insert(changes, info) end },
 		rng = Random.new(11),
+		manualAttract = true, -- the Idle demo only moves when a test advances it
 	})
 	local function steps(n, dt)
 		for _ = 1, n do g:step(dt) end
@@ -527,6 +528,10 @@ if cab then
 	check("0.75 s of a match: not yet (hold 1 s)", railIds(), "1,2,3,4")
 	g:step(0.25)
 	check("1 s: ORDER UP, ticket 3 leaves the rail", railIds(), "1,2,4")
+	check("ORDER UP plays the shared celebration: big text, sparkles on both boards, cells flashed white",
+		g.celebrate.label.Text .. " | " .. tostring(g.celebrate.gui.Enabled) .. " " .. tostring(g.celebrate.emitters[1].Enabled and g.celebrate.emitters[2].Enabled)
+		.. " " .. tostring(board.LiveBoard.B2.Color == g.celebrate.FLASH_COLOR or board.LiveBoard.B2.Color ~= cab.LiveBoard.B2.Color),
+		"ORDER UP! +6 | true true true")
 	check("points: 1 + 2 flat + 3 stacked = 6", g.score .. " " .. sent[#sent].completedCount, "6 1")
 	check("+3 s on the shift timer", math.abs(g.timeLeft - (before - 1 + Config.ticketTimeBonus)) < 0.01, true)
 	check("payload orderUp: id / points / bonus", sent[#sent].orderUp.id .. " " .. sent[#sent].orderUp.points .. " " .. sent[#sent].orderUp.bonus, "3 6 3")
@@ -977,6 +982,178 @@ if twinTemplate then
 	twinModel:Destroy()
 else
 	check("ReplicatedStorage.ArmTwin exists", false, true)
+end
+
+section("26. attract mode: the Idle demo loop")
+if cab then
+	local AttractModule = require(pm.Attract)
+	local board = cab:Clone()
+	local storeBlocks = { block("A1", "red") } -- what the (fake) StateStore holds
+	local snapshot
+	local function storeText()
+		local parts = {}
+		for _, b in ipairs(storeBlocks) do
+			table.insert(parts, b.id .. ":" .. b.color .. ":" .. b.x .. ":" .. b.y .. ":" .. b.level)
+		end
+		return #storeBlocks .. "|" .. table.concat(parts, ",")
+	end
+	snapshot = storeText()
+	local storeWrites = 0
+	local store = setmetatable({
+		get = function() return { blocks = storeBlocks } end,
+		update = function() storeWrites += 1 end,
+	}, { __newindex = function(t, k, v) storeWrites += 1; rawset(t, k, v) end })
+	local sent = {}
+	local g = Game.new({ cabinet = board, store = store, core = { fire = function() end },
+		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end }, manualAttract = true })
+	local A = g.attract
+	local livePool, targetPool = g.liveBoard.blocks, g.targetBoard.blocks
+	local function shown(pool)
+		local n = 0
+		for _, tower in pairs(pool.parts) do
+			for _, part in pairs(tower) do
+				if part.Transparency == 0 then n += 1 end
+			end
+		end
+		return n
+	end
+	local function atRest(pool)
+		for cell, tower in pairs(pool.parts) do
+			for level, part in pairs(tower) do
+				local rest = require(pm.BlockPool).restOn(pool.tiles[cell], level, pool.width)
+				if (part.Position - rest.Position).Magnitude > 0.001 or math.abs(part.Size.X - pool.width) > 0.001 then return false end
+			end
+		end
+		return true
+	end
+	-- Runs the demo until its pattern index changes (or a time limit), in 0.05 s steps.
+	local function finishPattern()
+		local from, elapsed = A.index, 0
+		repeat A:advance(0.05); elapsed += 0.05 until A.index ~= from or elapsed > 30
+	end
+
+	g:setState("Idle")
+	check("Idle starts the demo, with the sign above the boards", tostring(A.running) .. " " .. tostring(board.AttractSign.Sign.Enabled)
+		.. " | " .. board.AttractSign.Sign.Title.Text .. " | " .. board.AttractSign.Sign.Subtitle.Text,
+		"true true | Match the target board! | Press Play to start")
+	local n, tallest = Target.count(A.target)
+	check("TargetBoard shows a 2-4 block demo pattern, the LiveBoard starts empty", n >= 2 and n <= 4 and shown(targetPool) == n
+		and shown(livePool) == 0, true)
+	g:step(0.2)
+	check("Game:step leaves the LiveBoard to the demo (the store's A1 block is not drawn)", shown(livePool), 0)
+	local order = AttractModule.placements(A.target)
+	local stackedFirst = false
+	local seenTop = false
+	for _, step in ipairs(order) do
+		if step.level > 0 then seenTop = true elseif seenTop then stackedFirst = true end
+	end
+	check("placement order: every bottom block before any stacked block", stackedFirst, false)
+	A:advance(AttractModule.SHOW_SECONDS + 0.01)
+	A:advance(0.01)
+	local first = order[1]
+	local part = livePool:part(first.cell, first.level)
+	local rest = require(pm.BlockPool).restOn(livePool.tiles[first.cell], first.level, livePool.width)
+	check("first block placed in its color, dropping in from above", shown(livePool) .. " " .. tostring(part.Color == Config.colors[first.color])
+		.. " " .. tostring(part.Position.Y - rest.Position.Y > 1), "1 true true")
+	A:advance(AttractModule.DROP_SECONDS)
+	check("...and it lands on its rest place", (part.Position - rest.Position).Magnitude < 0.001, true)
+	local counts = { shown(livePool) }
+	for _ = 2, n do
+		A:advance(Config.attractPlaceInterval - AttractModule.DROP_SECONDS)
+		A:advance(AttractModule.DROP_SECONDS)
+		table.insert(counts, shown(livePool))
+	end
+	check("one block per " .. Config.attractPlaceInterval .. " s until the pattern is built", table.concat(counts, ","),
+		table.concat((function() local t = {} for i = 1, n do t[i] = i end return t end)(), ","))
+	check("the LiveBoard now matches the target", Target.compare(A.target, (function()
+		local lg = {}
+		for cell, tower in pairs(livePool.parts) do
+			for level, p in pairs(tower) do
+				if p.Transparency == 0 then
+					lg[cell] = lg[cell] or {}
+					for name, color in pairs(Config.colors) do
+						if color == p.Color then lg[cell][level] = { name } end
+					end
+				end
+			end
+		end
+		return lg
+	end)(), {}).clear, true)
+	A:advance(Config.attractPlaceInterval)
+	check("matched: a short hold before COMPLETE!", A.phase .. " " .. A.completions, "hold 0")
+	A:advance(AttractModule.HOLD_SECONDS + 0.01)
+	local C = g.celebrate
+	local sparkling = 0
+	for _, emitter in ipairs(C.emitters) do if emitter.Enabled then sparkling += 1 end end
+	check("COMPLETE!: the shared celebration text pops in (starts small), the sign steps aside",
+		C.label.Text .. " " .. tostring(C.gui.Enabled) .. " " .. tostring(C.scale.Scale < 1) .. " " .. tostring(board.AttractSign.Sign.Enabled) .. " " .. A.completions,
+		"COMPLETE! true true false 1")
+	local flashed = 0
+	for _, tile in ipairs(C.tiles) do if tile.part.Color == C.FLASH_COLOR then flashed += 1 end end
+	check("sparkle burst on both boards, every cell of both boards flashed white", sparkling .. " " .. flashed .. "/" .. #C.tiles, "2 24/24")
+	local emitter = C.emitters[1]
+	check("a bigger, longer burst: rate 450, size up to 1.8, particles up to 1.6 s", string.format("%d %.1f %.1f", emitter.Rate,
+		emitter.Size.Keypoints[1].Value, emitter.Lifetime.Max), "450 1.8 1.6")
+	A:advance(AttractModule.POP_SECONDS / 3)
+	check("blocks swell as they pop", livePool:part(first.cell, first.level).Size.X > livePool.width, true)
+	A:advance(AttractModule.POP_SECONDS)
+	check("blocks popped away on both boards, back to full size", shown(livePool) .. " " .. shown(targetPool) .. " "
+		.. tostring(atRest(livePool) and atRest(targetPool)), "0 0 true")
+	task.wait(C.SECONDS + 0.2) -- the celebration runs on real time
+	local restored = 0
+	for _, tile in ipairs(C.tiles) do if tile.part.Color == tile.color then restored += 1 end end
+	check("after ~1.5 s: sparkles off, text gone, every cell back to its wood color", tostring(C.emitters[1].Enabled or C.emitters[2].Enabled)
+		.. " " .. tostring(C.gui.Enabled) .. " " .. restored .. "/" .. #C.tiles, "false false 24/24")
+	A:advance(AttractModule.GAP_SECONDS + 0.01)
+	check("after the gap: the next pattern, sign back to the invitation", A.index .. " " .. tostring(shown(targetPool) > 0)
+		.. " " .. board.AttractSign.Sign.Title.Text, "2 true Match the target board!")
+	local firstSet = A.set
+	for _ = A.index, Config.attractPatterns do finishPattern() end
+	check("after " .. Config.attractPatterns .. " patterns: a fresh set, from its first pattern", tostring(A.set ~= firstSet) .. " " .. A.index
+		.. " " .. A.completions, "true 1 " .. Config.attractPatterns)
+	local setsWithStack = 0
+	for _ = 1, 40 do
+		for _, t in ipairs(A:newSet()) do
+			local _, high = Target.count(t)
+			if high > 1 then setsWithStack += 1 break end
+		end
+	end
+	check("every demo set has at least one stacked pattern (40 sets)", setsWithStack, 40)
+
+	-- Stop on mode select, mid-placement.
+	A:advance(AttractModule.SHOW_SECONDS + 0.01)
+	A:advance(0.01)
+	A:advance(Config.attractPlaceInterval)
+	check("mid-placement before Play", shown(livePool) >= 1 and shown(targetPool) >= 2, true)
+	check("the demo never wrote to the StateStore", storeWrites .. " " .. tostring(storeText() == snapshot), "0 true")
+	check("Attract does not require Core.StateStore", string.find(pm.Attract.Source, "require%([^)]*StateStore") == nil, true)
+	g.celebrate:burst("COMPLETE!") -- a burst in flight when Play is pressed
+	g:start({ Name = "Tester", UserId = 1 })
+	check("mode select stops the demo", g.state .. " " .. tostring(A.running), "ModeSelect false")
+	local exact = 0
+	for _, tile in ipairs(g.celebrate.tiles) do if tile.part.Color == tile.color then exact += 1 end end
+	check("...and cuts a celebration short: cells back to wood at once", exact .. "/" .. #g.celebrate.tiles, "24/24")
+	check("both boards cleared, every block back at rest, sign and sparkles off", shown(livePool) .. " " .. shown(targetPool) .. " "
+		.. tostring(atRest(livePool) and atRest(targetPool)) .. " " .. tostring(board.AttractSign.Sign.Enabled) .. " "
+		.. tostring(g.celebrate.emitters[1].Enabled or g.celebrate.emitters[2].Enabled or g.celebrate.gui.Enabled), "0 0 true false false")
+	A:advance(5)
+	check("no timers left: advancing a stopped demo changes nothing", shown(livePool) .. " " .. shown(targetPool), "0 0")
+	g:step(0.2)
+	check("the game draws the LiveBoard from the store again (A1 red)", livePool:part("A1", 0).Transparency == 0
+		and livePool:part("A1", 0).Color == Config.colors.red, true)
+	check("still no StateStore writes", storeWrites .. " " .. tostring(storeText() == snapshot), "0 true")
+
+	-- Back to Idle after Results: the demo starts again.
+	g:setState("Results")
+	check("Results: no demo", A.running, false)
+	g:step(Config.resultsSeconds)
+	check("Idle after Results restarts the demo", g.state .. " " .. tostring(A.running) .. " " .. tostring(shown(targetPool) > 0), "Idle true true")
+	Config.attractEnabled = false
+	g:start({ Name = "Tester", UserId = 1 })
+	g:setState("Idle")
+	check("attractEnabled = false: Idle without the demo", tostring(A.running) .. " " .. shown(targetPool), "false 0")
+	Config.attractEnabled = true
+	board:Destroy()
 end
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

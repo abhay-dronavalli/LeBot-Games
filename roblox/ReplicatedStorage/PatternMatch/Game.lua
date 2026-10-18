@@ -9,6 +9,9 @@
 -- it completes: ORDER UP, points, +Config.ticketTimeBonus seconds, off the rail, and the oldest
 -- remaining ticket becomes active (an empty rail gets the next ticket right away). Blocks stay on the
 -- board between tickets. The shift ends when the timer hits 0: Results, then Idle.
+-- While Idle, PatternMatch.Attract plays a demo loop on both boards (Config.attractEnabled); it stops and
+-- clears both boards the moment any other state starts, and the LiveBoard isn't drawn from StateStore
+-- while it runs.
 -- Easy and Hard modes; events (PatternMatch.PatternEvents) run during the shift. Each state is an
 -- enter/tick pair in `states`. Every 0.2 s, step() redraws the LiveBoard from StateStore (in every
 -- state, idle included), counts down, ticks the current state and pushes the HUD payload if anything
@@ -20,6 +23,8 @@ local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
 local TargetBoard = require(script.Parent.TargetBoard)
 local PatternEvents = require(script.Parent.PatternEvents)
+local Attract = require(script.Parent.Attract)
+local Celebrate = require(script.Parent.Celebrate)
 
 local TICK = 0.2
 
@@ -99,7 +104,11 @@ states.Idle = {
 	enter = function(self)
 		self.mode = nil -- score and completed stay, so the HUD shows the last shift
 		self.tickets, self.activeId = {}, nil
-		self.targetBoard:show(nil)
+		if Config.attractEnabled then
+			self.attract:start() -- draws its own boards; a no-op when it is already running
+		else
+			self.targetBoard:show(nil)
+		end
 		self.message = "Walk up to the pad and press E to play Pattern Match."
 	end,
 }
@@ -209,7 +218,8 @@ states.Results = {
 -- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), core (Core.Events),
 -- ui (PatternUI RemoteEvent), stateChanged (optional BindableEvent, fired with
 -- { state, mode, activeId, target } on every state change and every active ticket change, where target
--- is the active ticket's target), rng (optional Random for tickets, for repeatable tests)
+-- is the active ticket's target), rng (optional Random for tickets, for repeatable tests), manualAttract
+-- (true: the attract demo only moves when tests call game.attract:advance(dt))
 function Game.new(opts)
 	local self = setmetatable({}, Game)
 	self.store = opts.store
@@ -221,6 +231,10 @@ function Game.new(opts)
 	self.targetBoard = TargetBoard.new(targetModel)
 	self.liveBoard = LiveBoard.new(liveModel)
 	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard })
+	-- The shared "matched" moment: the attract demo's COMPLETE! and the shift's ORDER UP.
+	self.celebrate = Celebrate.new(opts.cabinet, { targetModel, liveModel })
+	self.attract = Attract.new({ cabinet = opts.cabinet, targetBoard = self.targetBoard, liveBoard = self.liveBoard,
+		celebrate = self.celebrate, manual = opts.manualAttract })
 	self.liveGrid = {}
 	self.state = "Idle"
 	self.mode, self.score, self.completed = nil, 0, {}
@@ -359,6 +373,7 @@ function Game:completeTicket(ticket)
 	self.orderUpSeq += 1
 	self.orderUp = { id = ticket.id, points = ticket.points, bonus = Config.ticketTimeBonus, seq = self.orderUpSeq }
 	self.message = string.format("ORDER UP! Ticket #%d +%d", ticket.id, ticket.points)
+	self.celebrate:burst(string.format("ORDER UP! +%d", ticket.points)) -- same moment as the demo's COMPLETE!
 	log("ORDER UP: ticket #%d, +%d points (score %d), +%d s", ticket.id, ticket.points, self.score, Config.ticketTimeBonus)
 	self.activeId = nil
 	if #self.tickets == 0 then
@@ -382,7 +397,11 @@ end
 
 -- One tick: redraw the LiveBoard, count down, tick the current state, update the HUD if it changed.
 function Game:step(dt)
-	self.liveGrid = self.liveBoard:render(self.store.get().blocks)
+	if self.attract.running then
+		self.liveGrid = {} -- the attract demo owns the LiveBoard while it runs
+	else
+		self.liveGrid = self.liveBoard:render(self.store.get().blocks)
+	end
 	if self.timerRunning then
 		self.timeLeft = math.max(0, self.timeLeft - dt)
 	end
@@ -396,6 +415,9 @@ function Game:step(dt)
 end
 
 function Game:setState(name)
+	if name ~= "Idle" then
+		self.attract:stop() -- cancels its timers and animations and clears both boards
+	end
 	self.state = name
 	self.timerRunning = false
 	self.timeLeft = 0

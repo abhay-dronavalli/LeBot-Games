@@ -1,11 +1,13 @@
 -- StarterGui.PatternHud.HudClient
 -- Pattern Match HUD, driven by the PatternUI remote payload (PatternMatch.Game:payload):
---   - Ticket rail (top left, Papa's-style): paper ticket cards hanging on a rail, oldest on the left.
+--   - Ticket rail (bottom left, Papa's-style): paper ticket cards standing on a rail along the bottom edge,
+--     oldest on the left, clear of the top-left chat and Roblox buttons and the top-right status panel.
 --     Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like
 --     the board seen from the row C side; a stacked cell is split, top color over bottom color, with a
 --     small "2" badge), its point value and its age. The active ticket is raised with a colored border.
 --     Clicking a card makes it active (TicketPick remote). New cards slide in; a completed card flies off
---     with "ORDER UP!" and its points. In Hard mode's hidden phase the squares go gray, layout kept.
+--     with an "ORDER UP!" stamp and its points (the big ORDER UP text is in 3D above the boards). In Hard
+--     mode's hidden phase the squares go gray, layout kept.
 --   - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets done,
 --     the Hard reveal phase, the event banner and the game message.
 --   - Results screen at the end of a shift: tickets completed, total points, one line per ticket.
@@ -31,7 +33,8 @@ local CAMERA_SHAKE_RADIANS = math.rad(0.6)
 
 local CARD_W, CARD_H = 124, 158
 local CARD_GAP = 14
-local RAIL_X, RAIL_Y = 16, 10
+local RAIL_X, RAIL_BOTTOM = 16, 12 -- rail offset from the screen's left and bottom edges
+local RAIL_H = CARD_H + 30
 local CELL, CELL_GAP = 22, 3
 local PAPER = Color3.fromRGB(252, 247, 234)
 local PAPER_EDGE = Color3.fromRGB(214, 202, 178)
@@ -42,7 +45,7 @@ local ACTIVE_BORDER = Color3.fromRGB(255, 138, 30)
 local GOOD = Color3.fromRGB(90, 220, 120)
 local SLIDE = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local SHIFT = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local FLY = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+local FLY = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 local screen = script.Parent
 screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling -- a card's contents always draw over the card itself
@@ -81,15 +84,16 @@ end
 local rail = Instance.new("Frame")
 rail.Name = "Rail"
 rail.BackgroundTransparency = 1
-rail.Position = UDim2.fromOffset(RAIL_X, RAIL_Y)
-rail.Size = UDim2.fromOffset(Config.ticketRailMax * (CARD_W + CARD_GAP) + CARD_GAP, CARD_H + 30)
+rail.AnchorPoint = Vector2.new(0, 1)
+rail.Position = UDim2.new(0, RAIL_X, 1, -RAIL_BOTTOM)
+rail.Size = UDim2.fromOffset(Config.ticketRailMax * (CARD_W + CARD_GAP) + CARD_GAP, RAIL_H)
 rail.Parent = root
 
 local bar = Instance.new("Frame") -- the metal rail the tickets hang from
 bar.Name = "Bar"
 bar.BorderSizePixel = 0
 bar.BackgroundColor3 = Color3.fromRGB(70, 74, 82)
-bar.Position = UDim2.fromOffset(0, 0)
+bar.Position = UDim2.new(0, 0, 1, -8) -- along the bottom; the cards stand on it
 bar.Size = UDim2.new(1, 0, 0, 8)
 bar.ZIndex = 5
 bar.Parent = rail
@@ -103,7 +107,7 @@ local cards = {}      -- ticket id -> { button, cells = { cell -> { bottom, top,
 local lastOrderSeq = nil -- seq of the last ORDER UP shown; set from the first payload without animating
 
 local function slotPosition(index, active)
-	return UDim2.fromOffset(CARD_GAP + (index - 1) * (CARD_W + CARD_GAP), active and 2 or 6)
+	return UDim2.fromOffset(CARD_GAP + (index - 1) * (CARD_W + CARD_GAP), RAIL_H - 8 - CARD_H - (active and 10 or 2))
 end
 
 local function newCard(ticket)
@@ -128,8 +132,8 @@ local function newCard(ticket)
 	clip.Name = "Clip"
 	clip.BorderSizePixel = 0
 	clip.BackgroundColor3 = Color3.fromRGB(150, 155, 165)
-	clip.AnchorPoint = Vector2.new(0.5, 0)
-	clip.Position = UDim2.new(0.5, 0, 0, -8)
+	clip.AnchorPoint = Vector2.new(0.5, 1)
+	clip.Position = UDim2.new(0.5, 0, 1, 8) -- holds the card's foot on the rail
 	clip.Size = UDim2.fromOffset(26, 14)
 	clip.ZIndex = 6
 	clip.Parent = button
@@ -230,28 +234,10 @@ local function setActiveLook(card, active)
 	TweenService:Create(card.scale, SHIFT, { Scale = active and 1.06 or 1 }):Play()
 end
 
--- Big "ORDER UP!" in the middle of the screen, and the card flying off the rail with its points.
-local orderBanner = text(root, "OrderUp", { Font = Enum.Font.GothamBlack, TextSize = 64, TextColor3 = Color3.fromRGB(255, 214, 60),
-	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.36), Size = UDim2.fromOffset(700, 90),
-	TextTransparency = 1, ZIndex = 20 })
-local orderStroke = Instance.new("UIStroke")
-orderStroke.Thickness = 4
-orderStroke.Color = Color3.fromRGB(120, 40, 0)
-orderStroke.Transparency = 1
-orderStroke.Parent = orderBanner
-
+-- The completed card gets an "ORDER UP! +points" stamp and flies up and off the screen. The big
+-- "ORDER UP! +points" itself pops in above the boards in 3D (PatternMatch.Celebrate on the server, the same
+-- moment as the attract demo's COMPLETE!), so the HUD doesn't repeat it.
 local function orderUp(info, card)
-	orderBanner.Text = string.format("ORDER UP!  +%d", info.points)
-	orderBanner.TextTransparency, orderStroke.Transparency = 0, 0
-	local pop = Instance.new("UIScale")
-	pop.Scale = 0.6
-	pop.Parent = orderBanner
-	TweenService:Create(pop, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-	task.delay(1.1, function()
-		TweenService:Create(orderBanner, TweenInfo.new(0.4), { TextTransparency = 1 }):Play()
-		TweenService:Create(orderStroke, TweenInfo.new(0.4), { Transparency = 1 }):Play()
-		task.delay(0.45, function() pop:Destroy() end)
-	end)
 	if card then
 		local stamp = text(card.button, "Stamp", { Text = "ORDER UP!\n+" .. info.points, Font = Enum.Font.GothamBlack, TextSize = 20,
 			TextColor3 = Color3.fromRGB(30, 150, 60), Rotation = -12, BackgroundTransparency = 0.15, BackgroundColor3 = PAPER,
@@ -259,8 +245,8 @@ local function orderUp(info, card)
 		corner(stamp, 6)
 		task.delay(0.35, function()
 			local p = card.button.Position
-			TweenService:Create(card.button, FLY, { Position = p + UDim2.fromOffset(40, -CARD_H - 80), Rotation = 18 }):Play()
-			task.delay(0.75, function() card.button:Destroy() end)
+			TweenService:Create(card.button, FLY, { Position = p + UDim2.fromOffset(60, -1400), Rotation = 18 }):Play() -- up and out
+			task.delay(0.95, function() card.button:Destroy() end)
 		end)
 	end
 end
@@ -375,7 +361,7 @@ local function updateRail(p)
 			card = newCard(ticket)
 			cards[ticket.id] = card
 			-- slide in from the right end of the rail
-			card.button.Position = slotPosition(index, active) + UDim2.fromOffset(CARD_W * 2, -30)
+			card.button.Position = slotPosition(index, active) + UDim2.fromOffset(CARD_W * 2, 40)
 			card.button.Rotation = 8
 			TweenService:Create(card.button, SLIDE, { Position = slotPosition(index, active), Rotation = 0 }):Play()
 		else

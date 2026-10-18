@@ -28,6 +28,16 @@ Lobby -> enter Pattern cabinet -> MODE SELECT -> SHIFT (tickets) -> RESULTS -> b
 
 A Papa's-style ticket shift: one timer, target patterns arriving as tickets on a rail, made one at a time.
 
+### Attract mode (Idle)
+While the game is Idle (players in the room, before Play), `PatternMatch.Attract` runs a demo loop on the boards, driven by the server so everyone sees the same thing:
+- The TargetBoard shows a pattern (`Target.generate`, 2-4 blocks). The LiveBoard places the matching blocks one at a time, `Config.attractPlaceInterval` (0.7 s) apart, each dropping in with a short ease; all bottom blocks first, then the stacked ones on top of them.
+- Matched: a short pause, then the celebration (below) with "COMPLETE!", the blocks on both boards swell and shrink away, a short gap, then the next pattern.
+- `Config.attractPatterns` (5) patterns per set, at least one with a stack, then a fresh set, forever.
+- A floating sign above the boards (`PatternCabinet.AttractSign`, a BillboardGui) reads "Match the target board!" / "Press Play to start".
+- No arm data goes to the clients while it runs, so the arm twin rests in its folded pose.
+- It writes only to the two boards' renderers, its own sign and the celebration. It never touches `Core.StateStore` or anything the game reads, and the LiveBoard is not drawn from StateStore while it runs.
+- The moment mode select (or a forced mode) starts, it stops at once: no timers or animations left, both boards cleared, every block back at its rest place, sign and sparkles off. The normal game then draws the boards. It starts again whenever the game returns to Idle (after Results). `Config.attractEnabled = false` turns it off.
+
 ### Mode select
 - Camera flies to a low front-left shot of the table inside the bedroom, the room blurred behind it (section 5, depth of field). ScreenGui with two black tiles: Easy and Hard, each with an image.
 - 15 s countdown; no pick = Easy.
@@ -47,10 +57,17 @@ A Papa's-style ticket shift: one timer, target patterns arriving as tickets on a
 - Each completed ticket = `Config.ticketPoints`: 1 point + 1 per flat block (level 0) + 3 per stacked block (level 1). Example: 2 flat + 1 stacked on top = 1 + 2 + 3 = 6.
 - Each ticket card shows its point value.
 
+### Celebration (COMPLETE! and ORDER UP)
+`PatternMatch.Celebrate`, one shared effect for the attract demo's "COMPLETE!" and the shift's "ORDER UP! +points", so they feel the same. Server-driven, so everyone sees it:
+- A big sparkle burst rising off both boards for about 1.5 s: a `CelebrateSparkle` ParticleEmitter in each board's Base, rate 450, particles up to 1.8 studs, living up to 1.6 s.
+- A quick white flash on every cell of both boards; the squares then ease back to their wood colors.
+- Big text above the boards (`PatternCabinet.CelebrateText`, a BillboardGui, placed a little toward the TargetBoard so the arm twin doesn't cut through it) that pops in with a scale tween and stays up for 1.5 s, plus a pop sound.
+- Mode select (or any state change that stops the demo) cuts a celebration short and restores the cell colors at once.
+
 ### Ticket rail HUD (`StarterGui.PatternHud`)
-- Top left, Papa's-style: paper ticket cards hanging on a rail, oldest on the left. Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like the board seen from the row C side; a stacked cell is split, top color over bottom color, with a small "2" badge), its point value and its age.
+- Bottom left, Papa's-style: paper ticket cards standing on a rail along the bottom edge, oldest on the left. This keeps them clear of the top-left Roblox chat and buttons, the top-right status panel and the ORDER UP text. On mobile the rail shares the bottom-left corner with the thumbstick. Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like the board seen from the row C side; a stacked cell is split, top color over bottom color, with a small "2" badge), its point value and its age.
 - The active ticket is raised with an orange border and "ACTIVE". Clicking a card makes it active.
-- New tickets slide in; a completed ticket gets an "ORDER UP! +points" stamp and flies off the rail, with a big "ORDER UP! +points" in the middle of the screen.
+- New tickets slide in; a completed ticket gets an "ORDER UP! +points" stamp and flies up and off the screen. The big "ORDER UP! +points" is the 3D celebration above the boards, so the HUD doesn't repeat it.
 - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets completed, the Hard reveal phase, the event banner and the game message.
 
 ### Easy vs Hard
@@ -114,6 +131,8 @@ ReplicatedStorage
   PatternMatch.Target (ModuleScript)      generate, compare
   PatternMatch.LiveBoard (ModuleScript)   pooled block parts on the LiveBoard
   PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Shift (tickets), Results
+  PatternMatch.Attract (ModuleScript)     the Idle demo loop on the boards
+  PatternMatch.Celebrate (ModuleScript)   the shared COMPLETE! / ORDER UP celebration
   PatternMatch.PatternEvents (ModuleScript) event scheduler + vanish / tremor / inverted
   PatternMatch.TargetBoard (ModuleScript) target colors, Hard-mode hidden look
   PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
@@ -137,7 +156,7 @@ StarterGui
 
 ```lua
 return {
-  useFakeState = true,                 -- Core.StateStore stand-in invents blocks; set false once the real core is in
+  useFakeState = true,                 -- Core.StateStore stand-in (fake arm, Debug hook, debugAutoSolve); set false once the real core is in
   gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)
   gridOriginCm = Vector2.new(2.540, 2.223), -- table cm of cell A1's outer corner (the corner nearest tag 0)
   cellSizeCm = 5.715,                  -- measured on the printed sheet
@@ -165,6 +184,9 @@ return {
   ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
   ticketPoints = { ticket = 1, flat = 1, stacked = 3 }, -- per ticket, per level 0 block, per level 1 block
   holdToClear = 1,
+  attractEnabled = true,               -- Idle: demo loop on the boards (PatternMatch.Attract)
+  attractPlaceInterval = 0.7,          -- seconds between the demo's block placements
+  attractPatterns = 5,                 -- demo patterns per set before a fresh set is generated
   modeSelectSeconds = 15,
   modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
   resultsSeconds = 10,                 -- how long Results stays up before Idle
