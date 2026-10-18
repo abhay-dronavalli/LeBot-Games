@@ -18,15 +18,19 @@
 >
 > The divergences that matter:
 >
+>
 > | Plan says | Reality |
 > |---|---|
+> | Nine bays | **Four.** `Config.NumBays = 4` — Saw, Void, LaserWalk, DarkZone. Bays 5-9 are parked past that index and their geometry is in `ServerStorage.OutOfScope`; nothing was deleted |
 > | One block = one hazard, several hazards per bay (§4) | **One obstacle per 4×3 bay.** §4.1-4.2 are superseded — see README.md |
-> | A bay is cleared by filling the right cells | Still true for bays 2-9. **Bay 1 is cleared by an action** (`solveMode = "switches"`), with the crates as a ladder to reach it |
-> | `Bridge` feeds `cells` from the robot | Not built. `DebugMode` emits the same structure, so nothing downstream can tell |
-> | 14 cubes, "peak blocks" up to 6 per bay | Hard rule now: **2 cubes per colour**, so a bay may never ask for more than 2 of one |
-> | Section 12 protocol | Unchanged, still the contract. The robot side is untouched by this work |
+> | A bay is cleared by filling the right cells | True for **bay 2 only**. Bays 1, 3 and 4 are cleared by an **action** (`solveMode = "switches"` / `"action"`), with the crates as the means rather than the goal |
+> | Colour-coded blocks gate the hazards | **No colour test exists anywhere in the solve path.** Any block satisfies any cell; `level` (a cube count) is the only requirement. Every colour requirement in this document is superseded |
+> | `Bridge` feeds `cells` from the robot | **Built**, and verified end to end against a protocol-faithful mock — see [robot-link.md](robot-link.md). `DebugMode` is now the solo path rather than the only path |
+> | 14 cubes, "peak blocks" up to 6 per bay | **14 cubes total**, colour irrelevant. Every bay is designed around 1 or 2, and three-high stacks do not exist |
+> | Section 12 protocol | **Superseded** by the `robot-roblox-bridge` branch's `PROTOCOL.md` v1: the arm arrives as a stick figure of world points rather than joint angles, `blocks` replaces `cells`, `held` replaces `crane`, there is **no ArUco on the cubes**, and the effect names differ (`fog`, not `steam_lag`) — so §0's event-name row is superseded too |
 >
-> Part III (robot, vision, protocol) is **not** affected by any of this.
+> Part III (robot, vision, protocol) is otherwise unaffected — but read the live `hello` frame,
+> not §12, for the wire format.
 
 ---
 

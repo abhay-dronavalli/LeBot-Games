@@ -84,9 +84,12 @@ level — 6.72 and 13.44 studs are untouched and Bay 1's lever gate is unaffecte
 cube and the arm's own points use it, and both must agree or the jaw and the cube it carries
 drift apart.
 
-Measured in gantry mode: rig spans **6.97 → 19.95 studs** against a 28-stud ceiling, trolley
-slides the full **24 studs** of rail as the operator works across the mat, and all nine bays
-centre to within 0.5 studs.
+Measured in gantry mode: rig spans **6.97 → 19.95 studs**, trolley slides the full **24
+studs** of rail as the operator works across the mat, and every bay centres to within 0.5
+studs. That was measured against the then-28-stud ceiling; `Config.WallHeight` is **48** now
+(`build/fit_shell.lua` fits the shell to it), so the gantry has more headroom than these
+numbers imply, not less — the rails did not move, because they sit at `Config.GantryHeight`
+and the arm's reach is measured down from there.
 
 ## 5. What a literal mirror would cost
 
@@ -97,7 +100,9 @@ vertical extent was 0 → 38.8 studs mid-pose.
 
 Two consequences, both for the shell regeneration:
 
-- **Headroom.** `WallHeight` 28 is ~15–22 studs too short. Needs ~50.
+- **Headroom.** ~~`WallHeight` 28 is ~15–22 studs too short. Needs ~50.~~ **Done** —
+  `WallHeight` is 48 and `build/fit_shell.lua` fits the shell to it, so a literal mirror now
+  fits vertically. The footprint problem below is what still blocks it.
 - **Footprint.** `Mapping` puts the base 9.34 studs *behind* the bay's entrance edge, because
   the real arm sits 44.5 mm off the sheet. The catwalk is only `BayGap = 6` studs, so for bays
   2–9 the arm would stand **inside the previous bay** — which player 1 may still be in. It
@@ -124,21 +129,30 @@ fire it too, or a bay timing off it would simply never tick once the real arm is
 
 ## 6. Risks this surfaced
 
-**Colour is not reliable, and bays 2–9 solve on colour.** There is **no ArUco on the cubes** —
-AprilTags are only on the four mat corners, and cube identity comes from colour-blob perception
-plus nearest-neighbour association. The palette has nine names (`red, orange, yellow, green,
-teal, light blue, blue, purple, pink`) against the obby's seven, and `light blue` (hue 250) sits
-18° from `blue` (268). One misnamed cube makes a placement bay unsolvable.
+**Colour was not reliable — so the game stopped reading it.** ~~Bays 2–9 solve on colour.~~
+**Closed, and this is the risk that drove the project-wide rule.** There is **no ArUco on the
+cubes** — AprilTags are only on the four mat corners, and cube identity comes from colour-blob
+perception plus nearest-neighbour association. The palette has nine names (`red, orange,
+yellow, green, teal, light blue, blue, purple, pink`) against the obby's seven, and `light
+blue` (hue 250) sits 18° from `blue` (268), so one misnamed cube would have made a placement
+bay unsolvable.
 
-**Bay 1 is immune by luck.** Its lever gating is `supportHeight(ch) < lv.minStand` — height
-only. The colours in `BayData[1].levers` are advisory. Worth preserving deliberately as bays
-2–9 get their redesign pass.
+**There is now no colour test anywhere in the solve path.** Any block satisfies any cell;
+`level` (a cube count) is the only requirement. Crates still *spawn* in their colours and
+`BlockSync.obbyColor` collapses the two stray palette names onto their nearest obby colour, but
+that is appearance only — a crate of the "wrong" colour is still footing, which is what every
+bay actually needs. **Don't add a colour test back.**
+
+**Bay 1 was immune first, by luck.** Its lever gating is height only (now an *exact* stand
+level derived from `standLevel`), and the colours in `BayData[1].levers` were always advisory.
+That is the shape every other bay was then brought into line with.
 
 **The sweep un-solved every placement bay — found, reproduced, fixed.** To advance, player 2
-must clear the real mat and re-place for the next bay; there are only two cubes of each colour,
-so the cubes holding one bay open are the ones the next bay needs. Bays 2–9 solve by placement
-and `checkSolved` un-solved when cells cleared, so the sweep re-armed every bay behind player 1
-— the void opening back up under someone walking out of a bay they had already cleared.
+must clear the real mat and re-place for the next bay; the rig owns 14 cubes in total and each
+bay is designed around 1 or 2, so the cubes holding one bay open are the ones the next bay
+needs. Placement bays solve by `checkSolved`, which un-solved when cells cleared, so the sweep
+re-armed every bay behind player 1 — the void opening back up under someone walking out of a
+bay they had already cleared.
 
 Measured on Bay 2 before the fix:
 
@@ -150,8 +164,9 @@ Measured on Bay 2 before the fix:
 
 `HazardManager`'s `CellsChanged` handler now returns early when `state.solved` is already
 true, so a solved placement bay **latches**. After the fix, same scenario: solved at 4.7 s,
-mat swept to empty while solved, label stayed `CLEARED`. Switch-mode bays were already immune,
-which is why only that branch needed it; the R hotkey is still the way to genuinely un-solve.
+mat swept to empty while solved, label stayed `CLEARED`. Action bays were already immune,
+which is why only that branch needed it; the R hotkey — which now **rebuilds** every bay — is
+still the way to genuinely un-solve.
 The mock keeps a sweep step in its script so this cannot silently regress.
 
 ## 7. Verified

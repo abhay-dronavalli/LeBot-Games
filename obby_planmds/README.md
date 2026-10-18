@@ -13,7 +13,8 @@ plan is the original intent and has diverged.
 | [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
 | [bay-03-laser-walk.md](bay-03-laser-walk.md) | Bay 3, built and verified end to end. |
 
-One doc per scenario lands here as each bay is designed. Bays 4–9 don't have one yet.
+Every bay in scope has one. The parked bays (5–9) don't, and won't until `Config.NumBays`
+is raised.
 
 > **Correction.** This file and `obby_plan.md` both used to say Part III and the §12 protocol
 > were "still accurate and untouched". **§12 is superseded** by the `robot-roblox-bridge`
@@ -50,18 +51,19 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 | `Bridge` | `ServerScriptService/Bridge.lua` | The WebSocket link to the robot. Verbatim from the bridge branch |
 | `Mapping` | `ReplicatedStorage/Mapping.lua` | Sheet mm → studs. The scale is **pinned** by the cell size, not chosen |
 | `ArmMirror` | `ServerScriptService/ArmMirror.lua` | Literal stick-figure mirror. Off by default — see `Config.ArmStyle` |
-| `SkyArm` | `ServerScriptService/SkyArm.lua` | The gantry crane. Drives crate delivery in sim mode, and follows the real arm's tip in live mode |
 | `BridgeFeed` | `ServerScriptService/BridgeFeed.lua` | The live feed wired into the bay |
 | `RunControl` | `ServerScriptService/RunControl.lua` | Which bay is live and which source owns the crates |
 | `ActiveBayTracker` | `ServerScriptService/ActiveBayTracker.lua` | The sliding window: the mat follows the runner |
 | `DebugMenu` | `ServerScriptService/DebugMenu.lua` + client | Jump to any scenario, start a clean run, toggle player 2 |
+| `OverseerCam` | `StarterPlayerScripts/OverseerCam.client.lua` | Player 2's view: **V** for a drivable top-down shot of the active bay, x-ray walls, labelled cells, a mini grid |
 
-**Not built:** `ActiveBayTracker`, `GameState`/checkpoints, `Events` (malfunctions), scoring,
-win/fail screens, Demo Run, the overseer client.
+**Not built:** `GameState`/checkpoints, `Events` (malfunctions), scoring, win/fail screens,
+Demo Run, and — on the overseer side — role assignment and a `CONTROLLER OFFLINE` banner. The
+overseer *camera* exists; what's missing is deciding who is player 2 and telling them the link
+has dropped.
 
-`Bridge` (the real robot feed) exists in the place file but **not in the text mirror** — it
-arrived on the robot branch. Bay 3 publishes to it optionally, so a branch without it still
-plays. Anything that needs it must `pcall(require)` rather than assume it.
+`Bridge` is mirrored now, but bay 3 still reaches it through an optional
+`pcall(require)` so a branch without the robot link plays unchanged. Keep it that way.
 
 ### Against the plan's build order (§10.2)
 
@@ -72,7 +74,7 @@ plays. Anything that needs it must `pcall(require)` rather than assume it.
 | 3 `BlockSync` crate spawn, L1/L2 | ✅ |
 | 4 One bay playable with clock + checkpoint | ❌ no checkpoints or run clock |
 | 5 Crate effects and hazards | ✅ reinterpreted as one obstacle per bay |
-| 6 Bays 1–9, `ActiveBayTracker`, camera | ⚠️ bays exist; no real tracker, but `DebugMode` now follows an active bay so any bay can be played |
+| 6 Bays 1–9, `ActiveBayTracker`, camera | ⚠️ four bays in scope, tracker built, overseer camera built; bays 5–9 parked |
 | 7 HUD, callouts, scoring, win/fail | ⚠️ objective HUD + timer only |
 | 8 `SkyArm` on the mock feed | ✅ |
 | 9 Real `Bridge` | ⚠️ link, arm mirror and crates-from-real-cubes all verified against a protocol-faithful mock; nothing run against real hardware — see [robot-link.md](robot-link.md) |
@@ -247,7 +249,10 @@ resizes to fit, so a bay that sends neither looks exactly as it did before.
   `Config.WallHeight` (first piece of the generator extraction). The ceiling is 48 studs.
   `BayGap` is still 6 and only matters if `Config.ArmStyle` is switched to `"mirror"`.
 - **Two-player support is now the design**, not an open question: player 1 runs the bay, player
-  2 is the overseer whose only input is the real arm. The overseer client doesn't exist yet.
+  2 is the overseer whose only input is the real arm. ~~The overseer client doesn't exist yet.~~
+  **Camera built** (`OverseerCam`, **V**) — see [debug-menu.md](debug-menu.md) §4b. Still open:
+  nothing *assigns* the roles, so in solo one person flips between both views, and a dropped
+  link is only visible in the console.
 - ~~The mat sweep un-solves placement bays.~~ **Fixed.** Solved placement bays now latch;
   reproduced and re-verified on Bay 2 (see [robot-link.md](robot-link.md) §5).
 - ~~Reset is partial.~~ **Fixed.** A bay is reset by rebuilding it, which terminates every run
