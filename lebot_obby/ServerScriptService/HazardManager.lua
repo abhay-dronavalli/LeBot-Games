@@ -118,11 +118,13 @@ end
 ----------------------------------------------------------------
 local BUILDERS = {}
 
--- SAW WALL: the bay seals and a wall of chainsaws creeps in from the entrance. Two levers,
--- mounted too high to reach from the floor, are the way out -- so here the crates are a LADDER
--- to the answer rather than the answer itself. Lever A kills the blades and arms Lever B;
--- Lever B halts the wall and drops the exit gate. The advancing wall is the clock, which makes
--- Config.SawWallSeconds the one knob for this bay's difficulty.
+-- SAW WALL: the bay seals behind you and a wall of chainsaws closes in from the FAR end. It
+-- starts by the exit and comes toward the entrance, so walking in is never blocked and the wall
+-- itself is the only thing between you and the way out. Two levers, mounted too high to reach
+-- from the floor, are the escape: the crates are a LADDER to the answer rather than the answer
+-- itself. Lever A kills the blades and arms Lever B; Lever B halts the wall and sinks it into
+-- the floor, and that IS the exit -- there is no separate gate. The closing wall is the clock,
+-- which makes Config.SawWallSeconds the one knob for this bay's difficulty.
 --
 -- Why a crate can stall the wall, and why that isn't a free win: a crate can never be
 -- destroyed, because the real cube is still sitting on the operator's table and the game has
@@ -137,13 +139,17 @@ BUILDERS.Saw = function(i, folder, info, state)
 	local zEnd = z0 + Config.BayDepth
 	local midX = Config.BayWidth / 2
 
-	local WALL_START = z0 + 2
-	local WALL_END = zEnd - 2.5
+	-- Closes from the far end toward the entrance. A first version started the wall two studs
+	-- inside the door, spanning the full width with CanCollide on, which blocked the player
+	-- from entering the bay at all.
+	local WALL_START = zEnd - 2
+	local WALL_END = z0 + 2.5
+	local WALL_Y = 3.8
 	local TICK = 0.05
 	-- Advance off measured elapsed time, not tick count: task.wait(0.05) actually sleeps a bit
 	-- longer, which made a nominal 30s traverse take about 34s. The wall is this bay's clock,
 	-- so SawWallSeconds has to mean real seconds.
-	local studsPerSecond = (WALL_END - WALL_START) / Config.SawWallSeconds
+	local studsPerSecond = (WALL_START - WALL_END) / Config.SawWallSeconds
 	local lastTick = os.clock()
 
 	-- paint the sweep lane, so the operator can see where a brake crate actually intercepts
@@ -152,14 +158,12 @@ BUILDERS.Saw = function(i, folder, info, state)
 		Enum.Material.SmoothPlastic, folder, {Transparency = 0.6, CanQuery = false})
 
 	----------------------------------------------------------------
-	-- gates
+	-- entry gate only. There is deliberately no exit gate: the saw wall is the exit barrier,
+	-- and Lever B lowering it is what opens the way through.
 	----------------------------------------------------------------
 	local GATE_H = 14
 	local entryGate = newPart("EntryGate", Vector3.new(Config.BayWidth, GATE_H, 1),
 		Vector3.new(midX, -GATE_H / 2, z0), Color3.fromRGB(72, 68, 62),
-		Enum.Material.DiamondPlate, folder, {CanCollide = true})
-	local exitGate = newPart("ExitGate", Vector3.new(Config.BayWidth, GATE_H, 1),
-		Vector3.new(midX, GATE_H / 2, zEnd), Color3.fromRGB(72, 68, 62),
 		Enum.Material.DiamondPlate, folder, {CanCollide = true})
 
 	local function slideGate(gate, up)
@@ -171,7 +175,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	-- the wall
 	----------------------------------------------------------------
 	local frame = newPart("WallFrame", Vector3.new(Config.BayWidth, 7.4, 1.2),
-		Vector3.new(midX, 3.8, WALL_START), Color3.fromRGB(58, 54, 50),
+		Vector3.new(midX, WALL_Y, WALL_START), Color3.fromRGB(58, 54, 50),
 		Enum.Material.DiamondPlate, folder, {CanCollide = true})
 
 	local blades = {}
@@ -180,7 +184,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		-- a Cylinder's flat faces point along X, so this is a vertical disc facing sideways
 		-- and it spins about its own axis rather than tumbling
 		local blade = newPart("WallBlade" .. col, Vector3.new(0.4, 5.6, 5.6),
-			Vector3.new(bx, 3.4, WALL_START), Color3.fromRGB(208, 210, 216),
+			Vector3.new(bx, WALL_Y - 0.4, WALL_START), Color3.fromRGB(208, 210, 216),
 			Enum.Material.Metal, folder, {Shape = Enum.PartType.Cylinder})
 		makeLethalPart(blade)
 		table.insert(blades, {part = blade, x = bx})
@@ -191,13 +195,18 @@ BUILDERS.Saw = function(i, folder, info, state)
 		Enum.Material.Neon, folder, {Transparency = 1, CanQuery = false})
 
 	local wallZ, spin, bladesLive = WALL_START, 0, true
+	local sunk = false
 
 	local function placeWall(z)
-		frame.CFrame = CFrame.new(midX, 3.8, z)
-		for _, b in ipairs(blades) do
-			b.part.CFrame = CFrame.new(b.x, 3.4, z) * CFrame.Angles(spin, 0, 0)
+		if sunk then
+			return -- the lowering tween owns the CFrames now
 		end
-		sparks.CFrame = CFrame.new(midX, 1.2, z + 1.2)
+		frame.CFrame = CFrame.new(midX, WALL_Y, z)
+		for _, b in ipairs(blades) do
+			b.part.CFrame = CFrame.new(b.x, WALL_Y - 0.4, z) * CFrame.Angles(spin, 0, 0)
+		end
+		-- sparks sit on the near face, the side the player is on
+		sparks.CFrame = CFrame.new(midX, 1.2, z - 1.2)
 	end
 
 	local function setBladesLive(live)
@@ -208,7 +217,24 @@ BUILDERS.Saw = function(i, folder, info, state)
 		end
 	end
 
-	-- nearest crate the wall is about to meet, or nil
+	-- Lever B's payoff: the wall drops into the floor and you continue out over it. Collision
+	-- is cleared once it is low enough to step across.
+	local function sinkWall()
+		sunk = true
+		local downY = -5
+		local info = TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+		TweenService:Create(frame, info, {CFrame = CFrame.new(midX, downY, wallZ)}):Play()
+		for _, b in ipairs(blades) do
+			TweenService:Create(b.part, info,
+				{CFrame = CFrame.new(b.x, downY - 0.4, wallZ) * CFrame.Angles(spin, 0, 0)}):Play()
+		end
+		task.delay(0.9, function()
+			frame.CanCollide = false
+		end)
+	end
+
+	-- Nearest crate the wall is about to meet. It travels toward -Z, so the next thing it
+	-- meets is whatever sits just in front of its near face.
 	local function crateInPath(z)
 		if not Config.SawWallBrakeEnabled then
 			return nil
@@ -216,7 +242,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		for _, c in ipairs(folder.Parent:GetChildren()) do
 			if c.Name == "Crate" then
 				local b = c:FindFirstChild("Base")
-				if b and b.Position.Z > z and b.Position.Z - z < 3.1 then
+				if b and b.Position.Z < z and z - b.Position.Z < 3.1 then
 					return b
 				end
 			end
@@ -367,6 +393,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 	local function armRun()
 		running = true
+		sunk = false
+		frame.CanCollide = true
 		wallZ = WALL_START
 		spin = 0
 		lastTick = os.clock()
@@ -379,12 +407,13 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 	local function resetRun()
 		running = false
+		sunk = false
+		frame.CanCollide = true
 		wallZ = WALL_START
 		setBladesLive(true)
 		placeWall(wallZ)
 		sparks.Transparency = 1
 		slideGate(entryGate, false)
-		slideGate(exitGate, true)
 		setPhase(leverA, DORMANT)
 		setPhase(leverB, DORMANT)
 	end
@@ -410,8 +439,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 			setPhase(leverB, THROWN)
 			running = false
 			sparks.Transparency = 1
-			slideGate(exitGate, false)
-			print("[HazardManager] saw wall: Lever B thrown, wall halted")
+			sinkWall()
+			print("[HazardManager] saw wall: Lever B thrown, wall halted and lowering")
 			if state.setSolved then
 				state.setSolved(true)
 			end
@@ -452,12 +481,12 @@ BUILDERS.Saw = function(i, folder, info, state)
 				-- sparks only while something is actually being chewed
 				sparks.Transparency = (blocker and bladesLive) and (0.25 + math.random() * 0.5) or 1
 
-				wallZ = math.min(wallZ + advance, WALL_END)
+				wallZ = math.max(wallZ - advance, WALL_END)
 				placeWall(wallZ)
 
 				for _, o in ipairs(occupants) do
-					-- behind the front face (tunnelled through), or pinned at the exit
-					if o.position.Z < wallZ - 0.8 or wallZ >= WALL_END - 0.05 then
+					-- past the near face (tunnelled through), or pinned on the entry gate
+					if o.position.Z > wallZ + 0.8 or wallZ <= WALL_END + 0.05 then
 						o.humanoid.Health = 0
 					end
 				end
