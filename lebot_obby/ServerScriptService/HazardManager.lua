@@ -1208,7 +1208,33 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 				table.insert(beams, along)
 			end
 
-			cells[keyOf(col, row)] = {col = col, row = row, pad = pad, beams = beams, live = true}
+			-- The number goes ON THE TILE. How long until the ground under you turns lethal is
+			-- the most urgent thing in this bay, and a line in a panel at the top of the screen
+			-- is the wrong place for it -- you are looking at your feet, picking the next step.
+			-- SurfaceGui rather than Billboard: a flat number reads as painted floor marking,
+			-- and a Billboard adorned to a part has already failed to render once here.
+			local sg = Instance.new("SurfaceGui")
+			sg.Face = Enum.NormalId.Top
+			sg.LightInfluence = 0
+			sg.PixelsPerStud = 36
+			sg.Adornee = pad
+			sg.Enabled = false
+			sg.Parent = pad
+			local count = Instance.new("TextLabel")
+			count.AnchorPoint = Vector2.new(0.5, 0.5)
+			count.Position = UDim2.new(0.5, 0, 0.5, 0)
+			count.Size = UDim2.new(0.7, 0, 0.7, 0)
+			count.BackgroundTransparency = 1
+			count.Font = Enum.Font.GothamBold
+			count.TextScaled = true
+			count.TextColor3 = Color3.fromRGB(20, 14, 6)
+			count.TextStrokeTransparency = 0.35
+			count.Rotation = -90       -- a Top-face GUI's axes run across the bay
+			count.Text = ""
+			count.Parent = sg
+
+			cells[keyOf(col, row)] = {col = col, row = row, pad = pad, beams = beams,
+				live = true, countGui = sg, count = count}
 		end
 	end
 
@@ -1216,6 +1242,9 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 	local LIVE, SAFE, COOLING = "live", "safe", "cooling"
 	local function setCellState(cell, mode, flash)
 		cell.live = (mode == LIVE)
+		if cell.countGui then
+			cell.countGui.Enabled = (mode == COOLING)
+		end
 		for _, b in ipairs(cell.beams) do
 			b:SetAttribute("Live", cell.live)
 			b.Transparency = cell.live and 0.15 or 1
@@ -1484,9 +1513,14 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 			-- -- reading 0.3s while the ground underfoot actually had a full 6s left.
 			local at = lastVacated and cooling[lastVacated] or nil
 			if at then
-				p.timerLabel = "CELL GOES LIVE IN"
-				p.timer = math.max(0, at - os.clock())
-				p.timerTone = "warn"
+				local left = math.max(0, at - os.clock())
+				-- Name the cell. "CELL GOES LIVE IN" with two cells cooling told you a number
+				-- but not which ground it belonged to.
+				local c, r = lastVacated:match("(%d+),(%d+)")
+				p.timerLabel = c and ("COL %s, ROW %s GOES LIVE IN"):format(c, r)
+					or "CELL GOES LIVE IN"
+				p.timer = left
+				p.timerTone = (left <= Config.LaserRearmWarnSeconds) and "danger" or "warn"
 			end
 		end
 
@@ -1536,6 +1570,15 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 						local left = cooling[k] - now
 						local rate = (left <= Config.LaserRearmWarnSeconds) and 14 or 4
 						setCellState(cell, COOLING, math.sin(now * rate) > 0)
+						-- tenths under the warning threshold, so the last two seconds read as
+						-- urgent rather than as a 2 that sits there
+						if cell.count then
+							cell.count.Text = (left <= Config.LaserRearmWarnSeconds)
+								and ("%.1f"):format(math.max(0, left))
+								or tostring(math.ceil(left))
+							cell.count.TextColor3 = (left <= Config.LaserRearmWarnSeconds)
+								and Color3.fromRGB(70, 10, 10) or Color3.fromRGB(20, 14, 6)
+						end
 					else
 						setCellState(cell, LIVE)
 					end

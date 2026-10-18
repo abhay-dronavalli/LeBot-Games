@@ -3,7 +3,14 @@
 > because the pad is what kills and a safe pad does not. Moving the cube on starts the
 > `LaserCooldownSeconds` grace on the tile behind, which is the time you have to step
 > across. Verified: 0 crate parts, 7 laser parts disarmed per tile, both tiles safe for
-> the 6 s overlap and then the old one re-arms.
+> the overlap and then the old one re-arms.
+>
+> **The clock is on the tile.** `LaserCooldownSeconds` is **10** (was 6 -- swapping a block is
+> a physical action on a physical table, and the clock does not start until the NEW tile is
+> live). The cooling pad paints the remaining seconds on itself, switching to tenths in red
+> for the last `LaserRearmWarnSeconds` (**2**). The HUD names the cell too --
+> `COL 2, ROW 0 GOES LIVE IN 0:03` -- because with two cells cooling a bare number told you
+> how long but not which ground it belonged to.
 
 # Bay 3 — Laser Walk
 

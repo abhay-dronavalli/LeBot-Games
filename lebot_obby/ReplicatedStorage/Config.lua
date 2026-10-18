@@ -104,8 +104,10 @@ Config.VoidLightSpacing = 14  -- spacing of the red warning lights going down th
 -- was lifted, which is what lets this number be about the player's hop instead of the arm's
 -- speed: one reachAndPlace is ~5.5s and a move is a remove plus a place, so a cooldown started
 -- at lift would be gone before the crate even landed.
-Config.LaserCooldownSeconds = 6     -- how long the vacated cell stays safe once the crate lands
-Config.LaserRearmWarnSeconds = 1.5  -- the pad pulses fast for this long before the beams return
+-- 6 was not enough to move a real cube and then walk the step. Swapping a block is a physical
+-- action on a physical table, and the clock does not start until the NEW tile is live.
+Config.LaserCooldownSeconds = 10    -- how long the vacated cell stays safe once the crate lands
+Config.LaserRearmWarnSeconds = 2    -- the pad pulses fast, and counts in tenths, for this long
 Config.LaserRouteMin = 6            -- steps in a generated route, inclusive
 Config.LaserRouteMax = 8
 
