@@ -21,16 +21,20 @@ local Config = {
 	-- the block reaches the next square of the path, the tower grows by one. Difficulty picks the
 	-- path length and round time (Difficulty attribute on ServerStorage.Modes.Flood: Easy, Medium,
 	-- Hard, or Random = rolled for the NEXT round while players are still in the lobby).
-	-- Round times are paced for the vision board, not for a human with a mouse. One square costs
-	-- a release plus a model read (~2 s trigger delay + ~3.5 s for the call, see bridge/board.py)
-	-- on top of the time it takes to actually pick the cube up and set it down, so budget roughly
-	-- 20 s per square and leave room to fumble one. Shorten these and the tower cannot be finished
-	-- however well the pair plays. Mode.MaxDuration in modes/Flood/Module.luau must stay above the
-	-- longest of them, or the arcade times the round out from underneath it.
+	-- Round times are paced for a human driving a leader arm, not for a mouse. One square costs a
+	-- pick and place through teleop (slow and fiddly, 10-15 s when it goes well), then the board
+	-- read that confirms it: a 2 s trigger delay plus ~3.5 s for the model call (bridge/board.py).
+	-- A fumbled grab or a misread that needs a second look doubles that, so these budget ~45-50 s
+	-- per square rather than the best case. Shorten them and the tower cannot be finished however
+	-- well the pair plays - which is the failure that is impossible to tell from a broken rig.
+	--
+	-- `time` is the only number to touch. The water's rise rate is derived from it (Module.luau
+	-- riseRate), so the flood automatically paces to the round, and Mode.MaxDuration is derived
+	-- from the longest of these, so the arcade's watchdog follows too.
 	DIFFICULTY = {
-		Easy = { cells = 6, time = 180 },
-		Medium = { cells = 9, time = 240 },
-		Hard = { cells = 12, time = 300 },
+		Easy = { cells = 6, time = 300 },
+		Medium = { cells = 9, time = 420 },
+		Hard = { cells = 12, time = 540 },
 	},
 	DEFAULT_DIFFICULTY = "Easy",
 	TARGET_STEPS = 5, -- only used if the path can't be built
