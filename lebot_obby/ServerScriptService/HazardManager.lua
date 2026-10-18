@@ -11,6 +11,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local Debris = game:GetService("Debris")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local BayData = require(ReplicatedStorage:WaitForChild("BayData"))
@@ -2052,45 +2053,141 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 		Enum.Material.Neon, folder, {CanQuery = false})
 
 	----------------------------------------------------------------
-	-- Lanterns. One per cell, hanging just under the ceiling, lit by the operator's blocks.
-	----------------------------------------------------------------
-	local lanterns = {}
-	for col = 0, Config.BayCols - 1 do
-		for row = 0, Config.BayRows - 1 do
-			local c = cellCenter(i, col, row)
-			local housing = newPart("Lantern", Vector3.new(1.4, 0.8, 1.4),
-				Vector3.new(c.X, CEIL_Y - 1.1, c.Z), Color3.fromRGB(40, 40, 46),
-				Enum.Material.Metal, folder, {Transparency = 1, CanQuery = false})
-			local bulb = newPart("LanternBulb", Vector3.new(0.7, 0.7, 0.7),
-				Vector3.new(c.X, CEIL_Y - 1.7, c.Z), WARM,
-				Enum.Material.Neon, folder,
-				{Transparency = 1, CanQuery = false, Shape = Enum.PartType.Ball})
-			local light = Instance.new("PointLight")
-			light.Color = WARM
-			light.Range = CELL * 2.1
-			light.Brightness = 0
-			light.Enabled = false
-			light.Parent = bulb
-			lanterns[col .. "," .. row] =
-				{housing = housing, bulb = bulb, light = light, on = false}
+	-- Wall sconces, not ceiling lanterns.
+	--
+	-- A block lights the sconce for its cell, and the throw is WIDE on purpose: one lamp
+	-- bleeds across its neighbours, so two or three blocks wash most of the room rather than
+	-- picking out twelve separate squares. Light coming in sideways also rakes across the
+	-- floor, which is what makes a screw lying on it catch the eye -- a lamp directly overhead
+	-- lights the floor flatly and hides them.
+	--
+	-- HOTSPOTS. Three cells are wired to a double fixture and throw much further. They are
+	-- visible even unlit, by the neon trim ring, so the operator can see them from the
+	-- spectator view and choose: a block on a hotspot lights most of the room, a block
+	-- anywhere else still helps but less. That is the whole placement decision in this bay.
+	local SCONCE_Y = 5.2
+	local hotspots = {}
+	do
+		local all = {}
+		for col = 0, Config.BayCols - 1 do
+			for row = 0, Config.BayRows - 1 do
+				table.insert(all, col .. "," .. row)
+			end
+		end
+		for n = #all, 2, -1 do
+			local j = math.random(n)
+			all[n], all[j] = all[j], all[n]
+		end
+		for n = 1, 3 do
+			hotspots[all[n]] = true
 		end
 	end
 
-	local function setLantern(col, row, on)
-		local l = lanterns[col .. "," .. row]
+	local lamps = {}
+	for col = 0, Config.BayCols - 1 do
+		for row = 0, Config.BayRows - 1 do
+			local key = col .. "," .. row
+			local hot = hotspots[key] == true
+			local c = cellCenter(i, col, row)
+			-- nearest side wall, nudged along it so the two columns sharing a wall do not
+			-- land on top of each other
+			local onLeft = (col < Config.BayCols / 2)
+			local x = onLeft and 0.75 or (W - 0.75)
+			local nudge = (col == 0 or col == Config.BayCols - 1) and -1.9 or 1.9
+			local z = c.Z + nudge
+			local inward = onLeft and 1 or -1
+
+			local body = newPart("Sconce", Vector3.new(0.5, hot and 1.8 or 1.2, hot and 2.4 or 1.5),
+				Vector3.new(x, SCONCE_Y, z), Color3.fromRGB(34, 34, 40),
+				Enum.Material.Metal, folder, {CanQuery = false})
+			-- the trim is emissive so a hotspot is readable in a pitch-dark room
+			local trim = newPart("SconceTrim",
+				Vector3.new(0.18, (hot and 1.8 or 1.2) + 0.3, (hot and 2.4 or 1.5) + 0.3),
+				Vector3.new(x + inward * 0.3, SCONCE_Y, z),
+				hot and Color3.fromRGB(120, 80, 20) or Color3.fromRGB(30, 30, 38),
+				Enum.Material.Neon, folder, {CanQuery = false})
+			local glass = newPart("SconceGlass", Vector3.new(0.22, hot and 1.3 or 0.9, hot and 1.8 or 1.1),
+				Vector3.new(x + inward * 0.36, SCONCE_Y, z), WARM,
+				Enum.Material.Neon, folder, {Transparency = 1, CanQuery = false})
+
+			local light = Instance.new("SpotLight")
+			light.Color = WARM
+			light.Angle = 150
+			light.Face = onLeft and Enum.NormalId.Right or Enum.NormalId.Left
+			light.Range = hot and (CELL * 3.6) or (CELL * 1.8)
+			light.Brightness = 0
+			light.Enabled = false
+			light.Parent = glass
+
+			lamps[key] = {body = body, trim = trim, glass = glass, light = light,
+				hot = hot, on = false}
+		end
+	end
+
+	local function setLamp(col, row, on)
+		local l = lamps[col .. "," .. row]
 		if not l or l.on == on then
 			return
 		end
 		l.on = on
-		l.housing.Transparency = on and 0 or 1
-		l.bulb.Transparency = on and 0 or 1
+		l.glass.Transparency = on and 0 or 1
 		l.light.Enabled = on
-		l.light.Brightness = on and 2.4 or 0
+		l.light.Brightness = on and (l.hot and 5.0 or 2.6) or 0
+		l.trim.Color = on and (l.hot and Color3.fromRGB(255, 190, 90) or Color3.fromRGB(190, 150, 90))
+			or (l.hot and Color3.fromRGB(120, 80, 20) or Color3.fromRGB(30, 30, 38))
+	end
+
+	-- How far a lamp REVEALS, in cells.
+	--
+	-- Tuned down hard: at a 2-cell hotspot reach a single block in a corner lit nine of the
+	-- twelve cells and showed 8 of the 10 screws, which is the whole bay solved by placing one
+	-- cube anywhere. An ordinary lamp now pools over its own cell and a hotspot washes the ring
+	-- around it, so the choice the operator makes is worth something: roughly one screw for a
+	-- plain cell against four or five for an amber one.
+	local function litRadiusCells(l)
+		return l.hot and 1 or 0
 	end
 
 	local function isLit(col, row)
-		local l = lanterns[col .. "," .. row]
-		return (l ~= nil) and l.on
+		for key, l in pairs(lamps) do
+			if l.on then
+				local lc, lr = key:match("(%d+),(%d+)")
+				lc, lr = tonumber(lc), tonumber(lr)
+				local reach = litRadiusCells(l)
+				if math.abs(lc - col) <= reach and math.abs(lr - row) <= reach then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	----------------------------------------------------------------
+	-- The ceiling lights. Dead until the power box is driven -- then the wall lamps go out and
+	-- these come up, which is the room going back to normal and the way on opening.
+	----------------------------------------------------------------
+	local ceilingLights = {}
+	for n = 0, 2 do
+		local z = z0 + D * (0.2 + n * 0.3)
+		local panel = newPart("CeilingPanel", Vector3.new(W * 0.55, 0.35, 2.2),
+			Vector3.new(W / 2, CEIL_Y - 0.8, z), Color3.fromRGB(70, 72, 80),
+			Enum.Material.SmoothPlastic, folder, {CanQuery = false})
+		local lamp = Instance.new("PointLight")
+		lamp.Color = Color3.fromRGB(235, 242, 255)
+		lamp.Range = CELL * 4.5
+		lamp.Brightness = 0
+		lamp.Enabled = false
+		lamp.Parent = panel
+		table.insert(ceilingLights, {panel = panel, light = lamp})
+	end
+
+	local function setCeiling(on)
+		for _, c in ipairs(ceilingLights) do
+			c.light.Enabled = on
+			c.light.Brightness = on and 3.0 or 0
+			c.panel.Material = on and Enum.Material.Neon or Enum.Material.SmoothPlastic
+			c.panel.Color = on and Color3.fromRGB(240, 246, 255) or Color3.fromRGB(70, 72, 80)
+		end
 	end
 
 	----------------------------------------------------------------
@@ -2167,9 +2264,11 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 		end
 		dark = on
 		if on then
-			Lighting.Ambient = Color3.fromRGB(4, 4, 6)
-			Lighting.OutdoorAmbient = Color3.fromRGB(6, 6, 10)
-			Lighting.Brightness = 0.15
+			-- genuinely dark: at 0.15 brightness with a lifted ambient you could still read
+			-- the floor, which made the lamps cosmetic
+			Lighting.Ambient = Color3.fromRGB(1, 1, 2)
+			Lighting.OutdoorAmbient = Color3.fromRGB(1, 1, 3)
+			Lighting.Brightness = 0
 		else
 			Lighting.Ambient = saved.Ambient
 			Lighting.OutdoorAmbient = saved.OutdoorAmbient
@@ -2192,7 +2291,7 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 		litCells = now
 		for col = 0, Config.BayCols - 1 do
 			for row = 0, Config.BayRows - 1 do
-				setLantern(col, row, now[col .. "," .. row] == true)
+				setLamp(col, row, now[col .. "," .. row] == true)
 			end
 		end
 	end)
@@ -2250,6 +2349,13 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 				task.wait(0.03)
 			end
 			driver.Transparency = 1
+			-- the wall lamps die and the ceiling comes up: the room going back to normal
+			for col = 0, Config.BayCols - 1 do
+				for row = 0, Config.BayRows - 1 do
+					setLamp(col, row, false)
+				end
+			end
+			setCeiling(true)
 			setDark(false)
 			boxLamp.Color = Color3.fromRGB(120, 240, 150)
 			exitGlow.Color = Color3.fromRGB(120, 240, 150)
@@ -2327,8 +2433,8 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 					p.tone = "warn"
 				else
 					p.task = string.format("FIND THE SCREWS  -  %d / %d", found, SCREW_COUNT)
-					p.hint = "Call out a cell. A block there hangs a lantern, and a screw only"
-						.. " shows in the light."
+					p.hint = "Call out a cell. A block lights that wall lamp, and a screw only"
+						.. " shows in the light. The amber fittings throw furthest."
 					p.tone = "danger"
 				end
 				local litCount = 0
@@ -2342,8 +2448,15 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 						opened and "[x]" or (ready and "[ ]" or "[-]"),
 						opened and "driven" or (ready and "ready" or "sealed")),
 				}
-				p.note = string.format("%d lantern%s lit. Any block lights the cell it is in.",
-					litCount, (litCount == 1) and "" or "s")
+				local hotLit = 0
+				for key in pairs(litCells) do
+					if hotspots[key] then
+						hotLit += 1
+					end
+				end
+				p.note = string.format(
+					"%d lamp%s lit, %d on a hotspot. The amber fittings light far more than the rest.",
+					litCount, (litCount == 1) and "" or "s", hotLit)
 			end
 			publishObjective(i, p, CELL)
 			task.wait(0.2)
@@ -2359,6 +2472,7 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 
 	function state.reset()
 		setDark(false)
+		setCeiling(false)
 		opened = false
 		found = 0
 		driver.Transparency = 1
