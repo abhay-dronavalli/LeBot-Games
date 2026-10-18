@@ -6,8 +6,14 @@
 	A cabinet is playable when ServerStorage.Modes has a Folder with the same name
 	holding a ModuleScript called Module that follows the mode contract
 	(arcade-plan.md). Cabinets without one show COMING SOON.
+
+	Any part tagged "LobbyTeleporter" in a running mode's map is a Back to Lobby pad:
+	a player in the game who stands on it while its Enabled attribute is true goes
+	back to the workshop, out of the game, and loses it (the mode hears about it
+	through its optional PlayerLeft(player)).
 ]]
 
+local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,8 +31,9 @@ local armFolder = arcadeState:WaitForChild("Arm")
 local prompt = workshop.Front.EStop.Button.Prompt
 local scoreRows = workshop.BackWall.Scoreboard.Board.SurfaceGui.Rows
 
-local JOIN_TIME = 10
+local JOIN_TIME = 5
 local GAME_TIMEOUT = 180
+local TELEPORTER_TAG = "LobbyTeleporter"
 local DONT_PRESS_COOLDOWN = 20
 local DEFAULT_UNLOCK = { Arena = 3 } -- shown even before the mode exists
 local ARM_JOINTS = { "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper" }
@@ -42,6 +49,7 @@ local joinCabinet
 local joined = {}
 local lastPress = -math.huge
 local lockedNotice = {}
+local activeGame -- { mode, played, leftEarly } while a mode runs
 
 ------------------------------------------------------------------ wins
 
@@ -87,11 +95,11 @@ Players.PlayerRemoving:Connect(function()
 	task.defer(updateScoreboard)
 end)
 
-local function awardWins(results, played)
+local function awardWins(results, played, leftEarly)
 	local winners = {}
 	for _, r in results do
-		-- only players who were actually in this game can win it
-		if type(r) == "table" and r.won and played[r.player] then
+		-- only players who were actually in this game (and stayed in it) can win it
+		if type(r) == "table" and r.won and played[r.player] and not leftEarly[r.player] then
 			winners[r.player] = true
 		end
 	end
@@ -130,7 +138,8 @@ local function returnPlayersToArcade(players)
 	end
 end
 
-local function waitWithTimeout(event, timeout)
+-- Waits for the mode's Finished, at most `timeout` seconds; stops early (no results) once stopEarly() is true.
+local function waitWithTimeout(event, timeout, stopEarly)
 	local result
 	local conn = event.Event:Connect(function(r)
 		if result == nil then
@@ -138,14 +147,79 @@ local function waitWithTimeout(event, timeout)
 		end
 	end)
 	local t0 = os.clock()
+	local stopped = false
 	while result == nil and os.clock() - t0 < timeout do
+		if stopEarly and stopEarly() then
+			stopped = true
+			break
+		end
 		task.wait(0.1)
 	end
 	conn:Disconnect()
-	if result == nil then
+	if result == nil and not stopped then
 		warn("[Arcade] game timed out without firing Finished")
 	end
 	return result or {}
+end
+
+-- A player in the running game stepped on an enabled Back to Lobby pad: out of the game, back to the workshop.
+local function leaveToLobby(g, player)
+	g.leftEarly[player] = true
+	returnPlayersToArcade({ player })
+	if g.mode.PlayerLeft then
+		local ok, err = pcall(g.mode.PlayerLeft, player)
+		if not ok then
+			warn("[Arcade] PlayerLeft failed: " .. tostring(err))
+		end
+	end
+end
+
+-- Pad look: glowing green with BACK TO LOBBY when Enabled, dim with LOCKED when not.
+local function styleTeleporter(pad)
+	if not pad:IsA("BasePart") then
+		return
+	end
+	local on = pad:GetAttribute("Enabled") == true
+	pad.Material = if on then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	pad.Color = if on then Color3.fromRGB(60, 255, 120) else Color3.fromRGB(45, 60, 50)
+	local light = pad:FindFirstChild("LobbyGlow") or Instance.new("PointLight")
+	light.Name = "LobbyGlow"
+	light.Color = Color3.fromRGB(60, 255, 120)
+	light.Range = 10
+	light.Brightness = 2
+	light.Enabled = on
+	light.Parent = pad
+	local sign = pad:FindFirstChild("LobbySign")
+	if not sign then
+		sign = Instance.new("BillboardGui")
+		sign.Name = "LobbySign"
+		sign.Size = UDim2.fromScale(7, 1.6) -- studs
+		sign.StudsOffset = Vector3.new(0, 4, 0)
+		sign.MaxDistance = 100
+		sign.LightInfluence = 0
+		local label = Instance.new("TextLabel")
+		label.Name = "Label"
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.GothamBlack
+		label.TextScaled = true
+		label.TextStrokeTransparency = 0.2
+		label.Parent = sign
+		sign.Parent = pad
+	end
+	sign.Label.Text = if on then "BACK TO LOBBY" else "LOCKED"
+	sign.Label.TextColor3 = if on then Color3.fromRGB(120, 255, 160) else Color3.fromRGB(150, 150, 150)
+end
+
+local function watchTeleporter(pad)
+	styleTeleporter(pad)
+	pad:GetAttributeChangedSignal("Enabled"):Connect(function()
+		styleTeleporter(pad)
+	end)
+end
+CollectionService:GetInstanceAddedSignal(TELEPORTER_TAG):Connect(watchTeleporter) -- also pads in maps cloned later
+for _, pad in CollectionService:GetTagged(TELEPORTER_TAG) do
+	watchTeleporter(pad)
 end
 
 local function runGame(cab, firstPlayer)
@@ -183,9 +257,20 @@ local function runGame(cab, firstPlayer)
 		Bridge.send({ t = "mode", name = (cab:GetAttribute("Mode") or cab.Name):lower() })
 
 		local results = {}
+		local g = { mode = mode, played = played, leftEarly = {} }
 		local ok, err = pcall(mode.Start, players)
 		if ok then
-			results = waitWithTimeout(mode.Finished, if type(mode.MaxDuration) == "number" then mode.MaxDuration else GAME_TIMEOUT)
+			activeGame = g
+			results = waitWithTimeout(mode.Finished, if type(mode.MaxDuration) == "number" then mode.MaxDuration else GAME_TIMEOUT,
+				function() -- everyone took a lobby pad or left the server
+					for _, p in players do
+						if p.Parent and not g.leftEarly[p] then
+							return false
+						end
+					end
+					return true
+				end)
+			activeGame = nil
 		else
 			warn("[Arcade] " .. cab.Name .. ".Start failed: " .. tostring(err))
 		end
@@ -195,8 +280,14 @@ local function runGame(cab, firstPlayer)
 			warn("[Arcade] " .. cab.Name .. ".Stop failed: " .. tostring(stopErr))
 		end
 		Bridge.send({ t = "mode", name = "lobby" })
-		returnPlayersToArcade(players)
-		awardWins(results, played)
+		local stayed = {}
+		for _, p in players do
+			if not g.leftEarly[p] then
+				table.insert(stayed, p)
+			end
+		end
+		returnPlayersToArcade(stayed)
+		awardWins(results, played, g.leftEarly)
 	end
 
 	arcadeState:SetAttribute("ActiveMode", "")
@@ -272,6 +363,19 @@ task.spawn(function()
 					if player and not seen[player] then
 						seen[player] = true
 						onPortal(cab, player)
+					end
+				end
+			end
+		end
+		local g = activeGame
+		if g then
+			for _, pad in CollectionService:GetTagged(TELEPORTER_TAG) do
+				if pad:IsA("BasePart") and pad:IsDescendantOf(workspace) and pad:GetAttribute("Enabled") == true then
+					for _, hit in workspace:GetPartBoundsInBox(pad.CFrame * CFrame.new(0, 3, 0), pad.Size + Vector3.new(0, 6, 0), overlap) do
+						local player = Players:GetPlayerFromCharacter(hit.Parent)
+						if player and g.played[player] and not g.leftEarly[player] then
+							leaveToLobby(g, player)
+						end
 					end
 				end
 			end
