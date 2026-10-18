@@ -1,8 +1,13 @@
 -- BayData -- ONE obstacle per bay. Each 4x3 bay is a single obstacle the operator must clear.
 --
--- CUBE BUDGET: the physical rig has only TWO cubes of each colour, so a bay may never ask for
--- more than 2 of one colour. That means: one cell at level 2 (2 cubes), OR two cells at level 1
--- (2 cubes), OR one cell at level 1. Anything more is unsolvable on the real table.
+-- BLOCKS ARE INTERCHANGEABLE: no obstacle requires a particular colour. The operator places
+-- whichever cube is to hand, and any block satisfies any cell. `level` is still enforced,
+-- because it is a cube COUNT and not a colour -- level 2 means two cubes stacked in that cell.
+--
+-- CUBE BUDGET: bays still ask for at most 2 cubes each, which is what the designs were built
+-- around back when the limit was two cubes PER COLOUR. The rig owns 14 cubes in total, so that
+-- ceiling is now self-imposed rather than physical -- a bay could ask for more, but none has
+-- been redesigned to.
 --
 -- `solveCells` are where blocks must land. They double as the player's footing/route, so every
 -- obstacle leaves a walkable way through -- the player is never killed while standing on the
@@ -17,15 +22,15 @@ return {
 		-- to the answer, not the answer. checkSolved skips this bay and the builder owns
 		-- state.solved itself. solveCells stays as the advisory "stack here" hint.
 		solveMode = "switches",
-		color = "orange",
+		banner = "SAW  -  THROW BOTH LEVERS",
 		level = 1,
 		solveCells = {{0, 1}, {3, 0}},
-		-- Cube budget (2 per colour) is spent exactly: 1 orange for the Lever A step, 1 spare
-		-- orange for the optional brake crate, 2 red for the Lever B stack. Lever A needs 1
-		-- cube and B needs 2, so a single colour would need 3 -- over budget. That is what
-		-- forces the two levers onto different colours.
-		-- minStand is the crate-top height the player must be standing on, which is what
-		-- actually enforces the cube cost: a single crate tops out at 4, a stacked pair at 7.
+		-- The two levers cost 1 cube and 2 cubes respectively, plus 1 optional brake crate.
+		-- They used to be on different colours because 3 of one colour was over budget; with
+		-- colour irrelevant that constraint is gone, but the split stays -- the levers differ
+		-- by the HEIGHT you must be standing at, which is the part that was ever load-bearing.
+		-- minStand is that crate-top height, and it is what actually enforces the cube cost:
+		-- a single crate tops out at 4, a stacked pair at 7. No colour is checked anywhere.
 		--
 		-- The wall closes from the far end toward the entrance, so row 1 is reached before
 		-- row 0. Lever A sits deeper (row 1) and is therefore the timed one; Lever B sits by
@@ -44,12 +49,9 @@ return {
 		-- Heights are no longer written here because they follow the real cube size
 		-- (Mapping.cubeStuds, 6.72 studs) and would only rot if duplicated.
 		levers = {
-			{id = "A", side = "left",  cell = {0, 1}, color = "orange", level = 1,
-				standLevel = 1},
-			{id = "B", side = "right", cell = {3, 0}, color = "red",    level = 2,
-				standLevel = 2},
+			{id = "A", side = "left",  cell = {0, 1}, level = 1, standLevel = 1},
+			{id = "B", side = "right", cell = {3, 0}, level = 2, standLevel = 2},
 		},
-		brakeColor = "orange",
 		note = "Bay seals behind you; a wall of chainsaws closes in from the exit end. Lever A"
 			.. " (reachable off one crate) kills the blades and arms Lever B (needs a stacked"
 			.. " pair), which halts the wall and sinks it into the floor -- that is the exit."
@@ -57,22 +59,37 @@ return {
 	},
 	[2] = {
 		obstacle = "Void",
-		color = "red",
 		level = 1,
-		coverRows = {0, 1},   -- row 2 keeps its floor, so 2 cubes is enough to cross
+		-- Row 2 keeps its floor, so 2 cubes is enough to cross.
+		-- The gap this leaves (16 studs) is already nearly twice a running jump (8.67), so the
+		-- crates cannot be skipped; widening it to all three rows would only cost the player the
+		-- landing, not add difficulty.
+		coverRows = {0, 1},
+		-- Both in column 1, one per uncovered row: that spaces the crate faces 2 / 4 / 2 studs
+		-- apart across the gap, so every hop is comfortably inside a jump even though the gap as
+		-- a whole is not. The bay tests the operator's placement, not the player's platforming.
 		solveCells = {{1, 0}, {1, 1}},
-		note = "No floor over rows 0-1. The blocks ARE the bridge from the catwalk to solid ground.",
+		note = "No floor over rows 0-1. The blocks ARE the bridge from the catwalk to solid ground."
+			.. " Nothing here is lethal but the drop, so the bridge is also the only safe footing.",
 	},
 	[3] = {
-		obstacle = "Laser",
-		color = "yellow",
+		obstacle = "LaserWalk",
+		-- An ACTION bay: there is no fixed set of cells to fill, so checkSolved is skipped and
+		-- the obstacle owns state.solved. It resolves when the player stands on the last cell
+		-- of the route, not when the crate merely arrives there.
+		solveMode = "action",
+		banner = "LASER WALK  -  FOLLOW THE CRATE",
 		level = 1,
-		solveCells = {{1, 1}},
-		note = "Heist-grid of red beams. The mirror crate cuts power to the whole lattice.",
+		-- Deliberately NO solveCells: the route is generated per run (Config.LaserRoute*), so
+		-- the answer does not exist until the bay arms. One cube is the whole cost -- it is the
+		-- same crate the whole way across, walked ahead of the player one cell at a time.
+		note = "Every cell of the grid is lethal. The one crate switches off whatever cell"
+			.. " it sits in, and only the next cell of the route will accept it, so the operator"
+			.. " walks you across. The cell the crate just left stays safe for a few seconds"
+			.. " after the crate lands -- that gap is your window to follow it.",
 	},
 	[4] = {
 		obstacle = "Lava",
-		color = "blue",
 		level = 1,
 		coverRows = {0, 1},   -- row 2 stays dry, so 2 stepping stones is enough
 		solveCells = {{1, 0}, {1, 1}},
@@ -80,21 +97,18 @@ return {
 	},
 	[5] = {
 		obstacle = "CrusherRoof",
-		color = "green",
 		level = 2,
 		solveCells = {{1, 1}},
 		note = "Ceiling descends; a stacked pair props it and the roof halts on the stack.",
 	},
 	[6] = {
 		obstacle = "Mobs",
-		color = "purple",
 		level = 1,
 		solveCells = {{0, 1}, {3, 1}},
 		note = "Blocks seal the two wall spawners so the mobs stop coming; the lane stays open.",
 	},
 	[7] = {
 		obstacle = "ArrowTurrets",
-		color = "yellow",
 		level = 1,
 		solveCells = {{1, 1}, {2, 1}},
 		note = "Wall dispensers fire volleys across the bay. The blocks are hard cover -- arrows die"
@@ -102,15 +116,16 @@ return {
 	},
 	[8] = {
 		obstacle = "DarkZone",
-		color = "teal",
 		level = 1,
 		solveCells = {{1, 1}, {2, 1}},
-		note = "Lights out, with pits you cannot see. Teal blocks GLOW -- the only obstacle solved by"
-			.. " what the block emits rather than what it blocks.",
+		-- NEEDS A DESIGN PASS: this bay was "teal blocks GLOW", which was the one obstacle solved
+		-- by what the block emits rather than what it blocks -- and it was the only bay whose
+		-- mechanic was tied to a specific colour. With any block accepted, either every crate
+		-- lights the dark or the bay needs a different idea.
+		note = "Lights out, with pits you cannot see. The blocks light the way.",
 	},
 	[9] = {
 		obstacle = "Ice",
-		color = "red",
 		level = 1,
 		solveCells = {{0, 1}, {3, 1}},
 		finale = true,

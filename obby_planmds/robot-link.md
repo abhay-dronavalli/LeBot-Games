@@ -110,6 +110,18 @@ The obby's own `SkyArm` dodged all of this with a trolley that slides in X, so i
 spans a row offset of ≤8 studs — which is why its links could be 35% shorter. A mirror cannot:
 the real arm has no trolley.
 
+## 5b. `CratePlaced` works on both paths
+
+Bay 3 starts its safe-cell cooldown from `BlockSync.CratePlaced`, which fires when a crate has
+physically **seated** — deliberately distinct from `CellsChanged`, which fires as soon as the
+snapshot changes while the arm still has seconds of carry to do and a placement guard may yet
+refuse the delivery.
+
+That event was added on the `applyCells` path, where `deliver()` fires it. The live path has to
+fire it too, or a bay timing off it would simply never tick once the real arm is the source:
+`applyBlocks` now tracks whether each cube was held on the previous frame and fires
+`CratePlaced` on the held→resting transition.
+
 ## 6. Risks this surfaced
 
 **Colour is not reliable, and bays 2–9 solve on colour.** There is **no ArUco on the cubes** —

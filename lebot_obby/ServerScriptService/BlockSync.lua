@@ -28,6 +28,15 @@ local BlockSync = {}
 local cellsChangedEvent = Instance.new("BindableEvent")
 BlockSync.CellsChanged = cellsChangedEvent.Event
 
+-- Fired when a crate has physically SEATED in its cell. Deliberately distinct from
+-- CellsChanged, which fires as soon as the snapshot changes -- at that point the arm still has
+-- ~5s of carry to do, and the crate may not arrive at all, because a placement guard can
+-- refuse it. Anything whose timing or safety depends on the crate actually BEING there has to
+-- listen to this one: bay 3 starts its cooldown from it, and treating the snapshot as arrival
+-- there marked a refused cell safe to stand on.
+local cratePlacedEvent = Instance.new("BindableEvent")
+BlockSync.CratePlaced = cratePlacedEvent.Event
+
 local COLOR_RGB = {
 	red = Color3.fromRGB(210, 50, 50),
 	blue = Color3.fromRGB(60, 150, 220),
@@ -215,6 +224,7 @@ local function deliver(bayModel, live, key, cell)
 		end
 		positionCrate(crateModel, worldCFrame, cell.level)
 		spawnShockwave(bayModel, worldCFrame, cell.level, cell.color)
+		cratePlacedEvent:Fire(bayModel, cell)
 	end)
 end
 
@@ -582,6 +592,13 @@ function BlockSync.applyBlocks(bayModel, blocks)
 			-- A carried cube is why the part is unanchored at all: an anchored part moved by
 			-- CFrame does not carry a player standing on it, and being carried IS the lift.
 			-- The goal is kept in sync either way, so the hand-off never jumps.
+			-- A cube that was being carried and is now resting has just SEATED. Bay 3 starts
+			-- its safe-cell cooldown from this, so the live path has to fire it too -- the
+			-- applyCells path fires it from deliver(), and without this a bay timing off
+			-- CratePlaced would simply never tick once the real arm is the source.
+			local wasHeld = entry.heldLast
+			entry.heldLast = b.held and true or nil
+
 			if b.held then
 				if entry.base.Anchored then
 					-- Start the carry from where the cube already is, so the constraint eases
@@ -614,6 +631,10 @@ function BlockSync.applyBlocks(bayModel, blocks)
 			if not b.held then
 				table.insert(placed, {col = col, row = row,
 					color = obbyColor(b.color), level = level})
+				if wasHeld then
+					cratePlacedEvent:Fire(bayModel, {col = col, row = row,
+						color = obbyColor(b.color), level = math.min(level + 1, 2)})
+				end
 			end
 		end
 	end

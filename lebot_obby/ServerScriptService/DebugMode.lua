@@ -23,18 +23,26 @@ end
 
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
 local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
--- Follows whichever bay is live (RunControl), so jumping to a scenario in the debug menu
--- points the cell editor at THAT bay. It used to pin Bay01, which meant every scenario after
--- the first looked unsolvable: the clicks went to a bay nobody was standing in.
+-- The arm, the cell editor and the crate deliveries all follow one active bay. RunControl
+-- owns which that is -- the debug menu drives it, and ActiveBayTracker will drive the same
+-- call from player 1's position. It used to be hardcoded to Bay01, which meant every bay past
+-- the first was unreachable by the real flow: you could teleport into Bay 2 and edit cells,
+-- but the crates were delivered into Bay 1 behind you.
+--
+-- Each bay keeps its OWN cell state. Sharing one table would make BlockSync, which diffs per
+-- bay model, see every cell vanish from the bay you just left and have the arm dutifully
+-- unload it -- which is also why changing bays must NOT clear this.
+local warehouse = Workspace:WaitForChild("Warehouse")
+
+local function activeBayIndexNow()
+	return RunControl.activeBay or 1
+end
+
 local function targetBayModel()
-	return RunControl.activeBayModel()
-		or Workspace:WaitForChild("Warehouse"):WaitForChild("Bay01")
+	return RunControl.activeBayModel() or warehouse:WaitForChild("Bay01")
 end
 
 SkyArm.setActiveBay(targetBayModel())
-
--- (the reset handler is registered further down, once cellState exists -- a closure only
--- sees locals declared above it, and reading one declared below silently gets a nil global.)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local CellEdit = Remotes:WaitForChild("CellEdit")
@@ -43,11 +51,21 @@ local DebugHotkey = Remotes:WaitForChild("DebugHotkey")
 
 local COLOR_CYCLE = {"none", "red", "blue", "yellow", "green", "orange", "purple", "teal"}
 
--- cellState[col][row] = {color=, level=} or nil
-local cellState = {}
-local previousCellsList = {}
+-- cellStateByBay[bayIndex][col][row] = {color=, level=} or nil
+local cellStateByBay = {}
+local previousByBay = {}
+
+local function cellStateFor(bayIndex)
+	local cs = cellStateByBay[bayIndex]
+	if not cs then
+		cs = {}
+		cellStateByBay[bayIndex] = cs
+	end
+	return cs
+end
 
 local function buildCellsList()
+	local cellState = cellStateFor(activeBayIndexNow())
 	local list = {}
 	for col = 0, Config.BayCols - 1 do
 		for row = 0, Config.BayRows - 1 do
@@ -102,15 +120,9 @@ local function diffCells(oldList, newList)
 	return added, removed, changed
 end
 
-RunControl.ActiveBayChanged:Connect(function()
-	cellState = {}
-	previousCellsList = {}
-	SkyArm.setActiveBay(targetBayModel())
-end)
-
 local function applyAndBroadcast()
 	local newList = buildCellsList()
-	local added, removed, changed = diffCells(previousCellsList, newList)
+	local added, removed, changed = diffCells(previousByBay[activeBayIndexNow()] or {}, newList)
 	if #added > 0 or #removed > 0 or #changed > 0 then
 		print(string.format("[DebugMode] cells diff: +%d -%d ~%d", #added, #removed, #changed))
 		for _, c in ipairs(added) do
@@ -123,11 +135,20 @@ local function applyAndBroadcast()
 			print(string.format("  - (%d,%d) %s L%d", c.col, c.row, c.color, c.level))
 		end
 	end
-	previousCellsList = newList
+	previousByBay[activeBayIndexNow()] = newList
 	CellsUpdated:FireAllClients(newList)
 	BlockSync.applyCells(targetBayModel(), newList)
 	return newList
 end
+
+-- Follow the active bay. Declared after buildCellsList because a closure only sees locals
+-- declared above it -- reading one declared below silently resolves to a nil global.
+RunControl.ActiveBayChanged:Connect(function()
+	SkyArm.setActiveBay(targetBayModel())
+	-- re-broadcast so the editor grid shows what is actually in the bay in front of you,
+	-- NOT a cleared grid: the per-bay state above is what makes returning to a bay work.
+	CellsUpdated:FireAllClients(buildCellsList())
+end)
 
 CellEdit.OnServerEvent:Connect(function(player, col, row, action)
 	if not isSource() then
@@ -140,6 +161,7 @@ CellEdit.OnServerEvent:Connect(function(player, col, row, action)
 		return
 	end
 
+	local cellState = cellStateFor(activeBayIndexNow())
 	cellState[col] = cellState[col] or {}
 	local cell = cellState[col][row]
 
@@ -177,9 +199,9 @@ local craneActive = false
 
 DebugHotkey.OnServerEvent:Connect(function(player, key)
 	if key == "R" then
-		cellState = {}
+		cellStateByBay[activeBayIndexNow()] = {}
 		applyAndBroadcast()
-		print("[DebugMode] R: reset run (cells cleared; GameState reset not wired yet)")
+		print("[DebugMode] R: reset run (cells cleared for the active bay; GameState reset not wired yet)")
 	elseif key == "H" then
 		craneActive = not craneActive
 		print("[DebugMode] H: held Purple crane ->", craneActive)
@@ -190,16 +212,21 @@ DebugHotkey.OnServerEvent:Connect(function(player, key)
 	elseif key == "M" then
 		print("[DebugMode] M: trigger malfunction (Events not wired yet)")
 	elseif key == "N" then
-		print("[DebugMode] N: next bay (ActiveBayTracker not wired yet)")
+		-- moves the arm and the editor without moving the player, for watching a bay fill
+		local nextIndex = (activeBayIndexNow() % Config.NumBays) + 1
+		RunControl.setActiveBay(nextIndex)
+		print("[DebugMode] N: active bay -> " .. nextIndex)
 	elseif tonumber(key) then
 		local bayIndex = tonumber(key)
 		local bayModel = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", bayIndex))
 		local character = player.Character
 		local hrp = character and character:FindFirstChild("HumanoidRootPart")
 		if bayModel and hrp then
+			-- land on the approach catwalk, not inside the bay: bay 2 has no floor at row 0 and
+			-- the old +2 spawned you into thin air over the void.
 			local zStart = (bayIndex - 1) * Config.BayPitch
-			hrp.CFrame = CFrame.new(Config.BayWidth / 2, 4, zStart + 2)
-			SkyArm.setActiveBay(bayModel)
+			hrp.CFrame = CFrame.new(Config.BayWidth / 2, 4, zStart - 3)
+			RunControl.setActiveBay(bayIndex)
 			print("[DebugMode] " .. key .. ": teleported to Bay " .. bayIndex .. " (quick-travel, not the real ActiveBayTracker)")
 		end
 	end

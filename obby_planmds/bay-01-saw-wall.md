@@ -50,9 +50,9 @@ under pressure" — which is the skill a teleoperated arm actually tests.
 
 ## 2. The cube budget, and why it drives the design
 
-The physical rig has **two cubes per colour**. A cell holds one colour at level 1
-(1 cube) or level 2 (2 cubes). A cell cannot be red-then-blue — the wire format is
-`{col, row, color, level}`, one colour per cell.
+A cell holds one block at level 1 (1 cube) or a stacked pair at level 2 (2 cubes). The wire
+format is `{col, row, color, level}`, one entry per cell — but **no obstacle reads `color`**,
+so any cube satisfies any cell. `level` is the part that costs something.
 
 So a three-high stack is **not buildable**. Height difficulty comes from *what you
 stand on* instead:
@@ -71,17 +71,18 @@ is not. The earlier 4-stud crate needed `minStand` to carry that burden alone.
 Verified at the new scale: standing on the floor gates both levers off, one cube passes
 A and fails B, a stacked pair passes both.
 
-Lever A costs 1 cube, Lever B costs 2. All-orange would need 3 — over budget. **That
-is what forces the two levers onto different colours**, and it leaves exactly one
-spare orange, which becomes the brake crate.
+Lever A costs 1 cube, Lever B costs 2, and the brake crate costs 1 more:
 
 ```
-orange #1  ->  Lever A step          cell (0,1) level 1
-orange #2  ->  brake crate           anywhere in the sweep lane   [optional]
-red #1+#2  ->  Lever B stack         cell (3,0) level 2
+cube 1    ->  Lever A step           cell (0,1) level 1
+cube 2    ->  brake crate            anywhere in the sweep lane   [optional]
+cubes 3+4 ->  Lever B stack          cell (3,0) level 2
 ```
 
-Every cube in the inventory has a job. Nothing left over.
+The two levers were originally on **different colours** because the budget was two cubes per
+colour and an all-orange bay would have needed three. That constraint is gone — colour is no
+longer checked anywhere — but the split stays, because what actually distinguishes the levers
+is the **height you must be standing at**, and that was always the load-bearing part.
 
 ---
 

@@ -34,6 +34,15 @@ local function bayCenter(i)
 	return Vector3.new(Config.BayWidth / 2, 0, bayZStart(i) + Config.BayDepth / 2)
 end
 
+-- Blocks are INTERCHANGEABLE. An obstacle cares how many cubes are in a cell -- the stack
+-- height -- and never what colour they are, because the operator grabs whichever cube is to
+-- hand on the real table. So a requirement only ever reads "a block here" or "a stack of N",
+-- and every colour test has been stripped out of the solve path. Crates still SPAWN in their
+-- colours; that is appearance, and the debug editor still picks one.
+local function blockReq(level)
+	return ((level or 1) > 1) and string.format("STACK x%d", level) or "BLOCK"
+end
+
 local function newPart(name, size, pos, color, material, parent, props)
 	local p = Instance.new("Part")
 	p.Name = name
@@ -86,6 +95,106 @@ local function characterFrom(hit)
 		return model, hum
 	end
 	return nil
+end
+
+-- Who is standing in bay `i` right now. `pad` widens the test toward the entrance, so a bay
+-- can put its objective on screen while the player is still on the approach catwalk sizing the
+-- obstacle up. The y floor drops a player who has already fallen out of the world, which for a
+-- void bay is most of them.
+local function occupantsOf(i, pad)
+	local zStart = bayZStart(i)
+	local zEnd = zStart + Config.BayDepth
+	local found = {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local ch = pl.Character
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hrp and hum and hum.Health > 0 and not isGhost(ch) then
+			local p = hrp.Position
+			if p.Z > zStart - (pad or 0) and p.Z < zEnd + 2
+				and p.X > -2 and p.X < Config.BayWidth + 2 and p.Y > -8 then
+				table.insert(found, {character = ch, humanoid = hum, position = p})
+			end
+		end
+	end
+	return found
+end
+
+-- Bays whose goal is an ACTION rather than a placement own state.solved themselves, and
+-- checkSolved must not overwrite it from the cells list. Bay 1 throws levers; bay 3 walks a
+-- generated route. Their solveCells, if any, degrade to an advisory hint.
+local function ownsItsSolve(info)
+	return info.solveMode == "switches" or info.solveMode == "action"
+end
+
+-- Objective HUD arbitration. Remotes.Objective is ONE channel, but every bay has an opinion
+-- about what belongs on it. While bay 1 was the only driver, broadcasting was fine; the moment
+-- a second bay started publishing, bay 1's loop -- which broadcasts a clear every 0.2s whenever
+-- its own bay is empty -- began wiping the callout of the bay the player was actually standing
+-- in, and bay 2's HUD only ever appeared in the gaps between those clears.
+--
+-- So no bay broadcasts any more. A bay addresses only the players inside it, and clears only a
+-- player it was itself last showing something to. That also makes each bay's own stated intent
+-- true -- "a player standing outside the bay isn't told to do anything" -- which broadcasting
+-- never actually delivered.
+local hudShownBy = setmetatable({}, {__mode = "k"})
+
+-- Which single bay owns a player's HUD. Containment alone is not enough: a bay wants its
+-- callout up while the player is still on the approach catwalk, but the gap between bays is
+-- only Config.BayGap studs and the pad is a whole cell, so two neighbours' padded windows
+-- overlap and both would claim anyone standing between them. Standing at z=57 showed bay 2's
+-- callout while walking into bay 3.
+--
+-- So: the bay whose body you are actually inside always wins. Outside every body, the bay you
+-- are walking TOWARDS wins over the one you just left, which is the direction the game runs.
+local function hudBayFor(pos, pad)
+	local approach, approachDist = nil, math.huge
+	local trailing, trailingDist = nil, math.huge
+	for idx = 1, Config.NumBays do
+		local zStart = bayZStart(idx)
+		local zEnd = zStart + Config.BayDepth
+		if pos.Z >= zStart and pos.Z <= zEnd then
+			return idx
+		elseif pos.Z < zStart then
+			local d = zStart - pos.Z
+			if d <= pad and d < approachDist then
+				approach, approachDist = idx, d
+			end
+		else
+			local d = pos.Z - zEnd
+			if d <= pad and d < trailingDist then
+				trailing, trailingDist = idx, d
+			end
+		end
+	end
+	return approach or trailing
+end
+
+local function publishObjective(i, payload, pad)
+	local inside = {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local ch = pl.Character
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hrp and hum and hum.Health > 0 and not isGhost(ch) then
+			local pos = hrp.Position
+			if pos.X > -2 and pos.X < Config.BayWidth + 2 and pos.Y > -8
+				and hudBayFor(pos, pad or 0) == i then
+				inside[pl] = true
+			end
+		end
+	end
+
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if inside[pl] and payload then
+			hudShownBy[pl] = i
+			ObjectiveEvent:FireClient(pl, payload)
+		elseif hudShownBy[pl] == i then
+			-- only ever retract what this bay put up
+			hudShownBy[pl] = nil
+			ObjectiveEvent:FireClient(pl, nil)
+		end
+	end
 end
 
 -- Per-part lethality, for obstacles made of many independently-switchable pieces (the laser
@@ -499,7 +608,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	local function pushObjective()
 		lastPush = os.clock()
 		if not running and not state.solved then
-			ObjectiveEvent:FireAllClients(nil)
+			publishObjective(i, nil, 0)
 			return
 		end
 
@@ -555,7 +664,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		if os.clock() < flashUntil then
 			p.flash = flashText
 		end
-		ObjectiveEvent:FireAllClients(p)
+		publishObjective(i, p, 0)
 	end
 
 	----------------------------------------------------------------
@@ -760,38 +869,114 @@ BUILDERS.Saw = function(i, folder, info, state)
 	function state.onSolved() end
 end
 
--- VOID: the floor is gone over `coverRows`. The placed blocks ARE the bridge across.
+-- VOID: the floor is gone over `coverRows`, and the gap is deliberately wider than a jump --
+-- so the crates are not a shortcut across, they ARE the bridge. The arithmetic that makes that
+-- true: stock JumpHeight 7.2 and WalkSpeed 16 under Gravity 196.2 give 0.54s of air and 8.67
+-- studs of flat travel, while the uncovered rows span 16. Mounting the far side higher, or
+-- widening the gap further, would both be redundant -- one cell of void is already unjumpable.
+--
+-- Nothing in this bay is lethal except the drop, which satisfies the safe-footing rule for
+-- free: the bridge you built is the only place there is to stand.
 BUILDERS.Void = function(i, folder, info, state)
 	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
 	local floor = bay and bay:FindFirstChild("Floor")
 	local rows = info.coverRows or {0, 1, 2}
 
+	local z0 = bayZStart(i)
+	local wholeBay = #rows >= Config.BayRows
+	-- The near lip is the bay entrance; the far lip is wherever solid ground resumes. Both are
+	-- derived from `coverRows`, so changing that one field moves the geometry with it.
+	local nearZ = z0
+	local farZ = wholeBay and (z0 + Config.BayDepth)
+		or (z0 + (math.max(table.unpack(rows)) + 1) * CELL)
+	local span = farZ - nearZ
+	local midZ = (nearZ + farZ) / 2
+	local W = Config.BayWidth
+	local depth = Config.VoidShaftDepth
+
+	local AMBER = Color3.fromRGB(255, 176, 40)
+	local GREEN = Color3.fromRGB(120, 240, 140)
+	local SHAFT = Color3.fromRGB(14, 14, 18)
+
+	----------------------------------------------------------------
+	-- Cut the baked floor back so only the rows outside `coverRows` keep solid ground.
+	-- Absolute rather than relative, so re-running the builder is idempotent.
+	----------------------------------------------------------------
 	if floor then
-		if #rows >= 3 then
+		if wholeBay then
 			floor.Transparency = 1
 			floor.CanCollide = false
 			floor.CanTouch = false
 		else
-			-- shrink the floor back so only the untouched rows keep solid ground
-			local keptStart = (math.max(table.unpack(rows)) + 1) * CELL
-			local keptDepth = Config.BayDepth - keptStart
-			floor.Size = Vector3.new(Config.BayWidth, 1, keptDepth)
-			floor.CFrame = CFrame.new(Config.BayWidth / 2, -0.5,
-				bayZStart(i) + keptStart + keptDepth / 2)
+			local keptDepth = Config.BayDepth - span
+			floor.Size = Vector3.new(W, 1, keptDepth)
+			floor.CFrame = CFrame.new(W / 2, -0.5, farZ + keptDepth / 2)
 		end
 	end
 
-	-- edge warning lips so the drop reads as intentional
-	for _, row in ipairs(rows) do
-		local z = bayZStart(i) + row * CELL
-		newPart("VoidEdge", Vector3.new(Config.BayWidth, 0.4, 0.8),
-			Vector3.new(Config.BayWidth / 2, 0.2, z), Color3.fromRGB(220, 40, 40),
-			Enum.Material.Neon, folder)
+	----------------------------------------------------------------
+	-- The shaft. Purely presentational: the drop has to read as a drop from floor level, or
+	-- the bay looks like a texture glitch rather than somewhere you can die. Every piece here
+	-- is CanCollide = false so nothing catches a falling player half way down.
+	----------------------------------------------------------------
+	local function shaftWall(name, size, pos)
+		newPart(name, size, pos, SHAFT, Enum.Material.Slate, folder, {CanQuery = false})
+	end
+	shaftWall("ShaftLeft", Vector3.new(0.5, depth, span), Vector3.new(0.25, -depth / 2, midZ))
+	shaftWall("ShaftRight", Vector3.new(0.5, depth, span), Vector3.new(W - 0.25, -depth / 2, midZ))
+	shaftWall("ShaftFar", Vector3.new(W, depth, 0.5), Vector3.new(W / 2, -depth / 2, farZ - 0.25))
+	shaftWall("ShaftNear", Vector3.new(W, depth, 0.5), Vector3.new(W / 2, -depth / 2, nearZ + 0.25))
+	shaftWall("ShaftFloor", Vector3.new(W, 0.5, span), Vector3.new(W / 2, -depth, midZ))
+
+	-- Cut-edge fascia: shows the thickness of the slab you are standing on, at both lips.
+	local function fascia(name, size, pos)
+		newPart(name, size, pos, Color3.fromRGB(78, 80, 88), Enum.Material.Metal, folder,
+			{CanQuery = false})
+	end
+	fascia("EdgeNear", Vector3.new(W, 1.4, 0.7), Vector3.new(W / 2, -0.7, nearZ + 0.35))
+	if not wholeBay then
+		fascia("EdgeFar", Vector3.new(W, 1.4, 0.7), Vector3.new(W / 2, -0.7, farZ - 0.35))
+	end
+	fascia("EdgeLeft", Vector3.new(0.7, 1.4, span), Vector3.new(0.35, -0.7, midZ))
+	fascia("EdgeRight", Vector3.new(0.7, 1.4, span), Vector3.new(W - 0.35, -0.7, midZ))
+
+	-- Hazard striping on both lips. These are the parts that go green on solve, so they are
+	-- the bay's whole state readout -- amber means the gap is still open.
+	local lips = {}
+	local DASH = 2
+	for x = 0, W - DASH, DASH * 2 do
+		local function dash(name, z)
+			local p = newPart(name, Vector3.new(DASH, 0.22, 0.9),
+				Vector3.new(x + DASH / 2, 0.11, z), AMBER, Enum.Material.Neon, folder,
+				{CanQuery = false})
+			table.insert(lips, p)
+		end
+		dash("LipNear", nearZ + 0.45)
+		if not wholeBay then
+			dash("LipFar", farZ - 0.45)
+		end
 	end
 
-	-- catch plane well below: falling in is a death, not an endless drop
-	local catcher = newPart("VoidCatcher", Vector3.new(Config.BayWidth + 12, 2, Config.BayDepth),
-		Vector3.new(Config.BayWidth / 2, -24, bayCenter(i).Z), Color3.fromRGB(0, 0, 0),
+	-- Warning lights down the shaft, so the depth is legible rather than just dark. Range is
+	-- capped just under the spacing so each one reads as a separate marker going down and none
+	-- of them spills back up through the opening to light the bay floor from below.
+	for y = -Config.VoidLightSpacing, -depth + 4, -Config.VoidLightSpacing do
+		local anchor = newPart("ShaftLight", Vector3.new(0.4, 0.4, 0.4),
+			Vector3.new(W / 2, y, midZ), nil, nil, folder, {Transparency = 1, CanQuery = false})
+		local l = Instance.new("PointLight")
+		l.Color = Color3.fromRGB(255, 70, 40)
+		l.Brightness = 1.1
+		l.Range = Config.VoidLightSpacing - 2
+		l.Parent = anchor
+	end
+
+	----------------------------------------------------------------
+	-- Kill plane. Sits above the shaft floor so the death happens in open air rather than on
+	-- contact with scenery, and spans wider than the bay so stepping off sideways still lands
+	-- in it.
+	----------------------------------------------------------------
+	local catcher = newPart("VoidCatcher", Vector3.new(W + 12, 2, span + 4),
+		Vector3.new(W / 2, -depth + 4, midZ), Color3.fromRGB(0, 0, 0),
 		Enum.Material.SmoothPlastic, folder, {Transparency = 1})
 	catcher.CanTouch = true
 	catcher.Touched:Connect(function(hit)
@@ -801,129 +986,564 @@ BUILDERS.Void = function(i, folder, info, state)
 		end
 	end)
 
-	function state.onSolved() end
+	----------------------------------------------------------------
+	-- Placement holograms: a crate-sized ghost at each solveCell, so the player can read the
+	-- cell to call out instead of guessing it off the debug grid. One disappears as its cell
+	-- is filled, which makes "what is left to do" visible in world as well as on the HUD.
+	--
+	-- Amber rather than tinted to a required colour: any block fits, so a coloured ghost would
+	-- be telling the operator to go and find a cube they do not need.
+	----------------------------------------------------------------
+	local tint = AMBER
+	local ghosts = {}
+	for _, sc in ipairs(info.solveCells or {}) do
+		local col, row = sc[1], sc[2]
+		local c = cellCenter(i, col, row)
+		local box = newPart("GhostCrate", Vector3.new(4, 4, 4), Vector3.new(c.X, 2, c.Z),
+			tint, Enum.Material.ForceField, folder, {Transparency = 0.55, CanQuery = false})
+		local label = addLabel(folder, string.format("%s  (%d,%d)", blockReq(info.level), col, row),
+			Vector3.new(c.X, 6.5, c.Z), tint)
+		ghosts[col .. "," .. row] = {box = box, label = label}
+	end
+
+	local function showGhost(key, visible)
+		local g = ghosts[key]
+		if not g then
+			return
+		end
+		g.box.Transparency = visible and 0.55 or 1
+		g.label.Visible = visible
+	end
+
+	----------------------------------------------------------------
+	-- Objective HUD. No countdown: this bay has no clock of its own, and inventing one here
+	-- would be a mechanic rather than an obstacle. The task line is the cell callout instead,
+	-- which is exactly what the operator needs shouted at them.
+	----------------------------------------------------------------
+	local filled = {}
+
+	local function nextNeeded()
+		for _, sc in ipairs(info.solveCells or {}) do
+			local key = sc[1] .. "," .. sc[2]
+			if not filled[key] then
+				return sc, key
+			end
+		end
+		return nil
+	end
+
+	-- One description of how the bay looks, driven off what has actually landed rather than
+	-- off state.solved -- buildBay's setSolved only calls onSolved on the way IN, so hanging
+	-- the lip colour off that left the bay still showing "cleared" after a crate was lifted
+	-- back out of it.
+	local function refresh()
+		local complete = (nextNeeded() == nil)
+		for _, p in ipairs(lips) do
+			p.Color = complete and GREEN or AMBER
+		end
+		for key in pairs(ghosts) do
+			showGhost(key, not filled[key])
+		end
+	end
+
+	-- No occupancy test here: publishObjective only ever reaches players standing in this bay,
+	-- and clears the rest, so the payload is built unconditionally.
+	local function pushObjective()
+		local p = {title = string.format("BAY %d  -  THE VOID", i)}
+		if state.solved then
+			p.task = "CLEARED"
+			p.hint = "The bridge is in -- jump across to the exit."
+			p.tone = "ok"
+		else
+			local sc = nextNeeded()
+			local remaining = 0
+			for _, s2 in ipairs(info.solveCells or {}) do
+				if not filled[s2[1] .. "," .. s2[2]] then
+					remaining += 1
+				end
+			end
+			if sc then
+				p.task = string.format("%s  ->  COL %d, ROW %d",
+					blockReq(info.level), sc[1], sc[2])
+			else
+				p.task = blockReq(info.level)
+			end
+			p.hint = (remaining > 1)
+				and string.format("No floor for %d studs. Call out both cells -- the crates are the bridge.", span)
+				or "One more block, then jump from block to block."
+			p.tone = (remaining > 1) and "danger" or "warn"
+		end
+		publishObjective(i, p, CELL)
+	end
+
+	-- Track what has actually landed, for the holograms and the callout. Solve detection
+	-- itself stays where it belongs -- checkSolved owns state.solved for a placement bay.
+	BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
+		if bayModel ~= bay then
+			return
+		end
+		filled = {}
+		for _, c in ipairs(cellsList) do
+			if (c.level or 1) >= info.level then
+				filled[c.col .. "," .. c.row] = true
+			end
+		end
+		refresh()
+	end)
+
+	-- Both hooks share refresh() so there is exactly one description of how the bay looks.
+	state.onSolved = refresh
+
+	function state.reset()
+		filled = {}
+		refresh()
+	end
+
+	-- The HUD follows occupancy: padded toward the entrance so the callout is already on
+	-- screen while the player is still on the approach catwalk, reading the gap.
+	task.spawn(function()
+		while true do
+			pushObjective()
+			task.wait(0.2)
+		end
+	end)
 end
 
--- LASER: red, semi-transparent beam across row 1. A block stops the beam, so everything past
--- the block is safe to walk through.
--- LASER GRID: a heist-movie lattice of red beams filling the whole bay volume. Because the
--- beams span the bay there's no walkable gap to carve, so the yellow mirror crate cuts power
--- to the whole grid instead of interrupting a single shot.
-BUILDERS.Laser = function(i, folder, info, state)
-	local z0 = bayZStart(i)
-	-- Pure saturated red, kept fairly opaque. Semi-transparent neon picks up whatever is behind
-	-- it, and the warm warehouse lighting was turning these salmon/orange.
+-- LASER WALK: the whole 4x3 grid is lethal, and the single yellow crate is the only thing that
+-- switches a cell off. You cross by having the operator walk that ONE crate ahead of you, cell
+-- by cell, along a route only they can see.
+--
+-- The three rules that make it a puzzle rather than a chore:
+--
+--   * A cell holding the crate is safe. Nothing else is, ever.
+--   * Only the NEXT cell of the route accepts the crate -- every other cell refuses the
+--     delivery -- so the operator cannot shortcut straight down a column.
+--   * The cell the crate just left stays safe for Config.LaserCooldownSeconds, counted from
+--     the moment the crate SEATS in its new cell, not from when it was lifted. That matters:
+--     one arm move is ~11s of flight, so a cooldown started at lift would be spent before the
+--     crate even landed, and the bay would be a race against the arm instead of a race across
+--     the floor.
+--
+-- The route is generated per run and the player can't see it, so the operator's overlay is
+-- load-bearing: Bridge.send publishes the next cell to the physical side every time it changes.
+BUILDERS.LaserWalk = function(i, folder, info, state)
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	local COLS, ROWS = Config.BayCols, Config.BayRows
+
+	-- Arming has to trigger from the APPROACH, not from inside the bay. Every cell is lethal
+	-- until the first crate lands, so a bay that only armed once somebody was standing in it
+	-- could only ever be armed by somebody dying in it. One cell of slack puts the player on
+	-- the catwalk, where they can read the callout and wait for the operator's first placement.
+	local ARM_PAD = CELL
+
 	local RED = Color3.fromRGB(255, 0, 0)
-	local beams, emitters, movers = {}, {}, {}
-	local beamCount = 0
+	local AMBER = Color3.fromRGB(255, 176, 40)
+	local GREEN = Color3.fromRGB(120, 240, 140)
 
-	local function beamBetween(a, b, thickness)
-		local delta = b - a
-		local mid = a + delta / 2
-		local p = newPart("LaserBeam", Vector3.new(thickness, thickness, delta.Magnitude), mid,
-			RED, Enum.Material.Neon, folder, {Transparency = 0.15})
-		p.CFrame = CFrame.lookAt(mid, b)
-		makeLethalPart(p)
-		table.insert(beams, p)
+	local function keyOf(c, r)
+		return c .. "," .. r
+	end
 
-		-- a few beams carry their own red light so the bay is lit red rather than orange
-		beamCount += 1
-		if beamCount % 5 == 0 then
-			local l = Instance.new("PointLight")
-			l.Color = Color3.fromRGB(255, 20, 20)
-			l.Range = 14
-			l.Brightness = 2.2
-			l.Parent = p
+	----------------------------------------------------------------
+	-- Per-cell hazard. The floor pad is the authoritative killer -- it is the thing you
+	-- actually stand on, so it cannot be stepped over -- and the crossed beams above it are
+	-- what make the cell legible from across the bay.
+	----------------------------------------------------------------
+	local cells = {}
+	for col = 0, COLS - 1 do
+		for row = 0, ROWS - 1 do
+			local c = cellCenter(i, col, row)
+			local pad = newPart("CellPad", Vector3.new(CELL - 0.5, 0.12, CELL - 0.5),
+				Vector3.new(c.X, 0.07, c.Z), RED, Enum.Material.Neon, folder,
+				{Transparency = 0.7, CanQuery = false})
+			makeLethalPart(pad)
+
+			local beams = {}
+			for _, y in ipairs({1.6, 4.4, 7.2}) do
+				local across = newPart("CellBeam", Vector3.new(CELL - 0.2, 0.16, 0.16),
+					Vector3.new(c.X, y, c.Z), RED, Enum.Material.Neon, folder,
+					{Transparency = 0.15, CanQuery = false})
+				local along = newPart("CellBeam", Vector3.new(0.16, 0.16, CELL - 0.2),
+					Vector3.new(c.X, y, c.Z), RED, Enum.Material.Neon, folder,
+					{Transparency = 0.15, CanQuery = false})
+				makeLethalPart(across)
+				makeLethalPart(along)
+				table.insert(beams, across)
+				table.insert(beams, along)
+			end
+
+			cells[keyOf(col, row)] = {col = col, row = row, pad = pad, beams = beams, live = true}
 		end
-		return p
 	end
 
-	local function emitter(pos)
-		local e = newPart("Emitter", Vector3.new(1.1, 1.1, 1.1), pos,
-			Color3.fromRGB(38, 38, 44), Enum.Material.Metal, folder)
-		local l = Instance.new("PointLight")
-		l.Color = Color3.fromRGB(255, 50, 50)
-		l.Range = 9
-		l.Brightness = 1.6
-		l.Parent = e
-		table.insert(emitters, e)
-		return e
+	-- A cell is only ever one of these three, and the pad colour says which from anywhere.
+	local LIVE, SAFE, COOLING = "live", "safe", "cooling"
+	local function setCellState(cell, mode, flash)
+		cell.live = (mode == LIVE)
+		for _, b in ipairs(cell.beams) do
+			b:SetAttribute("Live", cell.live)
+			b.Transparency = cell.live and 0.15 or 1
+		end
+		cell.pad:SetAttribute("Live", cell.live)
+		if mode == LIVE then
+			cell.pad.Color = RED
+			cell.pad.Transparency = 0.7
+		elseif mode == SAFE then
+			cell.pad.Color = GREEN
+			cell.pad.Transparency = 0.45
+		else
+			cell.pad.Color = AMBER
+			-- the pulse IS the warning: it speeds up as the cooldown runs out
+			cell.pad.Transparency = flash and 0.25 or 0.6
+		end
 	end
 
-	local heights = {1.6, 4.0, 6.4, 8.8}
-	local zLines = {3, 8, 12, 16, 21}
+	----------------------------------------------------------------
+	-- Route generation. A simple (non-repeating) orthogonal walk that starts on the entrance
+	-- row and finishes on the exit row, so the bay is genuinely crossed. Randomised DFS with
+	-- backtracking -- the grid is 12 cells, so this is instant and always finds one.
+	----------------------------------------------------------------
+	local function shuffled(t)
+		for a2 = #t, 2, -1 do
+			local b2 = math.random(a2)
+			t[a2], t[b2] = t[b2], t[a2]
+		end
+		return t
+	end
 
-	-- beams running across the bay, wall to wall
-	for _, zo in ipairs(zLines) do
-		local z = z0 + zo
-		for hi, y in ipairs(heights) do
-			local b = beamBetween(Vector3.new(0, y, z), Vector3.new(Config.BayWidth, y, z), 0.22)
-			-- every other beam slowly sweeps up and down like a scanner
-			if (hi + zo) % 2 == 0 then
-				table.insert(movers, {part = b, baseY = y, x = Config.BayWidth / 2, z = z,
-					phase = (zo + hi) * 0.7})
+	local function routeOfLength(target)
+		local best, path, seen = nil, {}, {}
+
+		local function dfs(col, row)
+			if best then
+				return
+			end
+			if #path == target then
+				if row == ROWS - 1 then
+					best = table.clone(path)
+				end
+				return
+			end
+			for _, d in ipairs(shuffled({{1, 0}, {-1, 0}, {0, 1}, {0, -1}})) do
+				local nc, nr = col + d[1], row + d[2]
+				local k = keyOf(nc, nr)
+				if nc >= 0 and nc < COLS and nr >= 0 and nr < ROWS and not seen[k] then
+					seen[k] = true
+					table.insert(path, {nc, nr})
+					dfs(nc, nr)
+					table.remove(path)
+					seen[k] = nil
+					if best then
+						return
+					end
+				end
 			end
 		end
-		emitter(Vector3.new(-0.9, heights[1], z))
-		emitter(Vector3.new(Config.BayWidth + 0.9, heights[#heights], z))
+
+		for _, sc in ipairs(shuffled({0, 1, 2, 3})) do
+			path, seen = {{sc, 0}}, {[keyOf(sc, 0)] = true}
+			dfs(sc, 0)
+			if best then
+				return best
+			end
+		end
+		return nil
 	end
 
-	-- beams running the length of the bay
-	for col = 0, 3 do
-		local x = col * CELL + CELL / 2
-		for _, y in ipairs({2.8, 5.2, 7.6}) do
-			beamBetween(Vector3.new(x, y, z0), Vector3.new(x, y, z0 + Config.BayDepth), 0.2)
+	local function generateRoute()
+		local lo, hi = Config.LaserRouteMin, Config.LaserRouteMax
+		-- try the requested length first, then shorter, so an unlucky target can't leave the
+		-- bay unplayable
+		local want = math.random(lo, hi)
+		for len = want, lo, -1 do
+			local r = routeOfLength(len)
+			if r then
+				return r
+			end
+		end
+		return routeOfLength(lo) or {{1, 0}, {1, 1}, {1, 2}}
+	end
+
+	----------------------------------------------------------------
+	-- Run state
+	----------------------------------------------------------------
+	local route, step = nil, 0      -- step = how many route cells the crate has occupied
+	local blockKey = nil            -- cell the crate is in; survives the crate being in flight
+	local cooling = {}              -- [cellKey] = os.clock() when it goes live again
+	local lastVacated = nil         -- the cell the crate just left: where the player is standing
+	local running = false
+	local flashText, flashUntil = nil, 0
+
+	-- Optional: the physical side's overlay. Bridge only exists on branches that have the real
+	-- robot link, and may be offline, so this is best-effort and the HUD always carries the
+	-- same information for solo play.
+	local Bridge
+	do
+		local mod = ServerScriptService:FindFirstChild("Bridge")
+		if mod then
+			local ok, result = pcall(require, mod)
+			if ok then
+				Bridge = result
+			end
 		end
 	end
 
-	-- corner-to-corner diagonals to break up the regular lattice
-	beamBetween(Vector3.new(0, 1.2, z0), Vector3.new(Config.BayWidth, 9.2, z0 + Config.BayDepth), 0.2)
-	beamBetween(Vector3.new(Config.BayWidth, 1.2, z0), Vector3.new(0, 9.2, z0 + Config.BayDepth), 0.2)
-	beamBetween(Vector3.new(0, 9.2, z0), Vector3.new(Config.BayWidth, 1.2, z0 + Config.BayDepth), 0.2)
+	local function nextCell()
+		return route and route[step + 1] or nil
+	end
 
-	-- live flicker + scanner sweep
+	local lastEmitted = nil
+	local function emitTarget()
+		if not Bridge or not Bridge.send then
+			return
+		end
+		local ok = pcall(function()
+			if Bridge.isConnected and not Bridge.isConnected() then
+				return
+			end
+			local n = nextCell()
+			local sig = n and (n[1] .. "," .. n[2] .. "@" .. (step + 1)) or "done"
+			if sig == lastEmitted then
+				return
+			end
+			lastEmitted = sig
+			Bridge.send({
+				t = "target",
+				bay = i,
+				level = info.level,
+				col = n and n[1] or nil,
+				row = n and n[2] or nil,
+				step = n and (step + 1) or nil,
+				of = route and #route or nil,
+				done = (n == nil),
+			})
+		end)
+		if not ok then
+			lastEmitted = nil
+		end
+	end
+
+	local function armRun()
+		running = true
+		route = generateRoute()
+		step = 0
+		blockKey = nil
+		cooling = {}
+		lastVacated = nil
+		lastEmitted = nil
+		local parts = {}
+		for _, c in ipairs(route) do
+			table.insert(parts, string.format("(%d,%d)", c[1], c[2]))
+		end
+		print(string.format("[HazardManager] laser walk: route of %d -> %s",
+			#route, table.concat(parts, " ")))
+		emitTarget()
+	end
+
+	local function disarm()
+		running = false
+		route = nil
+		step = 0
+		blockKey = nil
+		cooling = {}
+		lastVacated = nil
+		lastEmitted = nil
+		emitTarget()
+	end
+
+	----------------------------------------------------------------
+	-- Placement guard: only the next cell of the route takes the crate. A refusal is parked by
+	-- BlockSync rather than discarded -- the operator's cube is still on the real table, so the
+	-- game owes them the placement the moment the answer changes.
+	----------------------------------------------------------------
+	if bay then
+		BlockSync.setPlacementGuard(bay, function(cell)
+			local n = nextCell()
+			if not n then
+				return false, "ROUTE COMPLETE"
+			end
+			if cell.col == n[1] and cell.row == n[2] then
+				return true
+			end
+			return false, string.format("NOT THE NEXT CELL - COL %d, ROW %d", n[1], n[2])
+		end)
+	end
+
+	BlockSync.PlacementRejected:Connect(function(bayModel, _, reason)
+		if bayModel ~= bay then
+			return
+		end
+		flashText, flashUntil = reason, os.clock() + 2.5
+	end)
+
+	----------------------------------------------------------------
+	-- The crate SEATING is the only thing that advances the route and the only thing that
+	-- starts a cooldown -- which is why this listens to CratePlaced and not CellsChanged.
+	--
+	-- CellsChanged fires the moment the operator's cube moves on the real table, which is
+	-- about five seconds before the arm has carried the crate anywhere, and it fires for cells
+	-- the placement guard went on to REFUSE. Driving the bay off it marked a cell the player
+	-- could not actually stand on as safe, and started the cooldown on the cell under their
+	-- feet while the new one was still in the air.
+	--
+	-- While the crate is in flight there is no safe cell to switch to, and blockKey
+	-- deliberately keeps its old value through that gap -- that is what keeps the ground under
+	-- the player safe until the new cell is genuinely ready.
+	----------------------------------------------------------------
+	BlockSync.CratePlaced:Connect(function(bayModel, cell)
+		if bayModel ~= bay or not running then
+			return
+		end
+		if (cell.level or 1) < info.level then
+			return
+		end
+		local landed = keyOf(cell.col, cell.row)
+		if landed == blockKey then
+			return
+		end
+
+		if blockKey then
+			cooling[blockKey] = os.clock() + Config.LaserCooldownSeconds
+			lastVacated = blockKey
+		end
+		blockKey = landed
+
+		local n = nextCell()
+		if n and landed == keyOf(n[1], n[2]) then
+			step += 1
+			emitTarget()
+		end
+	end)
+
+	----------------------------------------------------------------
+	-- HUD
+	----------------------------------------------------------------
+	local function pushObjective()
+		local p = {title = string.format("BAY %d  -  LASER WALK", i)}
+		if state.solved then
+			p.task = "CLEARED"
+			p.hint = "The grid is down -- walk out."
+			p.tone = "ok"
+		elseif not running then
+			p.task = "STEP ONTO THE GRID"
+			p.hint = "Every cell is live. The crate is the only safe ground."
+			p.tone = "danger"
+		else
+			local n = nextCell()
+			if n then
+				p.task = string.format("%s  ->  COL %d, ROW %d",
+					blockReq(info.level), n[1], n[2])
+				p.hint = string.format("Step %d of %d. Only that cell will take the crate.",
+					step + 1, #route)
+				p.tone = (step == 0) and "danger" or "warn"
+			else
+				p.task = "STAND ON THE LAST CELL"
+				p.hint = "Route complete -- step onto the crate's cell to kill the grid."
+				p.tone = "warn"
+			end
+
+			-- The countdown is specifically the cell the crate JUST left, because that is the
+			-- one the player is standing on. Showing whichever cooldown expires soonest looked
+			-- right until two overlapped, and then it counted down a cell already behind them
+			-- -- reading 0.3s while the ground underfoot actually had a full 6s left.
+			local at = lastVacated and cooling[lastVacated] or nil
+			if at then
+				p.timerLabel = "CELL GOES LIVE IN"
+				p.timer = math.max(0, at - os.clock())
+				p.timerTone = "warn"
+			end
+		end
+
+		if os.clock() < flashUntil then
+			p.flash = flashText
+		end
+		publishObjective(i, p, CELL)
+	end
+
+	----------------------------------------------------------------
+	-- Run loop
+	----------------------------------------------------------------
+	local function inCell(pos, col, row)
+		local c = cellCenter(i, col, row)
+		return math.abs(pos.X - c.X) <= CELL / 2 and math.abs(pos.Z - c.Z) <= CELL / 2
+	end
+
 	task.spawn(function()
 		while folder.Parent do
-			if not state.solved then
-				local t = os.clock()
-				local flicker = 0.16 + math.sin(t * 5) * 0.07
-				for _, b in ipairs(beams) do
-					if b:GetAttribute("Live") == true then
-						b.Transparency = flicker
+			local occupants = occupantsOf(i, ARM_PAD)
+			local now = os.clock()
+
+			if state.solved then
+				-- cleared for good; grid stays down
+			elseif not running then
+				if #occupants > 0 then
+					armRun()
+				end
+			elseif #occupants == 0 then
+				-- The bay emptied unsolved, which in practice means the player died on the
+				-- grid. By design that regenerates the route and the operator has to carry the
+				-- cube back to the new first cell -- so the HUD has to be loud about it.
+				disarm()
+			end
+
+			if running and not state.solved then
+				for k, at in pairs(cooling) do
+					if now >= at then
+						cooling[k] = nil
 					end
 				end
-				for _, m in ipairs(movers) do
-					if m.part.Parent then
-						local y = m.baseY + math.sin(t * 0.9 + m.phase) * 1.1
-						m.part.CFrame = CFrame.lookAt(
-							Vector3.new(m.x, y, m.z),
-							Vector3.new(Config.BayWidth, y, m.z))
+
+				for k, cell in pairs(cells) do
+					if k == blockKey then
+						setCellState(cell, SAFE)
+					elseif cooling[k] then
+						local left = cooling[k] - now
+						local rate = (left <= Config.LaserRearmWarnSeconds) and 14 or 4
+						setCellState(cell, COOLING, math.sin(now * rate) > 0)
+					else
+						setCellState(cell, LIVE)
+					end
+				end
+
+				-- solved by standing on the final cell of the route, not merely by the crate
+				-- arriving there -- the player has to actually make the last step
+				if route and step >= #route and blockKey then
+					local last = route[#route]
+					for _, o in ipairs(occupants) do
+						if inCell(o.position, last[1], last[2]) then
+							state.setSolved(true)
+							break
+						end
 					end
 				end
 			end
-			task.wait(0.04)
+
+			pushObjective()
+			task.wait(0.1)
 		end
 	end)
 
 	function state.onSolved()
 		-- staggered power-down, so the grid dies in a sweep rather than all at once
 		task.spawn(function()
-			for idx, b in ipairs(beams) do
-				b:SetAttribute("Live", false)
-				TweenService:Create(b, TweenInfo.new(0.3), {Transparency = 1}):Play()
+			local idx = 0
+			for _, cell in pairs(cells) do
+				setCellState(cell, SAFE)
+				cell.pad.Transparency = 1
+				idx += 1
 				if idx % 3 == 0 then
-					task.wait(0.04)
-				end
-			end
-			for _, e in ipairs(emitters) do
-				e.Color = Color3.fromRGB(70, 70, 76)
-				for _, l in ipairs(e:GetChildren()) do
-					if l:IsA("PointLight") then
-						l.Enabled = false
-					end
+					task.wait(0.03)
 				end
 			end
 		end)
+		emitTarget()
+	end
+
+	function state.reset()
+		disarm()
+		for _, cell in pairs(cells) do
+			setCellState(cell, LIVE)
+		end
 	end
 end
 
@@ -1448,13 +2068,14 @@ local function buildBay(i)
 
 	CollectionService:AddTag(folder, "Obstacle")
 	folder:SetAttribute("Obstacle", info.obstacle)
-	folder:SetAttribute("Color", info.color)
 	folder:SetAttribute("Level", info.level)
 
 	local c = bayCenter(i)
-	state.banner = (info.solveMode == "switches")
-		and string.format("%s  -  THROW BOTH LEVERS", info.obstacle:upper())
-		or string.format("%s  -  %s x%d", info.obstacle:upper(), info.color:upper(), info.level)
+	-- A bay may name its own banner -- an action bay's requirement is not "colour x level" and
+	-- the default used to be hard-coded to bay 1's levers, which was wrong for every other
+	-- action bay. The default still describes a placement bay, which is most of them.
+	state.banner = info.banner
+		or string.format("%s  -  %s", info.obstacle:upper(), blockReq(info.level))
 	state.label = addLabel(folder, state.banner,
 		Vector3.new(c.X, 11, c.Z), Color3.fromRGB(255, 180, 90))
 
@@ -1475,10 +2096,11 @@ local function checkSolved(info, cellsList)
 	for _, c in ipairs(cellsList) do
 		byKey[c.col .. "," .. c.row] = c
 	end
+	-- Colour is deliberately not checked: any block satisfies a cell. The level test stays,
+	-- because that is a cube COUNT -- a level-2 cell still wants two cubes stacked.
 	for _, sc in ipairs(info.solveCells) do
 		local c = byKey[sc[1] .. "," .. sc[2]]
 		if not c then return false end
-		if c.color ~= info.color then return false end
 		if (c.level or 1) < info.level then return false end
 	end
 	return true
@@ -1498,7 +2120,7 @@ BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
 
 	-- Bays whose goal is an action rather than a placement own their own solved state; the
 	-- crates there are the means, so filling cells must not short-circuit them.
-	if state.info.solveMode == "switches" then
+	if ownsItsSolve(state.info) then
 		return
 	end
 
