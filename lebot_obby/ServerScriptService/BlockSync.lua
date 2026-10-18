@@ -195,8 +195,16 @@ function BlockSync.applyCells(bayModel, newCellsList)
 		if isNew or isChanged then
 			task.delay(Config.CrateConfirmDelay, function()
 				local existing = live[key]
-				if existing and existing.Parent then
-					existing:Destroy()
+				if existing then
+					-- A crate still waiting its turn in the arm queue has no Parent yet, so
+					-- `.Parent` cannot tell "not placed yet" from "already destroyed" -- and
+					-- the old check skipped exactly the queued ones, so fast colour cycling
+					-- left several crates stacked in one cell. Flag it instead and let
+					-- whichever side reaches it first do the cleanup.
+					existing:SetAttribute("Superseded", true)
+					if existing.Parent then
+						existing:Destroy()
+					end
 				end
 				local worldCFrame = BlockSync.cellToWorld(bayModel, newCell.col, newCell.row)
 				local crateModel = buildCrateModel(newCell.color, newCell.level)
