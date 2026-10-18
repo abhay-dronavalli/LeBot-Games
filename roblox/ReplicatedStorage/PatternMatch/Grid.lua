@@ -109,12 +109,17 @@ function Grid.cellOf(xMm, yMm)
 	return Grid.cellName(row, col)
 end
 
--- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, not visible, in an
--- ignored zone such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom
--- keeps the levels apart. visible == false is a remembered pose, not a fresh one (PROTOCOL.md), so it
--- doesn't count; the core reports a block buried under a stack as visible, so stacks still count.
+-- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, stale, in an ignored
+-- zone such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps the
+-- levels apart. A visible == false block is one the camera can't see right now (usually the arm is over
+-- it) at its remembered pose; it still counts, or every pass of the arm would break the 1 s match hold,
+-- until its age (seconds since last seen) passes Config.staleBlockSeconds.
+function Grid.isStale(block)
+	return block.visible == false and (tonumber(block.age) or 0) > Config.staleBlockSeconds
+end
+
 function Grid.cellOfBlock(block)
-	if block.held == true or block.visible == false or Config.ignoreZones[block.zone] then
+	if block.held == true or Grid.isStale(block) or Config.ignoreZones[block.zone] then
 		return nil
 	end
 	return Grid.cellOf(block.x, block.y)

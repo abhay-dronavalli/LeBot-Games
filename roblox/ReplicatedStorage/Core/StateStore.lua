@@ -6,13 +6,14 @@
 --                             arm = { joints = { shoulder_pan = deg, ... }, points = { {name, x, y, z}, ... } }
 --                             (points base to tip, sheet mm), or nil while there is no arm data;
 --                             blocks = { {id, color, x, y, z, yaw, level, held, visible}, ... } in sheet mm,
---                             colors already mapped to Config.colors names (Config.bridgeColors).
+--                             colors mapped to Config.colors names (Config.perceptionColors); any other
+--                             name is kept as sent, and the game treats it as a misread.
 --   StateStore.update(msg) -> store a new state message and fire changed (the fake generator and tests)
 --   StateStore.changed     -> signal (BindableEvent.Event) fired after every state update
 --   StateStore.source()    -> "pending" (waiting for the hello), "bridge" or "fake"
---   StateStore.status()    -> "live" (bridge, source teleop or auto), "mock" (bridge, source mock),
---                             "offline" (still pending, no frame for Config.bridgeStaleSeconds, or
---                             blocks_age over it) or "fake" (the fake generator)
+--   StateStore.status()    -> "live" (bridge, any source but mock), "mock" (bridge, source mock),
+--                             "offline" (still pending, no frame for Config.bridgeStaleSeconds, no block
+--                             data yet (blocks_age null) or blocks_age over it) or "fake" (fake generator)
 --   StateStore.hello()     -> the bridge's hello frame, or nil
 --   StateStore.sendEvent(name, intensity, duration) -> true if it went to the robot, else false, reason
 --
@@ -79,7 +80,9 @@ function StateStore.status()
 		return "offline"
 	end
 	local stale = Config.bridgeStaleSeconds
-	if os.clock() - lastFrameAt > stale or (tonumber(state.blocks_age) or 0) > stale then
+	-- blocks_age is null until the camera has published once (teleop without --vision): no table data.
+	local blocksAge = tonumber(state.blocks_age)
+	if os.clock() - lastFrameAt > stale or blocksAge == nil or blocksAge > stale then
 		return "offline"
 	end
 	return helloFrame and helloFrame.source == "mock" and "mock" or "live"
@@ -102,15 +105,19 @@ end
 
 local unknownColors = {} -- protocol color names with no Config.colors entry, warned about once each
 
--- A protocol color name as a Config.colors name: Config.bridgeColors renames ("light blue" -> "skyblue"),
--- anything else is kept as is. LiveBoard draws a name it doesn't know white, and it never matches a ticket.
+-- A perception color name as a Config.colors name, through Config.perceptionColors ("light blue" ->
+-- "skyblue"). Any other name is a misread (our kit has only the six): it is kept as sent, so the LiveBoard
+-- draws it gray and Target.compare counts it as a wrong block (Target.isMisread).
 function StateStore.colorName(name)
-	local mapped = Config.bridgeColors[name] or name
-	if Config.colors[mapped] == nil and not unknownColors[mapped] then
-		unknownColors[mapped] = true
-		warn(string.format("[StateStore] the bridge sent block color %q, which Config.colors doesn't have", tostring(name)))
+	local mapped = Config.perceptionColors[name]
+	if mapped then
+		return mapped
 	end
-	return mapped
+	if not unknownColors[name] then
+		unknownColors[name] = true
+		warn(string.format("[StateStore] misread block color %q (not one of our six): shown gray, never matches", tostring(name)))
+	end
+	return name
 end
 
 -- A bridge state frame -> this module's state (blocks copied, colors mapped).
@@ -118,7 +125,7 @@ function StateStore.fromFrame(frame)
 	local blocks = {}
 	for _, b in ipairs(frame.blocks or {}) do
 		local block = table.clone(b)
-		-- A held block reports "grey" (PROTOCOL.md). It never counts, so it isn't renamed or warned about.
+		-- A held block reports "grey" (PROTOCOL.md). It never counts, so it isn't mapped or warned about.
 		block.color = b.held and b.color or StateStore.colorName(b.color)
 		table.insert(blocks, block)
 	end

@@ -8,9 +8,13 @@ return {
 	useBridge = true,
 	bridgeUrl = "ws://localhost:8765",   -- or the robot laptop's LAN IP
 	bridgeHelloSeconds = 3,              -- no hello by then at server start: fake generator for this session
-	bridgeStaleSeconds = 1,              -- no frame, or blocks_age over this: OFFLINE (matching freezes)
-	-- Protocol color names -> Config.colors names. A name not listed here is used as is.
-	bridgeColors = { ["light blue"] = "skyblue" },
+	bridgeStaleSeconds = 1,              -- no frame, or blocks_age over this (or none yet): OFFLINE (matching freezes)
+	staleBlockSeconds = 2,               -- a visible = false block (hidden by the arm) still counts until its age passes this
+	-- Perception's color names for our six blocks -> Config.colors names (robot/perception/config.py
+	-- BLOCK_COLORS). Any other name on a non-held block (green, blue, pink, white, black, grey, ...) is a
+	-- misread: the LiveBoard draws it gray and compare counts it as a wrong block.
+	perceptionColors = { red = "red", orange = "orange", yellow = "yellow", teal = "teal", purple = "purple",
+	                     ["light blue"] = "skyblue" },
 	-- Grid fallback. The hello frame's space.grid (origin_mm, cell_mm, rows, cols) replaces these on the
 	-- server once the bridge says hello (Grid.setGeometry).
 	gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)

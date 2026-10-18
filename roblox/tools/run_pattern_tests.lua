@@ -117,13 +117,30 @@ check(".clear", r.clear, false); check(".blocked", r.blocked, { "B4" }); check("
 check(".missing", r.missing, {}); check(".wrong", r.wrong, {})
 check("same, block removed from B4 .clear", Target.compare(target, live(flat), { B4 = true }).clear, true)
 
+section("5b. misread colors (not in Config.colors) count as wrong blocks, outlined")
+check("Target.isMisread: green / grey / red / skyblue", tostring(Target.isMisread("green")) .. tostring(Target.isMisread("grey"))
+	.. tostring(Target.isMisread("red")) .. tostring(Target.isMisread("skyblue")), "truetruefalsefalse")
+r = Target.compare(target, live({ A1 = "green", B2 = "teal", C3 = "yellow" }), {})
+check("green on target cell A1: wrong, outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.A1 and r.problemLevels.A1[0]),
+	"clear=false missing={} wrong={A1} extra={} blocked={} doubled={} outline true")
+r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", B3 = "pink" }), {})
+check("pink on non-target B3: wrong (not extra), outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.B3 and r.problemLevels.B3[0]),
+	"clear=false missing={} wrong={B3} extra={} blocked={} doubled={} outline true")
+r = Target.compare(towers({ B2 = { "red", "teal" } }), live({ B2 = { "red", "white" } }), {})
+check("white on top of a tower: wrong at that level", Target.describe(r) .. " " .. tostring(r.problemLevels.B2 and r.problemLevels.B2[1]),
+	"clear=false missing={} wrong={B2} extra={} blocked={} doubled={} true")
+
 section("6. compare missing / wrong")
 r = Target.compare(target, live({ A1 = "red", B2 = "purple" }), {})
 check(".missing", r.missing, { "C3" }); check(".wrong", r.wrong, { "B2" }); check(".clear", r.clear, false)
 
 section("7. cellOfBlock with plan.md-shaped blocks at B2 center")
 check("play zone, on table", Grid.cellOfBlock(block("B2")), "B2")
-check("visible=false (remembered pose, not fresh): ignored", Grid.cellOfBlock(block("B2", "red", { visible = false })), nil)
+check("visible=false, age 0 (arm over it): still counts", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 0 })), "B2")
+check("visible=false, age 1.9 (< staleBlockSeconds 2): still counts", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 1.9 })), "B2")
+check("visible=false, age 2.5: stale, ignored", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 2.5 })), nil)
+check("visible=false, no age field (fake data): counts", Grid.cellOfBlock(block("B2", "red", { visible = false })), "B2")
+check("visible=true, age 5 (buried under a stack): counts", Grid.cellOfBlock(block("B2", "red", { visible = true, age = 5 })), "B2")
 check("zone=\"tray\"", Grid.cellOfBlock(block("B2", "red", { zone = "tray" })), nil)
 check("zone=false (not tray)", Grid.cellOfBlock(block("B2", "red", { zone = false })), "B2")
 check("held=true, z=80", Grid.cellOfBlock(block("B2", "red", { held = true, z = 80, visible = true })), nil)
@@ -638,6 +655,19 @@ if cab then
 	check("back online: the 1 s hold starts over", tostring(g.activeId == frozenId), "true")
 	steps(4, 0.25)
 	check("then ORDER UP", tostring(g.activeId ~= frozenId) .. " " .. tostring(g.score > frozenScore) .. " " .. sent[#sent].robot, "true true mock")
+
+	section("16f3. a misread block (green) shows gray and blocks the match")
+	setPattern(g:activeTicket(), { B3 = "red" })
+	local misreadId, misreadScore = g.activeId, g.score
+	fakeBlocks = { block("B3", "green") }
+	steps(8, 0.25)
+	local b3 = board.LiveBoard.Blocks.B3
+	check("green at B3: drawn gray, white outline, not completed after 2 s", string.format("%d,%d,%d %s %s",
+		b3.Color.R * 255 + 0.5, b3.Color.G * 255 + 0.5, b3.Color.B * 255 + 0.5, tostring(b3.ProblemHighlight.Visible),
+		tostring(g.activeId == misreadId and g.score == misreadScore)), "150,150,150 true true")
+	fakeBlocks = { block("B3", "red") }
+	steps(5, 0.25)
+	check("read as red again: ORDER UP", tostring(g.activeId ~= misreadId) .. " " .. tostring(g.score > misreadScore), "true true")
 	fakeBlocks = {}
 
 	section("16g. Hard: reveal cycle on the TargetBoard (and the cards, via the payload)")
@@ -1300,13 +1330,30 @@ do
 	check("fromFrame: arm kept with its points, blocks_age carried", #s1.arm.points .. " " .. s1.blocks_age, "2 0.1")
 	check("fromFrame: an arm with no points is no arm data", Store.fromFrame({ blocks = {}, arm = { joints = {}, points = {} } }).arm, nil)
 	check("fromFrame does not touch the frame it was given", frame.blocks[1].color, "light blue")
-	check("protocol colors not in Config.colors (kit list + BlockSync's)", (function()
-		local missing = {}
-		for _, c in ipairs({ "orange", "yellow", "purple", "teal", "red", "light blue", "green", "blue", "pink", "white", "black" }) do
-			if Config.colors[Config.bridgeColors[c] or c] == nil then table.insert(missing, c) end
+	local SC = require(RS.PatternMatch.Config) -- the Config that Store reads
+	check("perceptionColors: the six kit names map onto Config.colors, one each", (function()
+		local out, used = {}, {}
+		for _, c in ipairs({ "red", "orange", "yellow", "teal", "purple", "light blue" }) do
+			local ours = Store.colorName(c)
+			if SC.colors[ours] == nil or used[ours] then return "bad " .. c end
+			used[ours] = true
+			table.insert(out, ours)
 		end
-		return table.concat(missing, ",")
-	end)(), "green,blue,pink,white,black")
+		local n = 0
+		for _ in pairs(SC.perceptionColors) do n += 1 end
+		return table.concat(out, ",") .. " (" .. n .. " entries)"
+	end)(), "red,orange,yellow,teal,purple,skyblue (6 entries)")
+	check("any other name is kept as sent (a misread)", (function()
+		local out = {}
+		for _, c in ipairs({ "green", "blue", "pink", "white", "black", "grey", "light_blue" }) do table.insert(out, Store.colorName(c)) end
+		return table.concat(out, ",")
+	end)(), "green,blue,pink,white,black,grey,light_blue")
+	local misreadFrame = Store.fromFrame({ blocks = {
+		{ id = 1, color = "green", x = 50, y = 50, z = 0, level = 0, held = false, visible = true, age = 0 },
+		{ id = 2, color = "grey", x = 60, y = 60, z = 0, level = 0, held = false, visible = true, age = 0 },
+		{ id = 3, color = "grey", x = 60, y = 60, z = 90, level = 0, held = true, visible = true, age = 0 } } })
+	check("fromFrame: non-held green / grey stay as misreads; a held grey is left alone", misreadFrame.blocks[1].color .. " "
+		.. misreadFrame.blocks[2].color .. " " .. misreadFrame.blocks[3].color, "green grey grey")
 	local fa = Store.fakeArm(Config.twinRestPose)
 	check("fake arm: 6 sheet-mm points named like the protocol, base before row A", fa ~= nil and #fa.points == 6 and fa.points[1].name == "shoulder_pan"
 		and fa.points[6].name == "tip" and fa.points[1].y < Config.gridOriginMm.Y, true)

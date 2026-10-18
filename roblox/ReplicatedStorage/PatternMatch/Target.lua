@@ -89,15 +89,30 @@ end
 -- Compares level by level. Returns { clear, missing, wrong, extra, blocked, doubled, problemLevels }, the
 -- five lists sorted arrays of cells:
 --   missing: target cell with a tower level that has no block (nothing at all, or a shorter tower)
---   wrong:   target cell with a block of the wrong color at some level
+--   wrong:   target cell with a block of the wrong color at some level, or any cell with a misread block
+--            (a color name Config.colors doesn't have, Target.isMisread) at any level
 --   extra:   block at a level the target tower doesn't have (on top of a complete tower, or on a
 --            non-target cell), or at any level >= Config.maxStackGlobal
 --   blocked: any block on a vanished cell (reported here instead of the lists above)
 --   doubled: 2+ blocks reported at the same cell and level; that level can never count as correct
--- problemLevels: { [cell] = { [level] = true } }, the blocks behind extra, doubled and blocked, so the
--- LiveBoard can outline the specific block.
+-- problemLevels: { [cell] = { [level] = true } }, the blocks behind extra, doubled, blocked and misread,
+-- so the LiveBoard can outline the specific block.
 -- clear is true only when every tower matches exactly bottom to top and nothing else is on the grid,
 -- i.e. all five lists are empty. Holding it for Config.holdToClear is the caller's job.
+-- True for a block color that isn't one of ours: perception misread it (green, blue, pink, white, ...).
+function Target.isMisread(color)
+	return Config.colors[color] == nil
+end
+
+local function anyMisread(colors)
+	for _, color in ipairs(colors) do
+		if Target.isMisread(color) then
+			return true
+		end
+	end
+	return false
+end
+
 function Target.compare(target, liveGrid, vanished)
 	vanished = vanished or {}
 	local missing, wrong, extra, blocked, doubled = {}, {}, {}, {}, {}
@@ -115,7 +130,10 @@ function Target.compare(target, liveGrid, vanished)
 					doubled[cell] = true
 					addLevel(problemLevels, cell, level)
 				end
-				if level >= Config.maxStackGlobal or tower[level + 1] == nil then
+				if anyMisread(colors) then
+					wrong[cell] = true -- never matches, wherever it is; outlined so the player sees it
+					addLevel(problemLevels, cell, level)
+				elseif level >= Config.maxStackGlobal or tower[level + 1] == nil then
 					extra[cell] = true
 					addLevel(problemLevels, cell, level)
 				elseif #colors == 1 and colors[1] ~= tower[level + 1] then
