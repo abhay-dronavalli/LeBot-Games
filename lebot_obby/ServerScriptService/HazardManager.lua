@@ -389,6 +389,13 @@ BUILDERS.Saw = function(i, folder, info, state)
 		setPhase(leverB, DORMANT)
 	end
 
+	-- Debug/GameState reset. A switch-driven bay cannot be un-solved by clearing cells, since
+	-- its CellsChanged handler returns early, so without this hook the bay stays open for the
+	-- rest of the session and the demo is a one-shot.
+	function state.reset()
+		resetRun()
+	end
+
 	if leverA then
 		function leverA.onThrow()
 			setPhase(leverA, THROWN)
@@ -1233,6 +1240,24 @@ BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
 	end
 
 	state.setSolved(checkSolved(state.info, cellsList))
+end)
+
+-- Debug reset (R) returns every bay to unsolved and re-arms the ones that own their own state.
+-- Caveat: obstacles that present "solved" as a one-shot tween (the laser grid fading out, for
+-- instance) do not animate back -- their run loops resume, but the visual stays cleared. Only
+-- the saw bay rebuilds itself properly, via state.reset.
+local DebugHotkey = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("DebugHotkey")
+DebugHotkey.OnServerEvent:Connect(function(_, key)
+	if key ~= "R" then
+		return
+	end
+	for _, st in pairs(states) do
+		st.setSolved(false)
+		if st.reset then
+			st.reset()
+		end
+	end
+	print("[HazardManager] all bays reset")
 end)
 
 print("[HazardManager] one obstacle per bay built for all " .. Config.NumBays .. " bays")
