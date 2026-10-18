@@ -37,6 +37,7 @@ length and byte sum so the match is proven rather than assumed.
 | `ReplicatedStorage/CrateDefs.lua` | `ReplicatedStorage.CrateDefs` | ModuleScript |
 | `ReplicatedStorage/BayData.lua` | `ReplicatedStorage.BayData` | ModuleScript |
 | `ReplicatedStorage/Mapping.lua` | `ReplicatedStorage.Mapping` | ModuleScript |
+| `ReplicatedStorage/UiTheme.lua` | `ReplicatedStorage.UiTheme` | ModuleScript |
 | `ServerScriptService/RunControl.lua` | `ServerScriptService.RunControl` | ModuleScript |
 | `ServerScriptService/ActiveBayTracker.lua` | `ServerScriptService.ActiveBayTracker` | Script |
 | `ServerScriptService/DebugMenu.lua` | `ServerScriptService.DebugMenu` | Script |
@@ -57,13 +58,17 @@ length and byte sum so the match is proven rather than assumed.
 | `StarterPlayerScripts/ObjectiveHud.client.lua` | `StarterPlayer.StarterPlayerScripts.ObjectiveHud` | LocalScript |
 
 `ReplicatedStorage.Remotes` holds RemoteEvents (`CellEdit`, `CellsUpdated`, `DebugHotkey`,
-`GhostToggle`, `Objective`, `DebugCommand`, `DebugStatus`, `BayCells`, `CameraFace`) and has no
+`GhostToggle`, `Objective`, `DebugCommand`, `DebugStatus`, `BayCells`, `CameraFace`, `Toast`) and has no
 source of its own.
 
 `CameraFace` carries a look direction to one client whenever the server moves that player, so
 the camera turns with the body. Writing `HumanoidRootPart.CFrame` turns the character but not
 the view -- the camera's yaw lives in the client's camera module and nothing on the server can
 reach it, which is why every scenario jump used to leave you facing the way you came.
+
+`Toast` is the popup channel: `FireClient(player, text, tone, big)`. `ObjectiveHud` raises it as
+a transient toast, or as a full-screen stamp when `big` is set. See
+[`obby_planmds/ui.md`](../obby_planmds/ui.md).
 
 `Objective` is the on-screen task channel: an obstacle fires it with
 `{title, task, hint, tone, timer, timerLabel, timerTone, flash}` whenever its state changes,
