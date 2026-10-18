@@ -10,3 +10,7 @@ __pycache__/
 
 # gemini_namer.py reads GEMINI_API_KEY from here. Never commit it.
 .env
+
+# Studio holds this while a place file is open. Not ours to commit.
+*.rbxlx.lock
+*.rbxl.lock
