@@ -91,11 +91,16 @@ check("C4 center", Grid.cellOf(at(3, 4)), "C4")
 check("row A, column 4 (x toward tag 1)", Grid.cellOf(at(1, 4)), "A4")
 check("row C, column 1 (y toward tag 3)", Grid.cellOf(at(3, 1)), "C1")
 
-section("2. block on a cell edge")
-check("x = 82.55, column 1/2 boundary", Grid.cellOf(82.55, select(2, at(1, 1))), nil)
-check("y = 79.375, row A/B boundary", Grid.cellOf(at(1, 1), 79.375), nil)
-check("10% into A1 (outer 15%)", Grid.cellOf(at(1, 1, 0.10)), nil)
-check("20% into A1 (inside middle 70%)", Grid.cellOf(at(1, 1, 0.20)), "A1")
+section("2. block near a cell edge (cellTolerance 1.0: anywhere inside the cell counts)")
+check("cellTolerance is 1.0", Config.cellTolerance, 1)
+check("0.1 mm either side of the column 1/2 line (x 82.55): A1 | A2",
+	Grid.cellOf(82.45, select(2, at(1, 1))) .. " | " .. Grid.cellOf(82.65, select(2, at(1, 1))), "A1 | A2")
+check("0.1 mm either side of the row A/B line (y 79.375): A1 | B1",
+	Grid.cellOf(at(1, 1), 79.275) .. " | " .. Grid.cellOf(at(1, 1), 79.475), "A1 | B1")
+check("1% into A1 (corner)", Grid.cellOf(at(1, 1, 0.01, 0.01)), "A1")
+check("10% into A1", Grid.cellOf(at(1, 1, 0.10)), "A1")
+check("99% across A1", Grid.cellOf(at(1, 1, 0.99, 0.99)), "A1")
+check("x = 254, the grid's far edge (past column 4)", Grid.cellOf(Config.gridOriginMm.X + 4 * Config.cellSizeMm, select(2, at(1, 1))), nil)
 
 section("3. off-grid block")
 check("x = 10, before column 1", Grid.cellOf(10, select(2, at(1, 1))), nil)
@@ -142,7 +147,7 @@ check("zone=\"tray\"", Grid.cellOfBlock(block("B2", "red", { zone = "tray" })), 
 check("zone=false (not tray)", Grid.cellOfBlock(block("B2", "red", { zone = false })), "B2")
 check("held=true, z=80", Grid.cellOfBlock(block("B2", "red", { held = true, z = 80, visible = true })), nil)
 check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 48 })), "B2")
-check("on column 2/3 boundary", Grid.cellOfBlock(block("B2", "red", { x = O.X + 2 * S })), nil)
+check("just past the column 2/3 line counts for column 3 (cellTolerance 1.0)", Grid.cellOfBlock(block("B2", "red", { x = O.X + 2 * S + 0.1 })), "B3")
 
 section("8. flipX / flipY (A1 center on the table)")
 local ax, ay = at(1, 1)
@@ -1760,6 +1765,25 @@ if modeFolder and modeFolder:FindFirstChild("Module") and mapTemplate then
 	check("PlayerLeft of the last player (in the room): Finished at once, won = false; again does nothing",
 		#fired .. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. tostring(s6.finished) .. " " .. tostring((pcall(Mode.PlayerLeft, solo))) .. " " .. #fired,
 		"1 false true true 1")
+	Mode.Stop()
+
+	-- Leaving after the result is decided keeps it: on the results screen a winner takes the pad and still wins.
+	table.clear(fired)
+	local keeper = fakePlayer("Keeper", "player")
+	local s7 = Mode.Start({ keeper }, { store = store, manual = true, rng = Random.new(12) })
+	Mode.play(keeper)
+	Mode.step(MC.modeSelectSeconds)
+	Mode.step(MC.modeConfirmSeconds)
+	local decidedInShift = Mode.IsDecided()
+	s7.game.score = 25
+	s7.game.timeLeft = 0
+	Mode.step(MGame.TICK) -- Results
+	local decidedInResults = Mode.IsDecided()
+	Mode.PlayerLeft(keeper)
+	flush()
+	check("IsDecided: false in the shift, true on the results screen; leaving then ends the game at once and keeps the WIN",
+		tostring(decidedInShift) .. " " .. tostring(decidedInResults) .. " " .. #fired .. " " .. tostring(fired[1] and fired[1][1].won),
+		"false true 1 true")
 	Mode.Stop()
 
 	-- Nobody presses Play: after roomIdleSeconds the game ends and nobody wins.

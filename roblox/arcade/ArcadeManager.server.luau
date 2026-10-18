@@ -49,7 +49,7 @@ local joinCabinet
 local joined = {}
 local lastPress = -math.huge
 local lockedNotice = {}
-local activeGame -- { mode, played, leftEarly } while a mode runs
+local activeGame -- { mode, played, gone, leftEarly } while a mode runs
 local switchTo -- a bay the debug switcher wants next; runGame hands over to it on the way out
 
 ------------------------------------------------------------------ wins
@@ -151,6 +151,12 @@ local function waitWithTimeout(event, timeout, stopEarly)
 	local stopped = false
 	while result == nil and os.clock() - t0 < timeout do
 		if stopEarly and stopEarly() then
+			-- Everyone is out. A mode that ends when its last player leaves reports right then (a decided
+			-- round's results still count): give that a moment to arrive.
+			local t1 = os.clock()
+			while result == nil and os.clock() - t1 < 1 do
+				task.wait(0.05)
+			end
 			stopped = true
 			break
 		end
@@ -164,8 +170,18 @@ local function waitWithTimeout(event, timeout, stopEarly)
 end
 
 -- A player in the running game stepped on an enabled Back to Lobby pad: out of the game, back to the workshop.
+-- Before the round is decided that is a loss (won = false). After it (the mode's optional IsDecided()
+-- says so: a results screen, a result banner, an escape) the player keeps the result the mode reports.
 local function leaveToLobby(g, player)
-	g.leftEarly[player] = true
+	local decided = false
+	if g.mode.IsDecided then
+		local ok, value = pcall(g.mode.IsDecided)
+		decided = ok and value == true
+	end
+	g.gone[player] = true
+	if not decided then
+		g.leftEarly[player] = true
+	end
 	returnPlayersToArcade({ player })
 	if g.mode.PlayerLeft then
 		local ok, err = pcall(g.mode.PlayerLeft, player)
@@ -265,7 +281,7 @@ local function runGame(cab, firstPlayer, preset)
 		Bridge.send({ t = "mode", name = (cab:GetAttribute("Mode") or cab.Name):lower() })
 
 		local results = {}
-		local g = { mode = mode, played = played, leftEarly = {} }
+		local g = { mode = mode, played = played, gone = {}, leftEarly = {} } -- gone: took a pad; leftEarly: before the result
 		local ok, err = pcall(mode.Start, players)
 		if ok then
 			activeGame = g
@@ -275,7 +291,7 @@ local function runGame(cab, firstPlayer, preset)
 						return true
 					end
 					for _, p in players do
-						if p.Parent and not g.leftEarly[p] then
+						if p.Parent and not g.gone[p] then
 							return false
 						end
 					end
@@ -292,7 +308,7 @@ local function runGame(cab, firstPlayer, preset)
 		end
 		local stayed = {}
 		for _, p in players do
-			if not g.leftEarly[p] then
+			if not g.gone[p] then
 				table.insert(stayed, p)
 			end
 		end
@@ -396,7 +412,9 @@ task.spawn(function()
 				if pad:IsA("BasePart") and pad:IsDescendantOf(workspace) and pad:GetAttribute("Enabled") == true then
 					for _, hit in workspace:GetPartBoundsInBox(pad.CFrame * CFrame.new(0, 3, 0), pad.Size + Vector3.new(0, 6, 0), overlap) do
 						local player = Players:GetPlayerFromCharacter(hit.Parent)
-						if player and g.played[player] and not g.leftEarly[player] then
+						local humanoid = hit.Parent:FindFirstChildOfClass("Humanoid")
+						-- a living body only: a dead one's broken-apart parts can land on the pad
+						if player and humanoid and humanoid.Health > 0 and g.played[player] and not g.gone[player] then
 							leaveToLobby(g, player)
 						end
 					end

@@ -445,10 +445,12 @@ local function finish(won, escaped)
 	for p in s.players do
 		table.insert(results, { player = p, won = won and not s.flooded[p] })
 	end
+	s.results = results
 
 	local session = s
 	table.insert(s.threads, task.delay(Config.RESULT_TIME, function()
-		if s == session then
+		if s == session and not s.reported then
+			s.reported = true
 			Mode.Finished:Fire(results)
 		end
 	end))
@@ -621,6 +623,32 @@ function Mode.Start(players)
 		s.roundStart = os.clock()
 		setState("Running")
 	end))
+end
+
+-- True once the round is decided (escaped, survived the timer, or everyone flooded): the arcade lets a
+-- player who takes the Back to Lobby pad then keep their result.
+function Mode.IsDecided()
+	return s ~= nil and s.done == true
+end
+
+-- The arcade's Back to Lobby pad took `player` out. Before the result Flood floods them like anyone who
+-- leaves the chamber (so they lose). After it they keep the result already worked out, and once every
+-- player has gone it goes to the arcade right away instead of after the result screen.
+function Mode.PlayerLeft(player)
+	if not s or not s.players[player] then
+		return
+	end
+	s.gone = s.gone or {}
+	s.gone[player] = true
+	if s.done and s.results and not s.reported then
+		for p in s.players do
+			if p.Parent and not s.gone[p] then
+				return
+			end
+		end
+		s.reported = true
+		Mode.Finished:Fire(s.results)
+	end
 end
 
 function Mode.Stop()
