@@ -15,6 +15,9 @@ local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local BayData = require(ReplicatedStorage:WaitForChild("BayData"))
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
 
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local ObjectiveEvent = Remotes:WaitForChild("Objective")
+
 local CELL = Config.CellSize
 
 local function bayZStart(i)
@@ -203,6 +206,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	local running = false
 	-- a stall is spent per crate, so the wall cannot sit on the same one forever
 	local stallSpent, stallCrate, stallStart = {}, nil, 0
+	local flashText, flashUntil = "", 0
 
 	local function placeWall(z)
 		if sunk then
@@ -417,6 +421,52 @@ BUILDERS.Saw = function(i, folder, info, state)
 	end
 
 	----------------------------------------------------------------
+	-- On-screen objective. Pushed whenever the state changes, and a few times a second while
+	-- the wall is moving so the countdown stays live. Sending nil clears the HUD, so a player
+	-- standing outside the bay isn't told to do anything.
+	----------------------------------------------------------------
+	local lastPush = 0
+
+	local function pushObjective()
+		lastPush = os.clock()
+		if not running and not state.solved then
+			ObjectiveEvent:FireAllClients(nil)
+			return
+		end
+
+		local p = {title = "BAY 1  -  SAW WALL"}
+		if state.solved then
+			p.task = "CLEARED"
+			p.hint = "The wall is down -- head through."
+			p.tone = "ok"
+		elseif bladesLive then
+			p.task = "LEVER A  -  KILL THE BLADES"
+			p.hint = "Left wall, middle row. Stand on a crate and hold E."
+			p.tone = "danger"
+		else
+			p.task = "LEVER B  -  STOP THE WALL"
+			p.hint = "Right wall by the entrance. Needs a stacked pair to reach."
+			p.tone = "warn"
+		end
+
+		if running and not state.solved then
+			if stallCrate then
+				p.timerLabel = "STALLED"
+				p.timer = math.max(0, Config.SawWallStallSeconds - (os.clock() - stallStart))
+				p.timerTone = "ok"
+			else
+				p.timerLabel = "WALL REACHES YOU IN"
+				p.timer = math.max(0, (wallZ - WALL_END) / studsPerSecond)
+			end
+		end
+
+		if os.clock() < flashUntil then
+			p.flash = flashText
+		end
+		ObjectiveEvent:FireAllClients(p)
+	end
+
+	----------------------------------------------------------------
 	-- run / reset. The obstacle stays dormant until someone is actually inside, which also
 	-- gives the reset for free: when the bay empties unsolved, everything goes back.
 	-- (`running` is declared further up, with the wall state.)
@@ -449,6 +499,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		slideGate(entryGate, true)
 		setPhase(leverA, ARMED)
 		setPhase(leverB, DORMANT)
+		pushObjective()
 	end
 
 	local function resetRun()
@@ -463,6 +514,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		slideGate(entryGate, false)
 		setPhase(leverA, DORMANT)
 		setPhase(leverB, DORMANT)
+		pushObjective()
 	end
 
 	-- Debug/GameState reset. A switch-driven bay cannot be un-solved by clearing cells, since
@@ -480,6 +532,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 			-- the operator may already have a cube down that the guard turned away; with the
 			-- blades dead it is allowed now, so the game owes them that crate
 			BlockSync.retryRejected(folder.Parent)
+			pushObjective()
 			print("[HazardManager] saw wall: Lever A thrown, blades dead")
 		end
 	end
@@ -494,6 +547,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 			if state.setSolved then
 				state.setSolved(true)
 			end
+			pushObjective()
 		end
 	end
 
@@ -504,6 +558,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	function showNotice(text)
 		notice.Text = text
 		noticeUntil = os.clock() + 2.5
+		flashText, flashUntil = text, os.clock() + 2.5
 	end
 
 	placeWall(WALL_START)
@@ -591,6 +646,9 @@ BUILDERS.Saw = function(i, folder, info, state)
 
 			if notice.Text ~= "" and os.clock() > noticeUntil then
 				notice.Text = ""
+			end
+			if os.clock() - lastPush > 0.2 then
+				pushObjective()
 			end
 
 			task.wait(TICK)
@@ -1349,7 +1407,7 @@ end)
 -- Caveat: obstacles that present "solved" as a one-shot tween (the laser grid fading out, for
 -- instance) do not animate back -- their run loops resume, but the visual stays cleared. Only
 -- the saw bay rebuilds itself properly, via state.reset.
-local DebugHotkey = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("DebugHotkey")
+local DebugHotkey = Remotes:WaitForChild("DebugHotkey")
 DebugHotkey.OnServerEvent:Connect(function(_, key)
 	if key ~= "R" then
 		return
