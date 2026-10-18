@@ -1,8 +1,11 @@
 -- ReplicatedStorage.ArmTwin.Rig
 -- The SO-101 twin's geometry, forward kinematics and part builder. Link lengths come from
 -- Config.twinLinksCm (cm, from the SO-101 URDF) and the cm -> stud scale from the boards
--- (Config.boardCellStuds / Config.cellSizeCm), so the twin's reach over the LiveBoard matches the real
+-- (Config.boardCellStuds per Config.cellSizeMm), so the twin's reach over the LiveBoard matches the real
 -- arm's reach over the printed grid.
+-- The game draws the twin from the bridge's arm.points now (ArmTwin.Stick); this rig and its Motor6Ds
+-- stay built in the place, hidden, and its FK still gives the stick figure's rest pose (chainPoints) and
+-- the fake generator's arm.
 --
 -- Model frame: origin at the base's bottom center (the Model's pivot), +Y up, -Z forward (toward the
 -- board), +X right. Rest pose (all joints 0): the arm reaches straight forward, horizontal, at
@@ -36,9 +39,11 @@ Rig.AXES = {
 	gripper = -Vector3.yAxis,
 }
 Rig.GRIPPER_OPEN = math.rad(60) -- moving jaw angle at gripper = 100
+-- arm.points names, base to tip, as the bridge sends them (PROTOCOL.md): the five chain joints and the tip
+Rig.POINT_NAMES = { "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "tip" }
 
 function Rig.studsPerCm()
-	return Config.boardCellStuds / Config.cellSizeCm
+	return Config.boardCellStuds / Config.cellSizeMm * 10
 end
 
 -- Joint positions at rest and the gripper tip, in cm in the model frame.
@@ -68,6 +73,24 @@ function Rig.forward(angles, cm)
 		prev = p[name]
 	end
 	return cf * CFrame.new((p.tip - prev) * s)
+end
+
+-- Forward kinematics for every point: rig angles -> the five chain joints' positions and the tip, base to
+-- tip (Rig.POINT_NAMES), in the model frame. In studs, or in cm when `cm` is true.
+function Rig.chainPoints(angles, cm)
+	local p = Rig.jointsCm()
+	local s = cm and 1 or Rig.studsPerCm()
+	local cf = CFrame.new()
+	local prev = Vector3.zero
+	local points = {}
+	for _, name in ipairs(Rig.CHAIN) do
+		cf = cf * CFrame.new((p[name] - prev) * s)
+		table.insert(points, cf.Position)
+		cf = cf * CFrame.fromAxisAngle(Rig.AXES[name], angles[name] or 0)
+		prev = p[name]
+	end
+	table.insert(points, (cf * CFrame.new((p.tip - prev) * s)).Position)
+	return points
 end
 
 -- Fills `model` with the twin's parts and Motor6Ds (blocky SO-101: white links, dark joints) and sets

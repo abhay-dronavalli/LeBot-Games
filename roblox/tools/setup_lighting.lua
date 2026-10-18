@@ -7,7 +7,7 @@
 --   - Slightly cool indoor ambient, so shade reads cool against the warm sun and lamps, and the purple /
 --     blue LED strips around the ceiling and desk glow through a mild Bloom.
 --   - A warm downward SpotLight in the ceiling lamp over the table, so both boards stay bright and readable.
---   - Lighting.CabinetFocus, the DepthOfFieldEffect that StarterPlayerScripts.CabinetFocus drives every
+--   - Lighting.CabinetFocus, the DepthOfFieldEffect that Views.Player.PatternWorld.CabinetFocus drives every
 --     frame (its values here are only the starting point).
 
 local Lighting = game:GetService("Lighting")
@@ -52,7 +52,7 @@ if sunRays then
 	sunRays.Spread = 0.3
 end
 
--- Depth of field: one effect, driven per client by StarterPlayerScripts.CabinetFocus.
+-- Depth of field: one effect, driven per client by PatternMatch.Views.Player.PatternWorld.CabinetFocus.
 for _, effect in ipairs(Lighting:GetChildren()) do
 	if effect:IsA("DepthOfFieldEffect") and effect.Name ~= "CabinetFocus" then
 		effect:Destroy()

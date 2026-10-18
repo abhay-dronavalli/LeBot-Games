@@ -1,16 +1,52 @@
 -- ReplicatedStorage.PatternMatch.Grid
--- Table cm -> grid cell, and grid cell -> world position on a board model.
+-- Sheet mm -> grid cell, and grid cell (or any sheet point) -> world position on a board model.
 --
 -- Matches the printed grid sheet: 3 rows x 4 columns, cells "A1".."C4" (letter = row, number = column).
--- Table frame (plan.md): cm, x from tag 0 toward tag 1 (along the columns), y from tag 0 toward tag 3
--- (along the rows), z up. Row A is on the arm side (nearest tags 0 and 1), row C toward the tripod.
--- Column 1 is nearest tag 0, column 4 nearest tag 1.
+-- Sheet frame (PROTOCOL.md): mm, origin at the sheet's top-left corner, x from tag 0 toward tag 1 (along
+-- the columns), y down the page from tag 0 toward tag 3 (along the rows, away from the arm), z up off the
+-- paper. Row A is on the arm side (nearest tags 0 and 1), row C toward the tripod. Column 1 is nearest
+-- tag 0, column 4 nearest tag 1.
+-- Grid geometry (origin, cell size, rows, columns) is Config.gridOriginMm / cellSizeMm / gridRows /
+-- gridCols until Grid.setGeometry gets the bridge hello's space.grid (Core.StateStore does that on the
+-- server).
 
 local Config = require(script.Parent.Config)
 
 local ROW_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 local Grid = {}
+
+local override = nil -- { originX, originY, cell } from the bridge hello, or nil for Config's values
+
+-- The grid in use: originX, originY, cell (mm), rows, cols.
+function Grid.geometry()
+	local o = override
+	return {
+		originX = o and o.originX or Config.gridOriginMm.X,
+		originY = o and o.originY or Config.gridOriginMm.Y,
+		cell = o and o.cell or Config.cellSizeMm,
+		rows = Config.gridRows,
+		cols = Config.gridCols,
+	}
+end
+
+-- Takes the hello frame's space.grid ({ origin_mm = {x, y}, cell_mm, rows = {"A", ...}, cols = {1, ...} })
+-- as the grid; nil goes back to Config's values. The boards are built with Config.gridRows x gridCols
+-- cells, so a hello with a different row or column count keeps Config's counts (and origin and cell size
+-- still apply). Returns a warning string when the counts disagree, else nil.
+function Grid.setGeometry(grid)
+	if type(grid) ~= "table" or type(grid.origin_mm) ~= "table" or type(grid.cell_mm) ~= "number" then
+		override = nil
+		return grid ~= nil and "hello grid unreadable, using Config's" or nil
+	end
+	override = { originX = grid.origin_mm[1], originY = grid.origin_mm[2], cell = grid.cell_mm }
+	local rows, cols = type(grid.rows) == "table" and #grid.rows or nil, type(grid.cols) == "table" and #grid.cols or nil
+	if (rows and rows ~= Config.gridRows) or (cols and cols ~= Config.gridCols) then
+		return string.format("hello grid is %sx%s but the boards are %dx%d; keeping %dx%d", tostring(rows), tostring(cols),
+			Config.gridRows, Config.gridCols, Config.gridRows, Config.gridCols)
+	end
+	return nil
+end
 
 -- (row, col) -> "B3"
 function Grid.cellName(row, col)
@@ -45,12 +81,13 @@ function Grid.allCells()
 	return cells
 end
 
--- Table position in cm -> "A1".."C4", or nil if off grid.
+-- Sheet position in mm -> "A1".."C4", or nil if off grid.
 -- A position only counts if it sits inside the middle cellTolerance (70%) of its cell.
 -- Config.flipX mirrors columns (1 <-> 4) and Config.flipY mirrors rows (A <-> C).
-function Grid.cellOf(xCm, yCm)
-	local u = (xCm - Config.gridOriginCm.X) / Config.cellSizeCm
-	local v = (yCm - Config.gridOriginCm.Y) / Config.cellSizeCm
+function Grid.cellOf(xMm, yMm)
+	local g = Grid.geometry()
+	local u = (xMm - g.originX) / g.cell
+	local v = (yMm - g.originY) / g.cell
 	local col = math.floor(u) + 1
 	local row = math.floor(v) + 1
 	if col < 1 or col > Config.gridCols or row < 1 or row > Config.gridRows then
@@ -72,12 +109,17 @@ function Grid.cellOf(xCm, yCm)
 	return Grid.cellName(row, col)
 end
 
--- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, in an ignored zone
--- such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps the
--- levels apart. visible == false still counts: the core keeps tracking a block at its last pose while
--- its marker is hidden (under a stack, under the arm).
+-- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, stale, in an ignored
+-- zone such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps the
+-- levels apart. A visible == false block is one the camera can't see right now (usually the arm is over
+-- it) at its remembered pose; it still counts, or every pass of the arm would break the 1 s match hold,
+-- until its age (seconds since last seen) passes Config.staleBlockSeconds.
+function Grid.isStale(block)
+	return block.visible == false and (tonumber(block.age) or 0) > Config.staleBlockSeconds
+end
+
 function Grid.cellOfBlock(block)
-	if block.held == true or Config.ignoreZones[block.zone] then
+	if block.held == true or Grid.isStale(block) or Config.ignoreZones[block.zone] then
 		return nil
 	end
 	return Grid.cellOf(block.x, block.y)
@@ -131,7 +173,7 @@ end
 -- its local -X (column 1, the tag 0 side, at the +X edge). That matches the printed sheet: standing at
 -- the row C (tripod) side looking toward row A, A1 is far-left and the columns read 1 2 3 4 left to
 -- right; standing at the arm side looking toward the tripod, tag 0 / A1 is on the right. Rendering only:
--- Grid.cellOf (table cm -> cell) is unaffected. The result follows the board when it is moved or spun.
+-- Grid.cellOf (sheet mm -> cell) is unaffected. The result follows the board when it is moved or spun.
 function Grid.worldPositionOf(cell, boardModel)
 	local row, col = Grid.parseCell(cell)
 	if not row then
@@ -147,6 +189,39 @@ function Grid.worldPositionOf(cell, boardModel)
 	local localX = (0.5 - (col - 0.5) / Config.gridCols) * size.X
 	local localZ = (0.5 - (row - 0.5) / Config.gridRows) * size.Z
 	return base.CFrame:PointToWorldSpace(Vector3.new(localX, size.Y / 2, localZ))
+end
+
+-- A sheet point (mm, PROTOCOL.md's frame) -> world position over a board, laid out like
+-- Grid.worldPositionOf: a cell's center lands on that cell's center, and the scale is the board's
+-- (Config.boardCellStuds per cell), so the same point reads as the same cell on the board. z is height
+-- above the paper, which is the top of the board's tiles. Config.flipX / flipY mirror it like cellOf.
+-- Points off the grid (the arm's base, say) carry on in the same frame.
+function Grid.sheetToWorld(xMm, yMm, zMm, boardModel)
+	local base = boardModel
+	if not base:IsA("BasePart") then
+		base = boardModel:FindFirstChild("Base")
+	end
+	assert(base and base:IsA("BasePart"), "Grid.sheetToWorld: board needs a Base part")
+	local g = Grid.geometry()
+	local u = (xMm - g.originX) / g.cell -- columns across, 0 at column 1's outer edge
+	local v = (yMm - g.originY) / g.cell -- rows down, 0 at row A's outer edge
+	if Config.flipX then
+		u = g.cols - u
+	end
+	if Config.flipY then
+		v = g.rows - v
+	end
+	local tile = boardModel:FindFirstChild("A1")
+	local paper = base.Size.Y / 2 + (tile and tile:IsA("BasePart") and tile.Size.Y or 0)
+	local size = base.Size
+	local studsPerMm = size.X / g.cols / g.cell
+	return base.CFrame:PointToWorldSpace(Vector3.new((0.5 - u / g.cols) * size.X, paper + (zMm or 0) * studsPerMm,
+		(0.5 - v / g.rows) * size.Z))
+end
+
+-- Studs per sheet mm on the boards (the LiveBoard's scale).
+function Grid.studsPerMm()
+	return Config.boardCellStuds / Grid.geometry().cell
 end
 
 return Grid

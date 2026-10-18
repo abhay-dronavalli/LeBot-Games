@@ -2,17 +2,32 @@
 -- Tunables for Pattern Match. See docs/pattern-match-v1.md section 8.
 
 return {
-	useFakeState = true,                 -- Core.StateStore stand-in (fake arm, Debug hook, debugAutoSolve); set false once the real core is in
+	-- The robot link (core's ServerScriptService.Bridge, PROTOCOL.md). Core.StateStore connects once and
+	-- reads every state frame from it; with useBridge = false, or no hello within bridgeHelloSeconds, it
+	-- runs the fake generator instead (fake arm, Debug hook, debugAutoSolve) so the game runs with no robot.
+	useBridge = true,
+	bridgeUrl = "ws://localhost:8765",   -- or the robot laptop's LAN IP
+	bridgeHelloSeconds = 3,              -- no hello by then at server start: fake generator for this session
+	bridgeStaleSeconds = 1,              -- no frame, or blocks_age over this (or none yet): OFFLINE (matching freezes)
+	staleBlockSeconds = 2,               -- a visible = false block (hidden by the arm) still counts until its age passes this
+	-- Perception's color names for our six blocks -> Config.colors names (robot/perception/config.py
+	-- BLOCK_COLORS). Any other name on a non-held block (green, blue, pink, white, black, grey, ...) is a
+	-- misread: the LiveBoard draws it gray and compare counts it as a wrong block.
+	perceptionColors = { red = "red", orange = "orange", yellow = "yellow", teal = "teal", purple = "purple",
+	                     ["light blue"] = "skyblue" },
+	-- Grid fallback. The hello frame's space.grid (origin_mm, cell_mm, rows, cols) replaces these on the
+	-- server once the bridge says hello (Grid.setGeometry).
 	gridCols = 4, gridRows = 3,          -- printed sheet: columns 1-4 (tag 0 -> tag 1), rows A-C (arm -> tripod)
-	gridOriginCm = Vector2.new(2.540, 2.223), -- table cm of cell A1's outer corner (the corner nearest tag 0)
-	cellSizeCm = 5.715,                  -- measured on the printed sheet
+	gridOriginMm = Vector2.new(25.4, 22.225), -- sheet mm of cell A1's outer corner (the corner nearest tag 0)
+	cellSizeMm = 57.15,                  -- measured on the printed sheet
 	flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
 	flipY = false,                       -- true mirrors rows (A <-> C)
 	cellTolerance = 0.7,
 	maxStackGlobal = 2,                  -- hard cap on tower height; a block at level >= this always counts as extra
 	ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
-	boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeCm this is the cm -> stud scale
-	twinBaseOffsetCm = 9,                -- arm twin base center, measured from the grid's row A edge toward the operator
+	boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeMm this is the mm -> stud scale
+	twinBaseOffsetMm = 90,               -- built arm twin's base center, from the grid's row A edge toward the operator
+	twinStickMm = { link = 30, joint = 40, tip = 26, base = 80 }, -- stick-figure twin thicknesses (sheet mm)
 	-- SO-101 link lengths in cm: joint-to-joint distances from TheRobotStudio's so101_new_calib.urdf
 	twinLinksCm = { baseHeight = 6.2, shoulderHeight = 5.4, upperArm = 11.6, forearm = 13.5, wrist = 6.4,
 	                jawHinge = 3.6, gripper = 9.8 },
@@ -25,6 +40,9 @@ return {
 	ticketIntervalMin = 12, ticketIntervalMax = 20, -- seconds between ticket arrivals (random in this range)
 	ticketRailMax = 4,                   -- tickets the rail holds; the arrival timer pauses while it is full
 	ticketBlocksMin = 2, ticketBlocksMax = 4, -- blocks per ticket, towers included (towers up to maxStackGlobal)
+	uniqueColorsPerTicket = false,       -- true: no color twice in one pattern (tickets and the attract demo),
+	                                     --   towers included. Off since core perception names repeated colors
+	                                     --   (robot/perception/naming.py); kept as a fallback
 	stackChanceStart = 0.2,              -- chance a ticket block goes on top of another, ramping linearly over
 	stackChanceEnd = 0.6,                --   the shift from start to end
 	ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
@@ -36,14 +54,14 @@ return {
 	modeSelectSeconds = 15,
 	modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
 	resultsSeconds = 10,
-	debugAutoSolve = false,              -- testing: fake StateStore rebuilds the board for the active ticket 3 s after it becomes active
+	debugAutoSolve = false,              -- testing (fake generator only): rebuilds the board for the active ticket 3 s after it becomes active
 	debugFastTimers = false,             -- testing: every game timer (shift, ticket arrivals, events, reveal) runs 4x faster
 	debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
 	debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
 	hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },
 	easy = { eventEvery = 45 },
 	vanishSeconds = 6, vanishCount = { 1, 2 },
-	events = { "vanish", "tremor", "inverted" },
+	events = { "vanish", "tremor", "inverted" }, -- "fog" is also implemented (ARM LAGGING, core fog)
 	twinJoints = { shoulder_pan = {sign=1, offset=0}, shoulder_lift = {sign=1, offset=0}, elbow_flex = {sign=1, offset=0},
 	               wrist_flex = {sign=1, offset=0}, wrist_roll = {sign=1, offset=0}, gripper = {sign=1, offset=0} },
 	-- Arm twin's folded rest pose, shown while there is no arm data (no sample yet, an empty one, or none

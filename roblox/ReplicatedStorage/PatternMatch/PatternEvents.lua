@@ -7,6 +7,8 @@
 --   tremor   - Core.Events.fire("earthquake", 0.5, 4); each client shakes the boards and its camera
 --              locally while the HUD payload says the tremor is active (PatternMatch.BoardShake)
 --   inverted - "ARM INVERTED" banner; Core.Events.fire("mirror", 1, 8)
+--   fog      - "ARM LAGGING" banner; Core.Events.fire("fog", 0.6, 8) (off by default: not in Config.events)
+-- Core.Events only sends an effect the bridge's hello lists; the Roblox side here runs either way.
 -- The first event runs one interval into the shift (Config.easy/hard.eventEvery, or debugEventEvery),
 -- then one every interval. Each shows a 2 s warning banner first. One event at a time, and never the
 -- same event twice in a row.
@@ -20,6 +22,7 @@ local SPECS = {
 	vanish = { banner = "TILES VANISHING", seconds = function() return Config.vanishSeconds end },
 	tremor = { banner = "TREMOR", seconds = function() return 4 end, core = { "earthquake", 0.5, 4 } },
 	inverted = { banner = "ARM INVERTED", seconds = function() return 8 end, core = { "mirror", 1, 8 } },
+	fog = { banner = "ARM LAGGING", seconds = function() return 8 end, core = { "fog", 0.6, 8 } },
 }
 
 local PatternEvents = {}

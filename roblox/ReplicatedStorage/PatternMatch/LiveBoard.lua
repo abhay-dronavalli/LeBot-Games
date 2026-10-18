@@ -1,6 +1,7 @@
 -- ReplicatedStorage.PatternMatch.LiveBoard
 -- Draws the real table on a board: one colored block (PatternMatch.BlockPool) per cell and stack level
 -- with a block on the table. The board Model needs cell Parts named A1..C4.
+-- A block whose color isn't in Config.colors (a perception misread) is drawn gray.
 -- A doubled level (2+ blocks reported at one cell and level) shows one block; blocks at levels the pool
 -- doesn't have (>= Config.maxStackGlobal) aren't drawn. Target.compare still reports both, and
 -- showProblems puts a thick white outline (one SelectionBox per block part, made once) on the specific
@@ -12,7 +13,7 @@ local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
 local BlockPool = require(script.Parent.BlockPool)
 
-local UNKNOWN_COLOR = Color3.fromRGB(255, 255, 255) -- a color name missing from Config.colors
+local MISREAD_COLOR = Color3.fromRGB(150, 150, 150) -- a misread: a color name Config.colors doesn't have
 local PROBLEM_OUTLINE = Color3.new(1, 1, 1)
 
 local LiveBoard = {}
@@ -86,7 +87,7 @@ function LiveBoard:render(blocks)
 		local entry = liveGrid[cell]
 		for level = 0, self.blocks.levels - 1 do
 			local colorName = entry and entry[level] and entry[level][1]
-			self.blocks:set(cell, level, colorName and (Config.colors[colorName] or UNKNOWN_COLOR) or nil)
+			self.blocks:set(cell, level, colorName and (Config.colors[colorName] or MISREAD_COLOR) or nil)
 		end
 	end
 	return liveGrid

@@ -5,13 +5,16 @@
 local RS = game:GetService("ReplicatedStorage")
 
 -- Studio's command-bar require cache keeps the first version of a module it loaded this session.
--- ArmTwin.Rig and Core.StateStore require PatternMatch.Config by path, so swap Config for an identical
--- copy first; everything else below is required through clones.
-do
-	local old = RS.PatternMatch.Config
-	local copy = old:Clone()
-	old:Destroy()
-	copy.Parent = RS.PatternMatch
+-- ArmTwin.Rig / Stick and Core.StateStore require PatternMatch.Config and Grid by path, so swap those for
+-- identical copies first; everything else below is required through clones.
+-- Core.StateStore requires ArmTwin.Rig and Driver by path too.
+for _, path in ipairs({ { "PatternMatch", "Config" }, { "PatternMatch", "Grid" }, { "ArmTwin", "Rig" }, { "ArmTwin", "Driver" } }) do
+	local old = RS:FindFirstChild(path[1]) and RS[path[1]]:FindFirstChild(path[2])
+	if old then
+		local copy = old:Clone()
+		old:Destroy()
+		copy.Parent = RS[path[1]]
+	end
 end
 
 local pm = RS.PatternMatch:Clone()
@@ -31,8 +34,8 @@ local function check(name, got, want)
 end
 local function section(s) table.insert(lines, "-- " .. s) end
 
-local O, S = Config.gridOriginCm, Config.cellSizeCm
--- Table cm for a point a fraction (fc, fr) across a cell; 0.5, 0.5 is the center. Unflipped sheet layout.
+local O, S = Config.gridOriginMm, Config.cellSizeMm
+-- Sheet mm for a point a fraction (fc, fr) across a cell; 0.5, 0.5 is the center. Unflipped sheet layout.
 local function at(row, col, fc, fr)
 	return O.X + (col - 1 + (fc or 0.5)) * S, O.Y + (row - 1 + (fr or 0.5)) * S
 end
@@ -52,7 +55,7 @@ local function blocksFor(map)
 	local blocks = {}
 	for cell, tower in pairs(map) do
 		if type(tower) == "string" then tower = { tower } end
-		for i, color in ipairs(tower) do table.insert(blocks, block(cell, color, { level = i - 1, z = (i - 1) * 3.5 })) end
+		for i, color in ipairs(tower) do table.insert(blocks, block(cell, color, { level = i - 1, z = (i - 1) * 48 })) end
 	end
 	return blocks
 end
@@ -69,7 +72,7 @@ local function towers(map)
 	return t
 end
 
-table.insert(lines, string.format("Config: origin=(%.3f, %.3f) cm, cell=%.3f cm, tolerance=%.1f, flipX=%s, flipY=%s",
+table.insert(lines, string.format("Config: origin=(%.3f, %.3f) mm, cell=%.3f mm, tolerance=%.1f, flipX=%s, flipY=%s",
 	O.X, O.Y, S, Config.cellTolerance, tostring(Config.flipX), tostring(Config.flipY)))
 
 section("names")
@@ -80,23 +83,23 @@ check("parseCell D1 (no row D)", Grid.parseCell("D1"), nil)
 check("parseCell A5 (no column 5)", Grid.parseCell("A5"), nil)
 
 section("1. block at a cell center")
-check("cellOf(5.3975, 5.0805) A1 center literal", Grid.cellOf(5.3975, 5.0805), "A1")
+check("cellOf(53.975, 50.8) A1 center literal (mm)", Grid.cellOf(53.975, 50.8), "A1")
 check("B2 center", Grid.cellOf(at(2, 2)), "B2")
 check("C4 center", Grid.cellOf(at(3, 4)), "C4")
 check("row A, column 4 (x toward tag 1)", Grid.cellOf(at(1, 4)), "A4")
 check("row C, column 1 (y toward tag 3)", Grid.cellOf(at(3, 1)), "C1")
 
 section("2. block on a cell edge")
-check("x = 8.255, column 1/2 boundary", Grid.cellOf(8.255, select(2, at(1, 1))), nil)
-check("y = 7.938, row A/B boundary", Grid.cellOf(at(1, 1), 7.938), nil)
+check("x = 82.55, column 1/2 boundary", Grid.cellOf(82.55, select(2, at(1, 1))), nil)
+check("y = 79.375, row A/B boundary", Grid.cellOf(at(1, 1), 79.375), nil)
 check("10% into A1 (outer 15%)", Grid.cellOf(at(1, 1, 0.10)), nil)
 check("20% into A1 (inside middle 70%)", Grid.cellOf(at(1, 1, 0.20)), "A1")
 
 section("3. off-grid block")
-check("x = 1.0, before column 1", Grid.cellOf(1.0, select(2, at(1, 1))), nil)
-check("x = 27, past column 4", Grid.cellOf(27, select(2, at(1, 1))), nil)
-check("y = 1.0, before row A", Grid.cellOf(at(1, 1), 1.0), nil)
-check("y = 21, past row C", Grid.cellOf(at(1, 1), 21), nil)
+check("x = 10, before column 1", Grid.cellOf(10, select(2, at(1, 1))), nil)
+check("x = 270, past column 4", Grid.cellOf(270, select(2, at(1, 1))), nil)
+check("y = 10, before row A", Grid.cellOf(at(1, 1), 10), nil)
+check("y = 210, past row C", Grid.cellOf(at(1, 1), 210), nil)
 
 local flat = { A1 = "red", B2 = "teal", C3 = "yellow" }
 local target = towers(flat)
@@ -114,17 +117,34 @@ check(".clear", r.clear, false); check(".blocked", r.blocked, { "B4" }); check("
 check(".missing", r.missing, {}); check(".wrong", r.wrong, {})
 check("same, block removed from B4 .clear", Target.compare(target, live(flat), { B4 = true }).clear, true)
 
+section("5b. misread colors (not in Config.colors) count as wrong blocks, outlined")
+check("Target.isMisread: green / grey / red / skyblue", tostring(Target.isMisread("green")) .. tostring(Target.isMisread("grey"))
+	.. tostring(Target.isMisread("red")) .. tostring(Target.isMisread("skyblue")), "truetruefalsefalse")
+r = Target.compare(target, live({ A1 = "green", B2 = "teal", C3 = "yellow" }), {})
+check("green on target cell A1: wrong, outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.A1 and r.problemLevels.A1[0]),
+	"clear=false missing={} wrong={A1} extra={} blocked={} doubled={} outline true")
+r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", B3 = "pink" }), {})
+check("pink on non-target B3: wrong (not extra), outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.B3 and r.problemLevels.B3[0]),
+	"clear=false missing={} wrong={B3} extra={} blocked={} doubled={} outline true")
+r = Target.compare(towers({ B2 = { "red", "teal" } }), live({ B2 = { "red", "white" } }), {})
+check("white on top of a tower: wrong at that level", Target.describe(r) .. " " .. tostring(r.problemLevels.B2 and r.problemLevels.B2[1]),
+	"clear=false missing={} wrong={B2} extra={} blocked={} doubled={} true")
+
 section("6. compare missing / wrong")
 r = Target.compare(target, live({ A1 = "red", B2 = "purple" }), {})
 check(".missing", r.missing, { "C3" }); check(".wrong", r.wrong, { "B2" }); check(".clear", r.clear, false)
 
 section("7. cellOfBlock with plan.md-shaped blocks at B2 center")
 check("play zone, on table", Grid.cellOfBlock(block("B2")), "B2")
-check("visible=false (marker hidden, still tracked)", Grid.cellOfBlock(block("B2", "red", { visible = false })), "B2")
+check("visible=false, age 0 (arm over it): still counts", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 0 })), "B2")
+check("visible=false, age 1.9 (< staleBlockSeconds 2): still counts", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 1.9 })), "B2")
+check("visible=false, age 2.5: stale, ignored", Grid.cellOfBlock(block("B2", "red", { visible = false, age = 2.5 })), nil)
+check("visible=false, no age field (fake data): counts", Grid.cellOfBlock(block("B2", "red", { visible = false })), "B2")
+check("visible=true, age 5 (buried under a stack): counts", Grid.cellOfBlock(block("B2", "red", { visible = true, age = 5 })), "B2")
 check("zone=\"tray\"", Grid.cellOfBlock(block("B2", "red", { zone = "tray" })), nil)
 check("zone=false (not tray)", Grid.cellOfBlock(block("B2", "red", { zone = false })), "B2")
-check("held=true, z=8", Grid.cellOfBlock(block("B2", "red", { held = true, z = 8, visible = false })), nil)
-check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 3.5 })), "B2")
+check("held=true, z=80", Grid.cellOfBlock(block("B2", "red", { held = true, z = 80, visible = true })), nil)
+check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 48 })), "B2")
 check("on column 2/3 boundary", Grid.cellOfBlock(block("B2", "red", { x = O.X + 2 * S })), nil)
 
 section("8. flipX / flipY (A1 center on the table)")
@@ -168,6 +188,7 @@ check("double on non-target B4 .doubled", r.doubled, { "B4" }); check(".extra", 
 check("describe()", Target.describe(r), "clear=false missing={} wrong={} extra={B4} blocked={} doubled={B4}")
 
 section("11. generate(n, maxHeight): n blocks, towers no taller than maxHeight, never above the global cap")
+Config.uniqueColorsPerTicket = false -- placement only here (n up to 12 is more than the 6 colors); 11a has colors
 local bad = 0
 local tallestSeen = {}
 for _ = 1, 500 do
@@ -216,6 +237,58 @@ end
 check("stackChance argument: 1 always stacks, 0 never does", always .. " " .. never, "100 100")
 check("24 blocks at maxHeight 2 fills every cell twice", select(1, Target.count(Target.generate(24, 2))), 24)
 check("13 blocks at maxHeight 1 is refused", pcall(Target.generate, 13, 1), false)
+
+section("11a. uniqueColorsPerTicket: no color twice in a pattern, towers included")
+check("default: off (core perception names repeated colors)", Config.uniqueColorsPerTicket, false)
+Config.uniqueColorsPerTicket = true
+do
+	local function repeats(target)
+		local seen, dup = {}, false
+		for _, tower in pairs(target) do
+			for _, color in ipairs(tower) do
+				if seen[color] then dup = true end
+				seen[color] = true
+			end
+		end
+		return dup
+	end
+	local rng = Random.new(5)
+	local dupPatterns, sameTower, towers2, sizes = 0, 0, 0, {}
+	for _ = 1, 600 do
+		local n = rng:NextInteger(Config.ticketBlocksMin, Config.ticketBlocksMax)
+		local t = Target.generate(n, Config.maxStackGlobal, rng, rng:NextNumber())
+		if repeats(t) then dupPatterns += 1 end
+		for _, tower in pairs(t) do
+			if #tower == 2 then
+				towers2 += 1
+				if tower[1] == tower[2] then sameTower += 1 end
+			end
+		end
+		sizes[Target.count(t) == n] = true
+	end
+	check("600 tickets: no repeated color; 2-high towers seen, none of one color; every ticket keeps its n",
+		dupPatterns .. " " .. tostring(towers2 > 50) .. " " .. sameTower .. " " .. tostring(sizes[true] and not sizes[false]), "0 true 0 true")
+	check("all-stacked (stackChance 1, n 6): six blocks, six colors", (function()
+		local t = Target.generate(6, 2, Random.new(9), 1)
+		return Target.count(t) .. " " .. tostring(repeats(t))
+	end)(), "6 false")
+	check("n above the palette is capped at #colors (12 asked -> 6 blocks)", (Target.count(Target.generate(12, 2, Random.new(3), 0.5))), 6)
+	local saved = Config.colors
+	Config.colors = { red = saved.red, teal = saved.teal, yellow = saved.yellow }
+	check("three colors left in Config.colors: a 4-block ticket comes out as 3 different colors", (function()
+		local t = Target.generate(4, 2, Random.new(4), 0.5)
+		return Target.count(t) .. " " .. tostring(repeats(t))
+	end)(), "3 false")
+	Config.colors = saved
+	Config.uniqueColorsPerTicket = false
+	local anyDup = false
+	local r2 = Random.new(5)
+	for _ = 1, 300 do
+		if repeats(Target.generate(4, 2, r2, 0.5)) then anyDup = true end
+	end
+	check("uniqueColorsPerTicket = false: colors may repeat again", anyDup, true)
+	Config.uniqueColorsPerTicket = false -- the default
+end
 
 section("11b. compare with towers (target A1=red, B2=red/teal, C3=yellow)")
 local tall = towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" })
@@ -317,7 +390,7 @@ if cab then
 	VIEW_OK = "A1 far-left, A4 far-right, C1 near-left, C4 near-right; border reads 1234, upright on the row C edge"
 	check("TargetBoard from the row C side", boardView(cab.TargetBoard), VIEW_OK)
 	check("LiveBoard from the row C side", boardView(cab.LiveBoard), VIEW_OK)
-	check("rendering only: table-cm data mapping unchanged (A1 / A4 / C1 corners of the sheet)",
+	check("rendering only: sheet-mm data mapping unchanged (A1 / A4 / C1 corners of the sheet)",
 		Grid.cellOf(at(1, 1)) .. Grid.cellOf(at(1, 4)) .. Grid.cellOf(at(3, 1)), "A1A4C1")
 	check("arm twin centered on the LiveBoard's width, on the row A side", cab.LiveBoard:FindFirstChild("ArmTwin") ~= nil
 		and math.abs(cab.LiveBoard.ArmTwin.Base.Position.X - cab.LiveBoard.Base.Position.X) < 0.001
@@ -434,10 +507,11 @@ section("16. shift: tickets on the rail (Game driven by step() on a cloned cabin
 if cab then
 	local board = cab:Clone() -- never parented, so the place is untouched
 	local fakeBlocks = {}
+	local robotStatus = "mock"
 	local sent, fired, changes = {}, {}, {}
 	local g = Game.new({
 		cabinet = board,
-		store = { get = function() return { blocks = fakeBlocks } end },
+		store = { get = function() return { blocks = fakeBlocks } end, status = function() return robotStatus end },
 		core = { fire = function(name, intensity, duration) table.insert(fired, name .. " " .. intensity .. " " .. duration) end },
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
 		stateChanged = { Fire = function(_, info) table.insert(changes, info) end },
@@ -536,7 +610,7 @@ if cab then
 	check("Q / R and the arrows map to the same -1 / +1; E (the ProximityPrompt key) does nothing",
 		TicketStack.KEYS[Enum.KeyCode.Q] .. " " .. TicketStack.KEYS[Enum.KeyCode.R] .. " " .. tostring(TicketStack.KEYS[Enum.KeyCode.E])
 		.. " " .. TicketStack.ARROWS.Prev .. " " .. TicketStack.ARROWS.Next, "-1 1 nil -1 1")
-	local hudSource = game:GetService("StarterGui").PatternHud:FindFirstChildWhichIsA("LocalScript").Source
+	local hudSource = RS.PatternMatch.Views.Player.PatternHud:FindFirstChildWhichIsA("LocalScript").Source
 	check("the HUD wires Q / R and both arrows to one cycle() that fires TicketCycle, with Q / R key hints",
 		string.find(hudSource, "TicketStack.KEYS[input.KeyCode]", 1, true) ~= nil
 		and string.find(hudSource, "cycle(TicketStack.ARROWS.Prev)", 1, true) ~= nil
@@ -618,6 +692,48 @@ if cab then
 	check("rail and TargetBoard cleared", #sent[#sent].tickets .. " " .. board.TargetBoard.Blocks.A1.Transparency, "0 1")
 	g:step(Config.resultsSeconds)
 	check("then back to Idle", g.state, "Idle")
+
+	section("16f2. robot OFFLINE: matching freezes, the shift timer keeps running")
+	g:start(tester)
+	setPattern(g:activeTicket(), { B3 = "red" })
+	fakeBlocks = { block("B3", "red") }
+	robotStatus = "offline"
+	local frozenFrom, frozenId, frozenScore = g.timeLeft, g.activeId, g.score
+	steps(12, 0.25)
+	check("3 s of an exact match while OFFLINE: not completed", tostring(g.activeId == frozenId) .. " score " .. g.score, "true score " .. frozenScore)
+	check("the shift timer kept running", math.abs(g.timeLeft - (frozenFrom - 3)) < 0.01, true)
+	check("payload.robot is offline (the badge)", sent[#sent].robot, "offline")
+	robotStatus = "mock"
+	g:step(0.25)
+	check("back online: the 1 s hold starts over", tostring(g.activeId == frozenId), "true")
+	steps(4, 0.25)
+	check("then ORDER UP", tostring(g.activeId ~= frozenId) .. " " .. tostring(g.score > frozenScore) .. " " .. sent[#sent].robot, "true true mock")
+
+	section("16f2b. repeated colors: a ticket with two reds, and a red/red tower, can be matched")
+	setPattern(g:activeTicket(), { A1 = "red", C3 = "red" })
+	local twinRedId, twinRedScore = g.activeId, g.score
+	fakeBlocks = { block("A1", "red"), block("C3", "red") }
+	steps(5, 0.25)
+	check("two reds on two cells: ORDER UP", tostring(g.activeId ~= twinRedId) .. " " .. tostring(g.score > twinRedScore), "true true")
+	setPattern(g:activeTicket(), { B2 = { "red", "red" } })
+	local towerId, towerScore = g.activeId, g.score
+	fakeBlocks = blocksFor({ B2 = { "red", "red" } })
+	steps(5, 0.25)
+	check("a red/red tower: ORDER UP", tostring(g.activeId ~= towerId) .. " " .. tostring(g.score > towerScore), "true true")
+
+	section("16f3. a misread block (green) shows gray and blocks the match")
+	setPattern(g:activeTicket(), { B3 = "red" })
+	local misreadId, misreadScore = g.activeId, g.score
+	fakeBlocks = { block("B3", "green") }
+	steps(8, 0.25)
+	local b3 = board.LiveBoard.Blocks.B3
+	check("green at B3: drawn gray, white outline, not completed after 2 s", string.format("%d,%d,%d %s %s",
+		b3.Color.R * 255 + 0.5, b3.Color.G * 255 + 0.5, b3.Color.B * 255 + 0.5, tostring(b3.ProblemHighlight.Visible),
+		tostring(g.activeId == misreadId and g.score == misreadScore)), "150,150,150 true true")
+	fakeBlocks = { block("B3", "red") }
+	steps(5, 0.25)
+	check("read as red again: ORDER UP", tostring(g.activeId ~= misreadId) .. " " .. tostring(g.score > misreadScore), "true true")
+	fakeBlocks = {}
 
 	section("16g. Hard: reveal cycle on the TargetBoard (and the cards, via the payload)")
 	Config.debugForceMode = "hard"
@@ -958,7 +1074,10 @@ if twinTemplate then
 	local ga = Driver.rigAngles({ gripper = 100 }).gripper
 	check("gripper 100 -> fully open, 0 -> closed, 150 clamps", ga == Rig.GRIPPER_OPEN and Driver.rigAngles({ gripper = 0 }).gripper == 0
 		and Driver.rigAngles({ gripper = 150 }).gripper == Rig.GRIPPER_OPEN, true)
-	check("scale: studs per cm = boardCellStuds / cellSizeCm", math.abs(Rig.studsPerCm() - Config.boardCellStuds / Config.cellSizeCm) < 1e-9, true)
+	check("scale: studs per cm = boardCellStuds / cellSizeMm * 10", math.abs(Rig.studsPerCm() - Config.boardCellStuds / Config.cellSizeMm * 10) < 1e-9, true)
+	local chain = Rig.chainPoints({}, true)
+	check("chainPoints: 6 points base to tip, the last is Rig.forward's tip", #chain .. " " .. tostring((chain[6] - Rig.forward({}, true).Position).Magnitude < 1e-6)
+		.. " " .. tostring((chain[2] - Rig.jointsCm().shoulder_lift).Magnitude < 1e-6), "6 true true")
 
 	local motorCount = 0
 	for _, d in ipairs(twinTemplate:GetDescendants()) do
@@ -1040,8 +1159,9 @@ if cab then
 	end
 	snapshot = storeText()
 	local storeWrites = 0
+	local storeReads = 0
 	local store = setmetatable({
-		get = function() return { blocks = storeBlocks } end,
+		get = function() storeReads += 1; return { blocks = storeBlocks } end,
 		update = function() storeWrites += 1 end,
 	}, { __newindex = function(t, k, v) storeWrites += 1; rawset(t, k, v) end })
 	local sent = {}
@@ -1152,6 +1272,22 @@ if cab then
 	for _ = A.index, Config.attractPatterns do finishPattern() end
 	check("after " .. Config.attractPatterns .. " patterns: a fresh set, from its first pattern", tostring(A.set ~= firstSet) .. " " .. A.index
 		.. " " .. A.completions, "true 1 " .. Config.attractPatterns)
+	Config.uniqueColorsPerTicket = true
+	check("uniqueColorsPerTicket on: attract patterns never repeat a color, towers included (40 fresh sets)", (function()
+		for _ = 1, 40 do
+			for _, t in ipairs(A:newSet()) do
+				local seen = {}
+				for _, tower in pairs(t) do
+					for _, color in ipairs(tower) do
+						if seen[color] then return false end
+						seen[color] = true
+					end
+				end
+			end
+		end
+		return true
+	end)(), true)
+	Config.uniqueColorsPerTicket = false
 	local setsWithStack = 0
 	for _ = 1, 40 do
 		for _, t in ipairs(A:newSet()) do
@@ -1167,6 +1303,7 @@ if cab then
 	A:advance(Config.attractPlaceInterval)
 	check("mid-placement before Play", shown(livePool) >= 1 and shown(targetPool) >= 2, true)
 	check("the demo never wrote to the StateStore", storeWrites .. " " .. tostring(storeText() == snapshot), "0 true")
+	check("...and never read it (no bridge data while the demo runs)", storeReads, 0)
 	check("Attract does not require Core.StateStore", string.find(pm.Attract.Source, "require%([^)]*StateStore") == nil, true)
 	g.celebrate:burst("COMPLETE!") -- a burst in flight when Play is pressed
 	g:start({ Name = "Tester", UserId = 1 })
@@ -1196,5 +1333,334 @@ if cab then
 	Config.attractEnabled = true
 	board:Destroy()
 end
+
+section("27. bridge grid: hello.space.grid drives the cell lookup (mock's hello; then a moved sheet)")
+do
+	local G = require(RS.PatternMatch.Grid) -- the module Core.StateStore and ArmTwin.Stick use
+	local mockGrid = { origin_mm = { 25.4, 22.225 }, cell_mm = 57.15, rows = { "A", "B", "C" }, cols = { 1, 2, 3, 4 } }
+	-- bridge/producers/mock.py's cell(): letter is the row (A nearest the arm), number the column
+	local function mockCell(grid, name)
+		local row = string.byte(name) - 64
+		local col = tonumber(string.sub(name, 2))
+		return grid.origin_mm[1] + (col - 0.5) * grid.cell_mm, grid.origin_mm[2] + (row - 0.5) * grid.cell_mm
+	end
+	local function allNamed(grid)
+		local bad = {}
+		for _, name in ipairs(G.allCells()) do
+			local got = G.cellOf(mockCell(grid, name))
+			if got ~= name then table.insert(bad, name .. "->" .. tostring(got)) end
+		end
+		return #bad == 0 and "all 12" or table.concat(bad, " ")
+	end
+	check("mock hello grid: no warning", G.setGeometry(mockGrid), nil)
+	check("mock hello grid: every mock cell center reads as its own name", allNamed(mockGrid), "all 12")
+	local moved = { origin_mm = { 40, 30 }, cell_mm = 50, rows = { "A", "B", "C" }, cols = { 1, 2, 3, 4 } }
+	G.setGeometry(moved)
+	check("moved sheet (origin 40,30, cell 50): geometry follows the hello", G.geometry().originX .. " " .. G.geometry().cell, "40 50")
+	check("moved sheet: every cell center reads as its own name", allNamed(moved), "all 12")
+	check("moved sheet: (65, 55) is A1, (115, 55) is A2", G.cellOf(65, 55) .. " " .. G.cellOf(115, 55), "A1 A2")
+	local warning = G.setGeometry({ origin_mm = { 22.225, 48.26 }, cell_mm = 57.15, rows = { "A", "B", "C" }, cols = { 1, 2, 3 } })
+	check("a 3x3 hello keeps the boards' 3x4 (with a warning)", tostring(warning ~= nil) .. " " .. #G.allCells() .. " " .. G.geometry().originY, "true 12 48.26")
+	G.setGeometry(nil)
+	check("setGeometry(nil): Config's grid again", G.geometry().originX == Config.gridOriginMm.X and G.geometry().cell == Config.cellSizeMm, true)
+
+	-- Orientation, re-run against the mock's grid: a sheet point lands on the LiveBoard tile of the cell it
+	-- reads as, so A1 is far-left from the row C side and C4 near-right (the board view test in 14).
+	local cabModel = workspace:FindFirstChild("PatternCabinet")
+	if cabModel then
+		local lb = cabModel.LiveBoard
+		G.setGeometry(mockGrid)
+		local off = {}
+		for _, name in ipairs(G.allCells()) do
+			local x, y = mockCell(mockGrid, name)
+			local w = G.sheetToWorld(x, y, 0, lb)
+			local tile = lb[name]
+			local d = Vector3.new(w.X - tile.Position.X, w.Y - (tile.Position.Y + tile.Size.Y / 2), w.Z - tile.Position.Z)
+			if d.Magnitude > 0.01 then table.insert(off, name) end
+		end
+		check("mock grid: each cell center (z 0) lands on its LiveBoard tile's top", #off == 0 and "all 12" or table.concat(off, " "), "all 12")
+		local a1x, a1y = mockCell(mockGrid, "A1")
+		check("z scales like x and y: 48 mm up is 48 * boardCellStuds / 57.15 studs",
+			math.abs(G.sheetToWorld(a1x, a1y, 48, lb).Y - G.sheetToWorld(a1x, a1y, 0, lb).Y - 48 * Config.boardCellStuds / 57.15) < 1e-6, true)
+		local GConfig = require(RS.PatternMatch.Config) -- the Config that G reads
+		GConfig.flipX = true
+		local flipped = G.sheetToWorld(a1x, a1y, 0, lb)
+		GConfig.flipX = false
+		check("flipX: the A1 point is drawn over A4, as cellOf reads it", (Vector3.new(flipped.X, 0, flipped.Z) - Vector3.new(lb.A4.Position.X, 0, lb.A4.Position.Z)).Magnitude < 0.01, true)
+		G.setGeometry(nil)
+	end
+end
+
+section("28. Core.StateStore adapter (edit mode: no bridge, nothing connects)")
+do
+	local core = RS.Core:Clone()
+	local Store = require(core.StateStore)
+	local Ev = require(core.Events)
+	check("source / status before any hello", Store.source() .. " " .. Store.status(), "pending offline")
+	check("sendEvent without the bridge: Roblox side only", select(2, Store.sendEvent("earthquake", 0.5, 4)), "no robot bridge (pending)")
+	check("Events.fire returns false without the bridge", Ev.fire("earthquake", 0.5, 4), false)
+	local function ls(...) return Store.linkStatus(...) end
+	check("badge: mock -> MOCK; teleop, follower, auto, a new name or none -> ROBOT LIVE",
+		table.concat({ ls("mock", 0.1, 0.1, 0.03), ls("teleop", 0.1, 0.1, 0.03), ls("follower", 0.1, 0.1, 0.03),
+			ls("auto", 0.1, 0.1, 0.03), ls("crane2000", 0.1, 0.1, 0.03), ls(nil, 0.1, 0.1, 0.03) }, " "),
+		"mock live live live live live")
+	check("null ages: blocks_age or arm_age nil -> offline (both, and the first frame not in yet)",
+		table.concat({ ls("teleop", 0.1, nil, 0.03), ls("teleop", 0.1, 0.1, nil), ls("mock", 0.1, nil, nil), ls("mock", nil, 0.1, 0.03) }, " "),
+		"offline offline offline offline")
+	check("stale: no frame for 1.5 s, or blocks_age 1.5 -> offline; ages as strings still read",
+		table.concat({ ls("mock", 1.5, 0.1, 0.03), ls("mock", 0.1, 1.5, 0.03), ls("mock", 0.1, "0.1", "0.03") }, " "),
+		"offline offline mock")
+	check("a frame with every part null converts without an error", (function()
+		local ok, st = pcall(Store.fromFrame, { t = "state", seq = 1, ts = 0, arm = nil, arm_age = nil, blocks = nil, blocks_age = nil })
+		return tostring(ok) .. " " .. tostring(ok and st.arm) .. " " .. tostring(ok and #st.blocks)
+	end)(), "true nil 0")
+	local frame = { t = "state", seq = 5, ts = 1, arm_age = 0.02, blocks_age = 0.1,
+		arm = { joints = {}, points = { { name = "shoulder_pan", x = 1, y = 2, z = 3 }, { name = "tip", x = 4, y = 5, z = 6 } } },
+		blocks = {
+			{ id = 1, color = "light blue", x = 50, y = 50, z = 0, yaw = 0, level = 0, held = false, visible = true, age = 0 },
+			{ id = 2, color = "grey", x = 60, y = 60, z = 90, yaw = 0, level = 0, held = true, visible = true, age = 0 },
+			{ id = 3, color = "red", x = 70, y = 70, z = 0, yaw = 0, level = 1, held = false, visible = true, age = 0 },
+		} }
+	local s1 = Store.fromFrame(frame)
+	check("fromFrame: light blue -> skyblue, held grey left alone, red kept", s1.blocks[1].color .. " " .. s1.blocks[2].color .. " " .. s1.blocks[3].color, "skyblue grey red")
+	check("fromFrame: arm kept with its points, blocks_age carried", #s1.arm.points .. " " .. s1.blocks_age, "2 0.1")
+	check("fromFrame: an arm with no points is no arm data", Store.fromFrame({ blocks = {}, arm = { joints = {}, points = {} } }).arm, nil)
+	check("fromFrame does not touch the frame it was given", frame.blocks[1].color, "light blue")
+	local SC = require(RS.PatternMatch.Config) -- the Config that Store reads
+	check("perceptionColors: the six kit names map onto Config.colors, one each", (function()
+		local out, used = {}, {}
+		for _, c in ipairs({ "red", "orange", "yellow", "teal", "purple", "light blue" }) do
+			local ours = Store.colorName(c)
+			if SC.colors[ours] == nil or used[ours] then return "bad " .. c end
+			used[ours] = true
+			table.insert(out, ours)
+		end
+		local n = 0
+		for _ in pairs(SC.perceptionColors) do n += 1 end
+		return table.concat(out, ",") .. " (" .. n .. " entries)"
+	end)(), "red,orange,yellow,teal,purple,skyblue (6 entries)")
+	check("any other name is kept as sent (a misread)", (function()
+		local out = {}
+		for _, c in ipairs({ "green", "blue", "pink", "white", "black", "grey", "light_blue" }) do table.insert(out, Store.colorName(c)) end
+		return table.concat(out, ",")
+	end)(), "green,blue,pink,white,black,grey,light_blue")
+	local misreadFrame = Store.fromFrame({ blocks = {
+		{ id = 1, color = "green", x = 50, y = 50, z = 0, level = 0, held = false, visible = true, age = 0 },
+		{ id = 2, color = "grey", x = 60, y = 60, z = 0, level = 0, held = false, visible = true, age = 0 },
+		{ id = 3, color = "grey", x = 60, y = 60, z = 90, level = 0, held = true, visible = true, age = 0 } } })
+	check("fromFrame: non-held green / grey stay as misreads; a held grey is left alone", misreadFrame.blocks[1].color .. " "
+		.. misreadFrame.blocks[2].color .. " " .. misreadFrame.blocks[3].color, "green grey grey")
+	local fa = Store.fakeArm(Config.twinRestPose)
+	check("fake arm: 6 sheet-mm points named like the protocol, base before row A", fa ~= nil and #fa.points == 6 and fa.points[1].name == "shoulder_pan"
+		and fa.points[6].name == "tip" and fa.points[1].y < Config.gridOriginMm.Y, true)
+	core:Destroy()
+end
+
+section("29. stick-figure arm twin (ArmTwin.Stick) from arm.points")
+local cabModel = workspace:FindFirstChild("PatternCabinet")
+if RS:FindFirstChild("ArmTwin") and RS.ArmTwin:FindFirstChild("Stick") and cabModel then
+	local twinCopy = RS.ArmTwin:Clone()
+	local StickM = require(twinCopy.Stick)
+	local RigM = require(twinCopy.Rig)
+	local DriverM = require(twinCopy.Driver)
+	local lb = cabModel.LiveBoard
+	local a1x, a1y = O.X + S / 2, O.Y + S / 2
+	local pose = StickM.payload({ { name = "shoulder_pan", x = 140, y = -100, z = 68 }, { name = "tip", x = a1x, y = a1y, z = 0 } }, lb)
+	check("payload: the tip at A1's center on the paper lands on LiveBoard A1's top", (pose.points[2] - Vector3.new(lb.A1.Position.X, lb.A1.Position.Y + lb.A1.Size.Y / 2, lb.A1.Position.Z)).Magnitude < 0.01, true)
+	check("payload: foot is the first point dropped to the paper; scale is the board's", math.abs(pose.foot.X - pose.points[1].X) < 1e-6
+		and math.abs(pose.foot.Y - (lb.A1.Position.Y + lb.A1.Size.Y / 2)) < 0.01 and math.abs(pose.scale - Config.boardCellStuds / Config.cellSizeMm) < 1e-9, true)
+	check("payload: no points -> nil (the twin rests)", StickM.payload({}, lb), nil)
+	local twinModel = lb.ArmTwin:Clone()
+	local rest = StickM.restPayload(twinModel)
+	local restTip = twinModel:GetPivot():PointToWorldSpace(RigM.forward(DriverM.rigAngles(DriverM.restPose())).Position)
+	check("rest pose: the rig's folded pose at the twin's pivot, tip where the rig's FK puts it", #rest.points .. " " .. tostring((rest.points[6] - restTip).Magnitude < 1e-4), "6 true")
+	local poseEvent = Instance.new("BindableEvent")
+	local folder = Instance.new("Folder")
+	local handle = StickM.attach(twinModel, { OnClientEvent = poseEvent.Event }, folder)
+	local hidden = true
+	for _, d in ipairs(twinModel:GetDescendants()) do
+		if d:IsA("BasePart") and d.Transparency ~= 1 then hidden = false end
+	end
+	check("attach: the Motor6D rig is hidden; the stick has a base, 5 links and 6 balls", tostring(hidden) .. " " .. #handle.model:GetChildren(), "true 12")
+	local started = handle.resting()
+	local arm6 = {}
+	for i, n in ipairs(RigM.POINT_NAMES) do arm6[i] = { name = n, x = 100 + i * 10, y = 40, z = 60 } end
+	poseEvent:Fire(StickM.payload(arm6, lb))
+	task.wait(0.6)
+	local tipNow = handle.current().points[6]
+	local tipWant = StickM.payload(arm6, lb).points[6]
+	check("attach: starts resting, eases onto a sample", tostring(started) .. " " .. tostring(handle.resting()) .. " "
+		.. tostring((tipNow - tipWant).Magnitude < 0.1), "true false true")
+	task.wait(StickM.STALE_SECONDS + 0.2)
+	check("stale samples: back to resting", handle.resting(), true)
+	handle.destroy()
+	twinModel:Destroy()
+	folder:Destroy()
+	twinCopy:Destroy()
+else
+	check("ReplicatedStorage.ArmTwin.Stick and the cabinet exist", false, true)
+end
+
+section("30. roles (Core.Roles): assignment with fake players, swap, the remote guard")
+do
+	local RolesM = require(RS.Core.Roles:Clone())
+	local function fake(name)
+		local attrs = {}
+		return { Name = name, UserId = #name, SetAttribute = function(_, k, v) attrs[k] = v end,
+			GetAttribute = function(_, k) return attrs[k] end }
+	end
+	local a = RolesM.Assigner.new()
+	local p1, p2, p3, p4 = fake("Ann"), fake("Bo"), fake("Cy"), fake("Di")
+	check("join order: player, robot, spectator, spectator", table.concat({ a:join(p1), a:join(p2), a:join(p3), a:join(p4) }, " "),
+		"player robot spectator spectator")
+	check("the Role attribute is set on each Player", table.concat({ p1:GetAttribute("Role"), p2:GetAttribute("Role"),
+		p3:GetAttribute("Role"), RolesM.of(p4) }, " "), "player robot spectator spectator")
+	a:leave(p1)
+	check("the player leaves: the role is empty, spectators keep theirs", tostring(a:holder("player")) .. " " .. a:roleOf(p3), "nil spectator")
+	local p5 = fake("Ed")
+	check("the next client to join fills it", a:join(p5) .. " " .. tostring(a:holder("player") == p5), "player true")
+	a:leave(p2)
+	local p6 = fake("Flo")
+	check("the robot leaves and rejoins: robot again", a:join(p6) .. " / " .. a:join(p2), "robot / spectator")
+	local changed = a:swap()
+	check("swap: the player and robot trade, attributes follow, spectators untouched",
+		#changed .. " " .. RolesM.of(p5) .. " " .. RolesM.of(p6) .. " " .. RolesM.of(p3), "2 robot player spectator")
+	a:swap()
+	check("swap twice: back where it was", RolesM.of(p5) .. " " .. RolesM.of(p6), "player robot")
+	local solo = RolesM.Assigner.new()
+	local only = fake("Solo")
+	solo:join(only)
+	check("solo swap (no robot yet): the player becomes the robot, player empty", #solo:swap() .. " " .. RolesM.of(only)
+		.. " " .. tostring(solo:holder("player")), "1 robot nil")
+	local forced = RolesM.Assigner.new({ forced = "robot" })
+	check("debugForceRole robot: the first client is the robot, the second the player",
+		forced:join(fake("A")) .. " " .. forced:join(fake("B")) .. " " .. forced:join(fake("C")), "robot player spectator")
+	local forcedPlayer = RolesM.Assigner.new({ forced = "player" })
+	check("debugForceRole player: same as normal", forcedPlayer:join(fake("A")) .. " " .. forcedPlayer:join(fake("B")), "player robot")
+
+	local calls = {}
+	local guarded = RolesM.guard(function(player, value) table.insert(calls, player.Name .. "=" .. tostring(value)); return "ran" end, "TestRemote")
+	local robot, spectator, nobody = fake("Rob"), fake("Spec"), fake("New")
+	robot:SetAttribute("Role", "robot")
+	spectator:SetAttribute("Role", "spectator")
+	local player = fake("Pat")
+	player:SetAttribute("Role", "player")
+	check("guard: the robot's call is dropped", guarded(robot, 1), nil)
+	check("guard: a spectator's call is dropped", guarded(spectator, 2), nil)
+	check("guard: a client with no role yet is dropped", guarded(nobody, 3), nil)
+	check("guard: the player's call runs, arguments intact", tostring(guarded(player, 4)) .. " " .. table.concat(calls, ","), "ran Pat=4")
+end
+
+section("31. game registry (Core.GameRegistry): entries, the view each role shows")
+do
+	local core = RS.Core:Clone()
+	local Registry = require(core.GameRegistry)
+	local pmEntry = Registry.get("PatternMatch")
+	check("Pattern Match is registered (Core.Games.PatternMatch): name, lobby, two view modules",
+		pmEntry ~= nil and pmEntry.name .. " " .. tostring(pmEntry.lobby) .. " " .. pmEntry.playerView.Name .. " " .. pmEntry.robotView.Name,
+		"Pattern Match true PlayerView RobotView")
+	check("lobbyEntry is Pattern Match", Registry.lobbyEntry() == pmEntry, true)
+	local views = {}
+	for _, m in ipairs({ pmEntry.playerView, pmEntry.robotView, RS.Core.Views.LobbyRobotView }) do
+		local v = require(m) -- the real modules: PlayerView finds its templates through script.Parent
+		table.insert(views, m.Name .. "=" .. tostring(type(v.enter) == "function" and type(v.exit) == "function"))
+	end
+	check("every view module has enter() and exit()", table.concat(views, " "), "PlayerView=true RobotView=true LobbyRobotView=true")
+	local fakeGame = { id = "Obby", playerView = "obby player", robotView = "obby robot" }
+	local lobby = { id = "PM", playerView = "pm player", robotView = "pm robot", lobby = true }
+	local function v(role, active) return tostring(Registry.viewFor(role, active, lobby, "lobby robot")) end
+	check("robot: lobby view with no game, the active game's robot view in one",
+		v("robot", nil) .. " | " .. v("robot", fakeGame) .. " | " .. v("robot", lobby), "lobby robot | obby robot | pm robot")
+	check("player and spectator: the lobby game's player view, then the active game's",
+		v("player", nil) .. " | " .. v("spectator", nil) .. " | " .. v("player", fakeGame) .. " | " .. v("spectator", fakeGame),
+		"pm player | pm player | obby player | obby player")
+	check("no role yet: no view", v(nil, fakeGame), "nil")
+	check("no lobby game: a player in the lobby shows nothing", tostring(Registry.viewFor("player", nil, nil, "x")), "nil")
+	check("register checks its entry", (pcall(Registry.register, { id = "Bad", name = "Bad" })), false)
+	core:Destroy()
+end
+
+section("32. Pattern Match for the robot role: its own payload, sent per role; the active game")
+if cab then
+	local board = cab:Clone()
+	local function fake(name, role)
+		local attrs = { Role = role }
+		return { Name = name, UserId = #name, GetAttribute = function(_, k) return attrs[k] end }
+	end
+	local full, robotSent = {}, {}
+	local ui = { FireAllClients = function() error("FireAllClients with roles") end,
+		FireClient = function(_, p, payload) table.insert(full, p.Name .. ":" .. tostring(payload.tickets ~= nil)) end }
+	local robotUi = { FireClient = function(_, p, payload) table.insert(robotSent, { name = p.Name, payload = payload }) end }
+	local players = { fake("Pat", "player"), fake("Rob", "robot"), fake("Spec", "spectator"), fake("New", nil) }
+	local active = {}
+	local g = Game.new({ cabinet = board, store = { get = function() return { blocks = {} } end, status = function() return "mock" end },
+		core = { fire = function() end }, ui = ui, robotUi = robotUi, players = function() return players end,
+		roleOf = function(p) return p:GetAttribute("Role") end, onActive = function(on) table.insert(active, tostring(on)) end,
+		rng = Random.new(3), manualAttract = true })
+	g:setState("Idle")
+	Config.debugForceMode = "easy"
+	g:start(players[1])
+	table.clear(full)
+	table.clear(robotSent)
+	g:pushUI()
+	check("everyone but the robot gets the full payload; no role yet gets nothing", table.concat(full, " "), "Pat:true Spec:true")
+	local rp = robotSent[1] and robotSent[1].payload or {}
+	local keys = {}
+	for k in pairs(rp) do table.insert(keys, k) end
+	table.sort(keys)
+	check("the robot gets only state, timer, score, tickets done, ORDER UP and the link",
+		(robotSent[1] and robotSent[1].name or "-") .. " " .. table.concat(keys, ","), "Rob completedCount,robot,score,state,timeLeft")
+	local ticket = g:activeTicket()
+	g:completeTicket(ticket)
+	local last = robotSent[#robotSent].payload
+	check("an ORDER UP reaches the robot as seq + points only", tostring(last.orderUp and last.orderUp.seq) .. " "
+		.. tostring(last.orderUp and last.orderUp.points == ticket.points) .. " " .. tostring(last.orderUp and last.orderUp.id), "1 true nil")
+	check("Game.robotPayload drops tickets, target, reveal, events and vanished cells", (function()
+		local p = Game.robotPayload(g:payload())
+		return tostring(p.tickets) .. tostring(p.activeId) .. tostring(p.revealPhase) .. tostring(p.event) .. tostring(p.vanishedCells)
+	end)(), "nilnilnilnilnil")
+	g:pushUI(players[2])
+	check("pushUI(robot) sends the robot payload, never the full one", tostring(robotSent[#robotSent].name) .. " " .. tostring(robotSent[#robotSent].payload.tickets), "Rob nil")
+	g:setState("Results")
+	g:setState("Idle")
+	check("active game: on from the start, off back in Idle", table.concat(active, ","), "false,true,true,false")
+	Config.debugForceMode = nil
+	board:Destroy()
+end
+
+local viewsFolder = RS.PatternMatch:FindFirstChild("Views")
+check("Views.Player templates: PatternHud, PatternModeSelect (ScreenGuis), PatternWorld (CabinetFocus, ArmTwinClient)", (function()
+	local t = viewsFolder and viewsFolder:FindFirstChild("Player")
+	if not t then return "missing" end
+	local w = t:FindFirstChild("PatternWorld")
+	return tostring(t:FindFirstChild("PatternHud") and t.PatternHud:IsA("ScreenGui")) .. " "
+		.. tostring(t:FindFirstChild("PatternModeSelect") and t.PatternModeSelect:IsA("ScreenGui")) .. " "
+		.. tostring(w and w:FindFirstChild("CabinetFocus") ~= nil and w:FindFirstChild("ArmTwinClient") ~= nil)
+end)(), "true true true")
+check("nothing of Pattern Match left in StarterGui / StarterPlayerScripts (the views own it)",
+	tostring(game:GetService("StarterGui"):FindFirstChild("PatternHud")) .. " " .. tostring(game:GetService("StarterGui"):FindFirstChild("PatternModeSelect"))
+	.. " " .. tostring(game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("ArmTwinClient"))
+	.. " " .. tostring(game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("CabinetFocus")), "nil nil nil nil")
+check("Players.CharacterAutoLoads is off (CoreRoles spawns only the player role)", game:GetService("Players").CharacterAutoLoads, false)
+check("the robot view's camera shot keeps the whole cabinet behind it", (function()
+	local src = viewsFolder and viewsFolder:FindFirstChild("RobotView") and viewsFolder.RobotView.Source or ""
+	local fx, fy, fz = string.match(src, "SHOT_FROM = Vector3.new%(([%-%d%.]+), ([%-%d%.]+), ([%-%d%.]+)%)")
+	local ax, ay, az = string.match(src, "SHOT_AT = Vector3.new%(([%-%d%.]+), ([%-%d%.]+), ([%-%d%.]+)%)")
+	if not (fx and ax) then return "no shot" end
+	local from, at = Vector3.new(tonumber(fx), tonumber(fy), tonumber(fz)), Vector3.new(tonumber(ax), tonumber(ay), tonumber(az))
+	local look = (at - from).Unit
+	-- Every corner of the cabinet's bounding box (and 12 studs above it, the celebration text) is behind
+	-- the camera: a negative dot with the look direction.
+	local cf, size = workspace.PatternCabinet:GetBoundingBox()
+	for _, sx in ipairs({ -0.5, 0.5 }) do
+		for _, sy in ipairs({ -0.5, 0.5 }) do
+			for _, sz in ipairs({ -0.5, 0.5 }) do
+				local corner = cf:PointToWorldSpace(Vector3.new(sx, sy, sz) * size) + Vector3.new(0, sy > 0 and 12 or 0, 0)
+				if (corner - from):Dot(look) >= 0 then return "cabinet in front" end
+			end
+		end
+	end
+	return "all behind"
+end)(), "all behind")
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

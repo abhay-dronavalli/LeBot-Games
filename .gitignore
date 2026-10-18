@@ -1,3 +1,15 @@
+# Debug images and calibration backups: 79 MB of them, regenerated on every run.
+# The colour memory is the exception - it is learned calibration this rig needs to name
+# blocks, so it is committed like the other calibration state (see robot/calibration/README.md).
+robot/outputs/*
+!robot/outputs/color_memory.json
+
+__pycache__/
+*.pyc
+*.bak
+
+# gemini_namer.py reads GEMINI_API_KEY from here. Never commit it.
+.env
 # Roblox place files are binary and don't diff or merge -- one person owns the place,
 # and the Luau source is mirrored into roblox/ as text instead (see roblox/README.md).
 *.rbxl
