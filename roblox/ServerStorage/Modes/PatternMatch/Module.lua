@@ -17,6 +17,8 @@
 --                   broadcast, celebrations and the attract demo, clears the active game (so the clients'
 --                   views exit and remove their effects: camera shots, depth of field, stick arm) and
 --                   destroys the map. Start works again afterwards.
+--   PlayerLeft(p)   the arcade took p out through the Back to Lobby pad (Map.Room.Spawn.LobbyPad, tagged
+--                   LobbyTeleporter, Enabled everywhere but the shift): p loses; nobody left ends the game.
 -- Roles (Core.Roles): only the player role may press Play, pick the mode, cycle tickets or spin the
 -- TargetBoard; if no
 -- roles are assigned at all (Role attribute nil, e.g. a place without CoreRoles), the players in this game
@@ -148,12 +150,11 @@ local function checkLeavers(s)
 	end
 	local here = 0
 	for _, p in ipairs(s.list) do
-		if p.Parent == nil then
-			if not s.left[p] then
-				s.left[p] = true
-				log("%s left the game", p.Name)
-			end
-		else
+		if p.Parent == nil and not s.left[p] then
+			s.left[p] = true
+			log("%s left the game", p.Name)
+		end
+		if not s.left[p] then -- (s.left also holds players who took the Back to Lobby pad: Mode.PlayerLeft)
 			here += 1
 		end
 	end
@@ -174,6 +175,23 @@ function Mode.step(dt)
 	if s.prompt then
 		s.prompt.Enabled = not s.finished and s.game.state == "Idle"
 	end
+	if s.lobbyPad then -- the arcade's Back to Lobby pad: usable everywhere but the shift
+		s.lobbyPad:SetAttribute("Enabled", s.game.state ~= "Shift")
+	end
+end
+
+-- The arcade took `player` out of the game (they stepped on the Back to Lobby pad): they lose (won = false),
+-- and the game ends when every player has left or gone.
+function Mode.PlayerLeft(player)
+	local s = session
+	if not s or s.finished or not s.inGame[player] then
+		return
+	end
+	if not s.left[player] then
+		s.left[player] = true
+		log("%s went back to the lobby", player.Name)
+	end
+	checkLeavers(s)
 end
 
 -- Play was pressed in the room (the prompt's handler, after the role check; tests call it directly): the
@@ -295,6 +313,10 @@ function Mode.Start(players, opts)
 	GameRegistry.setActive(GAME_ID)
 	s.game:setState("Idle") -- the room: attract demo, Play prompt, Config.roomIdleSeconds to press it
 	s.prompt.Enabled = true
+	s.lobbyPad = map.Room.Spawn:FindFirstChild("LobbyPad") -- tagged LobbyTeleporter: the arcade runs it
+	if s.lobbyPad then
+		s.lobbyPad:SetAttribute("Enabled", true)
+	end
 	log("started: %d player%s in the room, %d s to press Play, %d pts to win", #s.list, #s.list == 1 and "" or "s",
 		Config.roomIdleSeconds, Config.winPoints)
 

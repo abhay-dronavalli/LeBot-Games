@@ -158,7 +158,7 @@ function Sewer.bind(a, api)
 	nextRatAt = os.clock() + rng:NextNumber(attr("RatSqueakMin", 8), attr("RatSqueakMax", 15))
 	wasInSludge = false
 	if api and api.showBanner then
-		api.showBanner(attr("IntroText", "SEWER FLOOD"), Color3.fromRGB(150, 255, 90), 3)
+		api.showBanner(attr("IntroText", "SEWER SURGE"), Color3.fromRGB(150, 255, 90), 3)
 	end
 end
 

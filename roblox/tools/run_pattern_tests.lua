@@ -1712,6 +1712,56 @@ if modeFolder and modeFolder:FindFirstChild("Module") and mapTemplate then
 	Mode.Stop()
 	check("Stop after everyone left: map gone", tostring(s3.map.Parent) .. " " .. tostring(workspaceSnapshot() == workspaceBefore), "nil true")
 
+	-- The arcade's Back to Lobby pad (Map.Room.Spawn.LobbyPad, tagged LobbyTeleporter): Enabled everywhere but
+	-- the shift. Mode.PlayerLeft (the arcade calls it when someone takes the pad): that player loses, the rest
+	-- play on; when nobody is left the game ends at once.
+	table.clear(fired)
+	local cy, di = fakePlayer("Cy", "player"), fakePlayer("Di", "spectator")
+	local s5 = Mode.Start({ cy, di }, { store = store, manual = true, rng = Random.new(9) })
+	local pad = s5.lobbyPad
+	local padStates = {}
+	local function padNote()
+		table.insert(padStates, s5.game.state .. "=" .. tostring(pad and pad:GetAttribute("Enabled")))
+	end
+	Mode.step(1)
+	padNote()
+	Mode.play(cy)
+	Mode.step(MGame.TICK)
+	padNote()
+	Mode.step(MC.modeSelectSeconds)
+	Mode.step(MC.modeConfirmSeconds)
+	padNote()
+	check("lobby pad: in the map, tagged LobbyTeleporter, Enabled in the room and mode select, off in the shift",
+		tostring(pad ~= nil and pad:IsDescendantOf(s5.map) and game:GetService("CollectionService"):HasTag(pad, "LobbyTeleporter"))
+		.. " " .. table.concat(padStates, " "), "true Idle=true ModeSelect=true Shift=false")
+	s5.game.score = 25
+	Mode.PlayerLeft(cy)
+	Mode.PlayerLeft(fakePlayer("Stranger", nil)) -- not in this game: ignored
+	Mode.step(MGame.TICK)
+	flush()
+	check("PlayerLeft of one of two mid-shift: marked left, the shift goes on", tostring(s5.left[cy]) .. " " .. s5.game.state .. " " .. #fired,
+		"true Shift 0")
+	s5.game.timeLeft = 0
+	Mode.step(MGame.TICK) -- Results
+	padNote()
+	check("lobby pad back on in Results", padStates[4], "Results=true")
+	Mode.step(MC.resultsSeconds)
+	Mode.step(MGame.TICK)
+	flush()
+	check("the one who took the pad loses, the one who stayed wins",
+		#fired .. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. tostring(fired[1] and fired[1][2].won), "1 false true")
+	Mode.Stop()
+	table.clear(fired)
+	local solo = fakePlayer("Solo", "player")
+	local s6 = Mode.Start({ solo }, { store = store, manual = true, rng = Random.new(10) })
+	Mode.step(1)
+	Mode.PlayerLeft(solo)
+	flush()
+	check("PlayerLeft of the last player (in the room): Finished at once, won = false; again does nothing",
+		#fired .. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. tostring(s6.finished) .. " " .. tostring((pcall(Mode.PlayerLeft, solo))) .. " " .. #fired,
+		"1 false true true 1")
+	Mode.Stop()
+
 	-- Nobody presses Play: after roomIdleSeconds the game ends and nobody wins.
 	table.clear(fired)
 	local idler = fakePlayer("Idle", "player")
