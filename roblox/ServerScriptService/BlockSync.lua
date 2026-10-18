@@ -1,8 +1,14 @@
 -- BlockSync -- nothing else in the game hard-codes a world position. cellToWorld reads the
 -- Cell_c_r anchor parts baked into each bay prefab, so moving a bay moves everything with it.
--- Also owns the crate props themselves: how they look and where they sit.
+-- Also owns the crate props themselves, and diffs `cells` snapshots per bay, handing the
+-- actual delivery and removal off to SkyArm which physically carries each crate.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+
+local Config = require(ReplicatedStorage:WaitForChild("Config"))
+local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
 
 local BlockSync = {}
 
@@ -29,6 +35,16 @@ function BlockSync.cellToWorld(bayModel, col, row)
 	end
 
 	return anchor.CFrame
+end
+
+----------------------------------------------------------------
+-- Crate spawning / removal
+----------------------------------------------------------------
+local lastAppliedByBay = setmetatable({}, {__mode = "k"})
+local liveCratesByBay = setmetatable({}, {__mode = "k"})
+
+local function keyFor(c)
+	return c.col .. "," .. c.row
 end
 
 local function spawnShockwave(bayModel, worldCFrame, level, color)
@@ -122,6 +138,61 @@ local function positionCrate(crateModel, worldCFrame, level)
 			crateModel.TopperStripe.CFrame = topper.CFrame * CFrame.new(0, topper.Size.Y / 2 + 0.05, 0)
 		end
 	end
+end
+
+----------------------------------------------------------------
+-- Public: diff + apply a new `cells` snapshot for a given bay
+----------------------------------------------------------------
+function BlockSync.applyCells(bayModel, newCellsList)
+	local last = lastAppliedByBay[bayModel] or {}
+	local live = liveCratesByBay[bayModel]
+	if not live then
+		live = {}
+		liveCratesByBay[bayModel] = live
+	end
+
+	local newByKey = {}
+	for _, c in ipairs(newCellsList) do
+		newByKey[keyFor(c)] = c
+	end
+
+	-- Removed cells: wait out the grace delay, then have the arm lift the crate out
+	for key, oldCell in pairs(last) do
+		if not newByKey[key] then
+			local crateModel = live[key]
+			live[key] = nil
+			task.delay(Config.CrateRemoveDelay, function()
+				if crateModel and crateModel.Parent then
+					local worldCFrame = BlockSync.cellToWorld(bayModel, oldCell.col, oldCell.row)
+					SkyArm.reachAndRemove(bayModel, worldCFrame, crateModel)
+				end
+			end)
+		end
+	end
+
+	-- Added / changed cells: confirm, then have the arm deliver (or swap) the crate
+	for key, newCell in pairs(newByKey) do
+		local oldCell = last[key]
+		local isNew = not oldCell
+		local isChanged = oldCell and (oldCell.level ~= newCell.level or oldCell.color ~= newCell.color)
+		if isNew or isChanged then
+			task.delay(Config.CrateConfirmDelay, function()
+				local existing = live[key]
+				if existing and existing.Parent then
+					existing:Destroy()
+				end
+				local worldCFrame = BlockSync.cellToWorld(bayModel, newCell.col, newCell.row)
+				local crateModel = buildCrateModel(newCell.color, newCell.level)
+				live[key] = crateModel
+				SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, newCell.level, function()
+					positionCrate(crateModel, worldCFrame, newCell.level)
+					spawnShockwave(bayModel, worldCFrame, newCell.level, newCell.color)
+				end)
+			end)
+		end
+	end
+
+	lastAppliedByBay[bayModel] = newByKey
 end
 
 return BlockSync
