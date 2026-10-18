@@ -36,6 +36,23 @@ POLL_HZ = 20.0              # how often the gripper is checked for an open edge
 REPUBLISH_S = 0.5           # keep blocks_age honest between reads
 RETRY_S = 20.0              # after a read that failed for a reason that may pass
 
+# The running thread's trigger, so something outside it can ask for a read. Releases cover
+# every change the arm makes, but a cube moved by *hand* never opens the jaw and so is
+# invisible until the next grab - which during a demo is the moment someone is pointing at
+# the board asking why Roblox disagrees with it. `--board-poll` is the automatic answer;
+# this is the manual one, wired to a key in bridge/main.py.
+_live_trigger = None
+
+
+def request_now():
+    """Ask the board thread to read on its next tick. Returns False if no thread is running
+    (mock mode, or no --vision), so the caller can say so rather than look like it worked."""
+    trigger = _live_trigger
+    if trigger is None:
+        return False
+    trigger.request(time.time())
+    return True
+
 
 def _note(bus, state, board, trigger, message=None, extra=None):
     """The `board` note: everything a UI needs to explain the board's condition in words."""
@@ -68,7 +85,9 @@ def run(bus, board, stop, poll_hz=POLL_HZ, trigger=None, poll_s=None):
     """
     from robot.perception.camera import Camera
 
+    global _live_trigger
     trigger = trigger or ReleaseTrigger()
+    _live_trigger = trigger
     period = 1.0 / poll_hz
     published = 0.0
     said = None                             # the last fatal reason printed, so it prints once
@@ -142,6 +161,8 @@ def run(bus, board, stop, poll_hz=POLL_HZ, trigger=None, poll_s=None):
             sleep = period - (time.perf_counter() - loop)
             if sleep > 0:
                 time.sleep(sleep)
+
+    _live_trigger = None     # the thread is going away; a manual request would go nowhere
 
 
 def start(bus, board, stop, poll_hz=POLL_HZ, poll_s=None):

@@ -87,17 +87,31 @@ def board_facts(args):
 
 
 def kill_key(effects, stop):
-    """Space clears all effects. Windows only (msvcrt); skipped silently elsewhere."""
+    """The terminal's keys. Windows only (msvcrt); skipped silently elsewhere.
+
+        space   clear all effects (the kill key)
+        v       read the board now, without waiting for a release
+        q       quit
+    """
     try:
         import msvcrt
     except ImportError:
         return
+    from .producers import board as board_producer
+
     while not stop.is_set():
         if msvcrt.kbhit():
             key = msvcrt.getch()
             if key in (b" ",):
                 effects.clear()
                 print("  [space] all effects cleared")
+            elif key in (b"v", b"V"):
+                # A cube moved by hand never opens the jaw, so no release fires and the board
+                # keeps reporting where things used to be. This is the manual way out of that.
+                if board_producer.request_now():
+                    print("  [v] board read requested")
+                else:
+                    print("  [v] no board thread: mock mode, or started without --vision")
             elif key in (b"q", b"\x03"):
                 stop.set()
         time.sleep(0.05)
@@ -179,7 +193,7 @@ def main():
     else:
         print("  board       not read (no --vision), so no blocks are published")
     print(f"  effects     {', '.join(sorted(effects.LIMITS))}")
-    print("  space = clear effects,  q or Ctrl-C = quit\n")
+    print("  space = clear effects,  v = read the board now,  q or Ctrl-C = quit\n")
 
     if args.open:
         webbrowser.open(f"http://localhost:{args.viewer_port}")
