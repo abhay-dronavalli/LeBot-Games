@@ -5,13 +5,16 @@
 local RS = game:GetService("ReplicatedStorage")
 
 -- Studio's command-bar require cache keeps the first version of a module it loaded this session.
--- ArmTwin.Rig and Core.StateStore require PatternMatch.Config by path, so swap Config for an identical
--- copy first; everything else below is required through clones.
-do
-	local old = RS.PatternMatch.Config
-	local copy = old:Clone()
-	old:Destroy()
-	copy.Parent = RS.PatternMatch
+-- ArmTwin.Rig / Stick and Core.StateStore require PatternMatch.Config and Grid by path, so swap those for
+-- identical copies first; everything else below is required through clones.
+-- Core.StateStore requires ArmTwin.Rig and Driver by path too.
+for _, path in ipairs({ { "PatternMatch", "Config" }, { "PatternMatch", "Grid" }, { "ArmTwin", "Rig" }, { "ArmTwin", "Driver" } }) do
+	local old = RS:FindFirstChild(path[1]) and RS[path[1]]:FindFirstChild(path[2])
+	if old then
+		local copy = old:Clone()
+		old:Destroy()
+		copy.Parent = RS[path[1]]
+	end
 end
 
 local pm = RS.PatternMatch:Clone()
@@ -31,8 +34,8 @@ local function check(name, got, want)
 end
 local function section(s) table.insert(lines, "-- " .. s) end
 
-local O, S = Config.gridOriginCm, Config.cellSizeCm
--- Table cm for a point a fraction (fc, fr) across a cell; 0.5, 0.5 is the center. Unflipped sheet layout.
+local O, S = Config.gridOriginMm, Config.cellSizeMm
+-- Sheet mm for a point a fraction (fc, fr) across a cell; 0.5, 0.5 is the center. Unflipped sheet layout.
 local function at(row, col, fc, fr)
 	return O.X + (col - 1 + (fc or 0.5)) * S, O.Y + (row - 1 + (fr or 0.5)) * S
 end
@@ -52,7 +55,7 @@ local function blocksFor(map)
 	local blocks = {}
 	for cell, tower in pairs(map) do
 		if type(tower) == "string" then tower = { tower } end
-		for i, color in ipairs(tower) do table.insert(blocks, block(cell, color, { level = i - 1, z = (i - 1) * 3.5 })) end
+		for i, color in ipairs(tower) do table.insert(blocks, block(cell, color, { level = i - 1, z = (i - 1) * 48 })) end
 	end
 	return blocks
 end
@@ -69,7 +72,7 @@ local function towers(map)
 	return t
 end
 
-table.insert(lines, string.format("Config: origin=(%.3f, %.3f) cm, cell=%.3f cm, tolerance=%.1f, flipX=%s, flipY=%s",
+table.insert(lines, string.format("Config: origin=(%.3f, %.3f) mm, cell=%.3f mm, tolerance=%.1f, flipX=%s, flipY=%s",
 	O.X, O.Y, S, Config.cellTolerance, tostring(Config.flipX), tostring(Config.flipY)))
 
 section("names")
@@ -80,23 +83,23 @@ check("parseCell D1 (no row D)", Grid.parseCell("D1"), nil)
 check("parseCell A5 (no column 5)", Grid.parseCell("A5"), nil)
 
 section("1. block at a cell center")
-check("cellOf(5.3975, 5.0805) A1 center literal", Grid.cellOf(5.3975, 5.0805), "A1")
+check("cellOf(53.975, 50.8) A1 center literal (mm)", Grid.cellOf(53.975, 50.8), "A1")
 check("B2 center", Grid.cellOf(at(2, 2)), "B2")
 check("C4 center", Grid.cellOf(at(3, 4)), "C4")
 check("row A, column 4 (x toward tag 1)", Grid.cellOf(at(1, 4)), "A4")
 check("row C, column 1 (y toward tag 3)", Grid.cellOf(at(3, 1)), "C1")
 
 section("2. block on a cell edge")
-check("x = 8.255, column 1/2 boundary", Grid.cellOf(8.255, select(2, at(1, 1))), nil)
-check("y = 7.938, row A/B boundary", Grid.cellOf(at(1, 1), 7.938), nil)
+check("x = 82.55, column 1/2 boundary", Grid.cellOf(82.55, select(2, at(1, 1))), nil)
+check("y = 79.375, row A/B boundary", Grid.cellOf(at(1, 1), 79.375), nil)
 check("10% into A1 (outer 15%)", Grid.cellOf(at(1, 1, 0.10)), nil)
 check("20% into A1 (inside middle 70%)", Grid.cellOf(at(1, 1, 0.20)), "A1")
 
 section("3. off-grid block")
-check("x = 1.0, before column 1", Grid.cellOf(1.0, select(2, at(1, 1))), nil)
-check("x = 27, past column 4", Grid.cellOf(27, select(2, at(1, 1))), nil)
-check("y = 1.0, before row A", Grid.cellOf(at(1, 1), 1.0), nil)
-check("y = 21, past row C", Grid.cellOf(at(1, 1), 21), nil)
+check("x = 10, before column 1", Grid.cellOf(10, select(2, at(1, 1))), nil)
+check("x = 270, past column 4", Grid.cellOf(270, select(2, at(1, 1))), nil)
+check("y = 10, before row A", Grid.cellOf(at(1, 1), 10), nil)
+check("y = 210, past row C", Grid.cellOf(at(1, 1), 210), nil)
 
 local flat = { A1 = "red", B2 = "teal", C3 = "yellow" }
 local target = towers(flat)
@@ -120,11 +123,11 @@ check(".missing", r.missing, { "C3" }); check(".wrong", r.wrong, { "B2" }); chec
 
 section("7. cellOfBlock with plan.md-shaped blocks at B2 center")
 check("play zone, on table", Grid.cellOfBlock(block("B2")), "B2")
-check("visible=false (marker hidden, still tracked)", Grid.cellOfBlock(block("B2", "red", { visible = false })), "B2")
+check("visible=false (remembered pose, not fresh): ignored", Grid.cellOfBlock(block("B2", "red", { visible = false })), nil)
 check("zone=\"tray\"", Grid.cellOfBlock(block("B2", "red", { zone = "tray" })), nil)
 check("zone=false (not tray)", Grid.cellOfBlock(block("B2", "red", { zone = false })), "B2")
-check("held=true, z=8", Grid.cellOfBlock(block("B2", "red", { held = true, z = 8, visible = false })), nil)
-check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 3.5 })), "B2")
+check("held=true, z=80", Grid.cellOfBlock(block("B2", "red", { held = true, z = 80, visible = true })), nil)
+check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 48 })), "B2")
 check("on column 2/3 boundary", Grid.cellOfBlock(block("B2", "red", { x = O.X + 2 * S })), nil)
 
 section("8. flipX / flipY (A1 center on the table)")
@@ -317,7 +320,7 @@ if cab then
 	VIEW_OK = "A1 far-left, A4 far-right, C1 near-left, C4 near-right; border reads 1234, upright on the row C edge"
 	check("TargetBoard from the row C side", boardView(cab.TargetBoard), VIEW_OK)
 	check("LiveBoard from the row C side", boardView(cab.LiveBoard), VIEW_OK)
-	check("rendering only: table-cm data mapping unchanged (A1 / A4 / C1 corners of the sheet)",
+	check("rendering only: sheet-mm data mapping unchanged (A1 / A4 / C1 corners of the sheet)",
 		Grid.cellOf(at(1, 1)) .. Grid.cellOf(at(1, 4)) .. Grid.cellOf(at(3, 1)), "A1A4C1")
 	check("arm twin centered on the LiveBoard's width, on the row A side", cab.LiveBoard:FindFirstChild("ArmTwin") ~= nil
 		and math.abs(cab.LiveBoard.ArmTwin.Base.Position.X - cab.LiveBoard.Base.Position.X) < 0.001
@@ -434,10 +437,11 @@ section("16. shift: tickets on the rail (Game driven by step() on a cloned cabin
 if cab then
 	local board = cab:Clone() -- never parented, so the place is untouched
 	local fakeBlocks = {}
+	local robotStatus = "mock"
 	local sent, fired, changes = {}, {}, {}
 	local g = Game.new({
 		cabinet = board,
-		store = { get = function() return { blocks = fakeBlocks } end },
+		store = { get = function() return { blocks = fakeBlocks } end, status = function() return robotStatus end },
 		core = { fire = function(name, intensity, duration) table.insert(fired, name .. " " .. intensity .. " " .. duration) end },
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
 		stateChanged = { Fire = function(_, info) table.insert(changes, info) end },
@@ -618,6 +622,23 @@ if cab then
 	check("rail and TargetBoard cleared", #sent[#sent].tickets .. " " .. board.TargetBoard.Blocks.A1.Transparency, "0 1")
 	g:step(Config.resultsSeconds)
 	check("then back to Idle", g.state, "Idle")
+
+	section("16f2. robot OFFLINE: matching freezes, the shift timer keeps running")
+	g:start(tester)
+	setPattern(g:activeTicket(), { B3 = "red" })
+	fakeBlocks = { block("B3", "red") }
+	robotStatus = "offline"
+	local frozenFrom, frozenId, frozenScore = g.timeLeft, g.activeId, g.score
+	steps(12, 0.25)
+	check("3 s of an exact match while OFFLINE: not completed", tostring(g.activeId == frozenId) .. " score " .. g.score, "true score " .. frozenScore)
+	check("the shift timer kept running", math.abs(g.timeLeft - (frozenFrom - 3)) < 0.01, true)
+	check("payload.robot is offline (the badge)", sent[#sent].robot, "offline")
+	robotStatus = "mock"
+	g:step(0.25)
+	check("back online: the 1 s hold starts over", tostring(g.activeId == frozenId), "true")
+	steps(4, 0.25)
+	check("then ORDER UP", tostring(g.activeId ~= frozenId) .. " " .. tostring(g.score > frozenScore) .. " " .. sent[#sent].robot, "true true mock")
+	fakeBlocks = {}
 
 	section("16g. Hard: reveal cycle on the TargetBoard (and the cards, via the payload)")
 	Config.debugForceMode = "hard"
@@ -958,7 +979,10 @@ if twinTemplate then
 	local ga = Driver.rigAngles({ gripper = 100 }).gripper
 	check("gripper 100 -> fully open, 0 -> closed, 150 clamps", ga == Rig.GRIPPER_OPEN and Driver.rigAngles({ gripper = 0 }).gripper == 0
 		and Driver.rigAngles({ gripper = 150 }).gripper == Rig.GRIPPER_OPEN, true)
-	check("scale: studs per cm = boardCellStuds / cellSizeCm", math.abs(Rig.studsPerCm() - Config.boardCellStuds / Config.cellSizeCm) < 1e-9, true)
+	check("scale: studs per cm = boardCellStuds / cellSizeMm * 10", math.abs(Rig.studsPerCm() - Config.boardCellStuds / Config.cellSizeMm * 10) < 1e-9, true)
+	local chain = Rig.chainPoints({}, true)
+	check("chainPoints: 6 points base to tip, the last is Rig.forward's tip", #chain .. " " .. tostring((chain[6] - Rig.forward({}, true).Position).Magnitude < 1e-6)
+		.. " " .. tostring((chain[2] - Rig.jointsCm().shoulder_lift).Magnitude < 1e-6), "6 true true")
 
 	local motorCount = 0
 	for _, d in ipairs(twinTemplate:GetDescendants()) do
@@ -1040,8 +1064,9 @@ if cab then
 	end
 	snapshot = storeText()
 	local storeWrites = 0
+	local storeReads = 0
 	local store = setmetatable({
-		get = function() return { blocks = storeBlocks } end,
+		get = function() storeReads += 1; return { blocks = storeBlocks } end,
 		update = function() storeWrites += 1 end,
 	}, { __newindex = function(t, k, v) storeWrites += 1; rawset(t, k, v) end })
 	local sent = {}
@@ -1167,6 +1192,7 @@ if cab then
 	A:advance(Config.attractPlaceInterval)
 	check("mid-placement before Play", shown(livePool) >= 1 and shown(targetPool) >= 2, true)
 	check("the demo never wrote to the StateStore", storeWrites .. " " .. tostring(storeText() == snapshot), "0 true")
+	check("...and never read it (no bridge data while the demo runs)", storeReads, 0)
 	check("Attract does not require Core.StateStore", string.find(pm.Attract.Source, "require%([^)]*StateStore") == nil, true)
 	g.celebrate:burst("COMPLETE!") -- a burst in flight when Play is pressed
 	g:start({ Name = "Tester", UserId = 1 })
@@ -1195,6 +1221,141 @@ if cab then
 	check("attractEnabled = false: Idle without the demo", tostring(A.running) .. " " .. shown(targetPool), "false 0")
 	Config.attractEnabled = true
 	board:Destroy()
+end
+
+section("27. bridge grid: hello.space.grid drives the cell lookup (mock's hello; then a moved sheet)")
+do
+	local G = require(RS.PatternMatch.Grid) -- the module Core.StateStore and ArmTwin.Stick use
+	local mockGrid = { origin_mm = { 25.4, 22.225 }, cell_mm = 57.15, rows = { "A", "B", "C" }, cols = { 1, 2, 3, 4 } }
+	-- bridge/producers/mock.py's cell(): letter is the row (A nearest the arm), number the column
+	local function mockCell(grid, name)
+		local row = string.byte(name) - 64
+		local col = tonumber(string.sub(name, 2))
+		return grid.origin_mm[1] + (col - 0.5) * grid.cell_mm, grid.origin_mm[2] + (row - 0.5) * grid.cell_mm
+	end
+	local function allNamed(grid)
+		local bad = {}
+		for _, name in ipairs(G.allCells()) do
+			local got = G.cellOf(mockCell(grid, name))
+			if got ~= name then table.insert(bad, name .. "->" .. tostring(got)) end
+		end
+		return #bad == 0 and "all 12" or table.concat(bad, " ")
+	end
+	check("mock hello grid: no warning", G.setGeometry(mockGrid), nil)
+	check("mock hello grid: every mock cell center reads as its own name", allNamed(mockGrid), "all 12")
+	local moved = { origin_mm = { 40, 30 }, cell_mm = 50, rows = { "A", "B", "C" }, cols = { 1, 2, 3, 4 } }
+	G.setGeometry(moved)
+	check("moved sheet (origin 40,30, cell 50): geometry follows the hello", G.geometry().originX .. " " .. G.geometry().cell, "40 50")
+	check("moved sheet: every cell center reads as its own name", allNamed(moved), "all 12")
+	check("moved sheet: (65, 55) is A1, (115, 55) is A2", G.cellOf(65, 55) .. " " .. G.cellOf(115, 55), "A1 A2")
+	local warning = G.setGeometry({ origin_mm = { 22.225, 48.26 }, cell_mm = 57.15, rows = { "A", "B", "C" }, cols = { 1, 2, 3 } })
+	check("a 3x3 hello keeps the boards' 3x4 (with a warning)", tostring(warning ~= nil) .. " " .. #G.allCells() .. " " .. G.geometry().originY, "true 12 48.26")
+	G.setGeometry(nil)
+	check("setGeometry(nil): Config's grid again", G.geometry().originX == Config.gridOriginMm.X and G.geometry().cell == Config.cellSizeMm, true)
+
+	-- Orientation, re-run against the mock's grid: a sheet point lands on the LiveBoard tile of the cell it
+	-- reads as, so A1 is far-left from the row C side and C4 near-right (the board view test in 14).
+	local cabModel = workspace:FindFirstChild("PatternCabinet")
+	if cabModel then
+		local lb = cabModel.LiveBoard
+		G.setGeometry(mockGrid)
+		local off = {}
+		for _, name in ipairs(G.allCells()) do
+			local x, y = mockCell(mockGrid, name)
+			local w = G.sheetToWorld(x, y, 0, lb)
+			local tile = lb[name]
+			local d = Vector3.new(w.X - tile.Position.X, w.Y - (tile.Position.Y + tile.Size.Y / 2), w.Z - tile.Position.Z)
+			if d.Magnitude > 0.01 then table.insert(off, name) end
+		end
+		check("mock grid: each cell center (z 0) lands on its LiveBoard tile's top", #off == 0 and "all 12" or table.concat(off, " "), "all 12")
+		local a1x, a1y = mockCell(mockGrid, "A1")
+		check("z scales like x and y: 48 mm up is 48 * boardCellStuds / 57.15 studs",
+			math.abs(G.sheetToWorld(a1x, a1y, 48, lb).Y - G.sheetToWorld(a1x, a1y, 0, lb).Y - 48 * Config.boardCellStuds / 57.15) < 1e-6, true)
+		local GConfig = require(RS.PatternMatch.Config) -- the Config that G reads
+		GConfig.flipX = true
+		local flipped = G.sheetToWorld(a1x, a1y, 0, lb)
+		GConfig.flipX = false
+		check("flipX: the A1 point is drawn over A4, as cellOf reads it", (Vector3.new(flipped.X, 0, flipped.Z) - Vector3.new(lb.A4.Position.X, 0, lb.A4.Position.Z)).Magnitude < 0.01, true)
+		G.setGeometry(nil)
+	end
+end
+
+section("28. Core.StateStore adapter (edit mode: no bridge, nothing connects)")
+do
+	local core = RS.Core:Clone()
+	local Store = require(core.StateStore)
+	local Ev = require(core.Events)
+	check("source / status before any hello", Store.source() .. " " .. Store.status(), "pending offline")
+	check("sendEvent without the bridge: Roblox side only", select(2, Store.sendEvent("earthquake", 0.5, 4)), "no robot bridge (pending)")
+	check("Events.fire returns false without the bridge", Ev.fire("earthquake", 0.5, 4), false)
+	local frame = { t = "state", seq = 5, ts = 1, arm_age = 0.02, blocks_age = 0.1,
+		arm = { joints = {}, points = { { name = "shoulder_pan", x = 1, y = 2, z = 3 }, { name = "tip", x = 4, y = 5, z = 6 } } },
+		blocks = {
+			{ id = 1, color = "light blue", x = 50, y = 50, z = 0, yaw = 0, level = 0, held = false, visible = true, age = 0 },
+			{ id = 2, color = "grey", x = 60, y = 60, z = 90, yaw = 0, level = 0, held = true, visible = true, age = 0 },
+			{ id = 3, color = "red", x = 70, y = 70, z = 0, yaw = 0, level = 1, held = false, visible = true, age = 0 },
+		} }
+	local s1 = Store.fromFrame(frame)
+	check("fromFrame: light blue -> skyblue, held grey left alone, red kept", s1.blocks[1].color .. " " .. s1.blocks[2].color .. " " .. s1.blocks[3].color, "skyblue grey red")
+	check("fromFrame: arm kept with its points, blocks_age carried", #s1.arm.points .. " " .. s1.blocks_age, "2 0.1")
+	check("fromFrame: an arm with no points is no arm data", Store.fromFrame({ blocks = {}, arm = { joints = {}, points = {} } }).arm, nil)
+	check("fromFrame does not touch the frame it was given", frame.blocks[1].color, "light blue")
+	check("protocol colors not in Config.colors (kit list + BlockSync's)", (function()
+		local missing = {}
+		for _, c in ipairs({ "orange", "yellow", "purple", "teal", "red", "light blue", "green", "blue", "pink", "white", "black" }) do
+			if Config.colors[Config.bridgeColors[c] or c] == nil then table.insert(missing, c) end
+		end
+		return table.concat(missing, ",")
+	end)(), "green,blue,pink,white,black")
+	local fa = Store.fakeArm(Config.twinRestPose)
+	check("fake arm: 6 sheet-mm points named like the protocol, base before row A", fa ~= nil and #fa.points == 6 and fa.points[1].name == "shoulder_pan"
+		and fa.points[6].name == "tip" and fa.points[1].y < Config.gridOriginMm.Y, true)
+	core:Destroy()
+end
+
+section("29. stick-figure arm twin (ArmTwin.Stick) from arm.points")
+local cabModel = workspace:FindFirstChild("PatternCabinet")
+if RS:FindFirstChild("ArmTwin") and RS.ArmTwin:FindFirstChild("Stick") and cabModel then
+	local twinCopy = RS.ArmTwin:Clone()
+	local StickM = require(twinCopy.Stick)
+	local RigM = require(twinCopy.Rig)
+	local DriverM = require(twinCopy.Driver)
+	local lb = cabModel.LiveBoard
+	local a1x, a1y = O.X + S / 2, O.Y + S / 2
+	local pose = StickM.payload({ { name = "shoulder_pan", x = 140, y = -100, z = 68 }, { name = "tip", x = a1x, y = a1y, z = 0 } }, lb)
+	check("payload: the tip at A1's center on the paper lands on LiveBoard A1's top", (pose.points[2] - Vector3.new(lb.A1.Position.X, lb.A1.Position.Y + lb.A1.Size.Y / 2, lb.A1.Position.Z)).Magnitude < 0.01, true)
+	check("payload: foot is the first point dropped to the paper; scale is the board's", math.abs(pose.foot.X - pose.points[1].X) < 1e-6
+		and math.abs(pose.foot.Y - (lb.A1.Position.Y + lb.A1.Size.Y / 2)) < 0.01 and math.abs(pose.scale - Config.boardCellStuds / Config.cellSizeMm) < 1e-9, true)
+	check("payload: no points -> nil (the twin rests)", StickM.payload({}, lb), nil)
+	local twinModel = lb.ArmTwin:Clone()
+	local rest = StickM.restPayload(twinModel)
+	local restTip = twinModel:GetPivot():PointToWorldSpace(RigM.forward(DriverM.rigAngles(DriverM.restPose())).Position)
+	check("rest pose: the rig's folded pose at the twin's pivot, tip where the rig's FK puts it", #rest.points .. " " .. tostring((rest.points[6] - restTip).Magnitude < 1e-4), "6 true")
+	local poseEvent = Instance.new("BindableEvent")
+	local folder = Instance.new("Folder")
+	local handle = StickM.attach(twinModel, { OnClientEvent = poseEvent.Event }, folder)
+	local hidden = true
+	for _, d in ipairs(twinModel:GetDescendants()) do
+		if d:IsA("BasePart") and d.Transparency ~= 1 then hidden = false end
+	end
+	check("attach: the Motor6D rig is hidden; the stick has a base, 5 links and 6 balls", tostring(hidden) .. " " .. #handle.model:GetChildren(), "true 12")
+	local started = handle.resting()
+	local arm6 = {}
+	for i, n in ipairs(RigM.POINT_NAMES) do arm6[i] = { name = n, x = 100 + i * 10, y = 40, z = 60 } end
+	poseEvent:Fire(StickM.payload(arm6, lb))
+	task.wait(0.6)
+	local tipNow = handle.current().points[6]
+	local tipWant = StickM.payload(arm6, lb).points[6]
+	check("attach: starts resting, eases onto a sample", tostring(started) .. " " .. tostring(handle.resting()) .. " "
+		.. tostring((tipNow - tipWant).Magnitude < 0.1), "true false true")
+	task.wait(StickM.STALE_SECONDS + 0.2)
+	check("stale samples: back to resting", handle.resting(), true)
+	handle.destroy()
+	twinModel:Destroy()
+	folder:Destroy()
+	twinCopy:Destroy()
+else
+	check("ReplicatedStorage.ArmTwin.Stick and the cabinet exist", false, true)
 end
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

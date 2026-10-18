@@ -12,6 +12,9 @@
 -- While Idle, PatternMatch.Attract plays a demo loop on both boards (Config.attractEnabled); it stops and
 -- clears both boards the moment any other state starts, and the LiveBoard isn't drawn from StateStore
 -- while it runs.
+-- While the robot link is OFFLINE (store.status(), Core.StateStore) the match check freezes: the board
+-- keeps its last frame, no ticket can clear and the hold-to-clear count starts over, but the shift timer,
+-- arrivals and events keep running.
 -- Easy and Hard modes; events (PatternMatch.PatternEvents) run during the shift. Each state is an
 -- enter/tick pair in `states`. Every 0.2 s, step() redraws the LiveBoard from StateStore (in every
 -- state, idle included), counts down, ticks the current state and pushes the HUD payload if anything
@@ -177,7 +180,13 @@ states.Shift = {
 			end
 		end
 
-		if active then
+		if active and self:robotStatus() == "offline" then
+			self.clearFor = 0 -- stale data can't clear a ticket; outlines stay as they were
+			if self.lastCompare ~= "frozen" then
+				self.lastCompare = "frozen"
+				log("ticket #%d: robot OFFLINE, matching frozen", active.id)
+			end
+		elseif active then
 			local result = Target.compare(active.target, self.liveGrid, self.events.vanished)
 			self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and blocked blocks
 			local text = Target.describe(result)
@@ -405,6 +414,12 @@ function Game:completeTicket(ticket)
 	self:pushUI()
 end
 
+-- The robot link as the HUD badge shows it: "live", "mock", "offline" or "fake" (Core.StateStore.status).
+-- A store without status() (tests' stand-ins) reads as "fake".
+function Game:robotStatus()
+	return self.store.status and self.store.status() or "fake"
+end
+
 -- Loop --------------------------------------------------------------------------------------------
 
 -- Runs forever, one step per tick.
@@ -498,6 +513,7 @@ function Game:payload()
 		chooser = self.chooserName,    -- who picks the mode this game
 		chooserUserId = self.chooserUserId,
 		confirming = self.state == "ModeSelect" and self.picked == true, -- picked, showing "HARD MODE"
+		robot = self:robotStatus(),    -- "live" | "mock" | "offline" | "fake": the status panel's badge
 	}
 end
 
@@ -509,7 +525,7 @@ function Game:hudKey()
 	for _, t in ipairs(p.tickets) do
 		table.insert(tickets, t.id .. "@" .. t.age)
 	end
-	return string.format("%d|%s|%s|%s|%s|%s|%s|%s", p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
+	return string.format("%s|%d|%s|%s|%s|%s|%s|%s|%s", p.robot, p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
 		event, table.concat(p.vanishedCells, ","), table.concat(tickets, ","), tostring(p.activeId),
 		tostring(p.orderUp and p.orderUp.seq))
 end

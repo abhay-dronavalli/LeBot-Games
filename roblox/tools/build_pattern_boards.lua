@@ -24,7 +24,7 @@
 --     BlockPool stands each block on its tile's top face.
 --   SpinClick ClickDetector on the TargetBoard Model only (the LiveBoard and its arm twin never spin,
 --     like the real table), a Blocks Folder on the LiveBoard, the twin clone on the apron
---     Config.twinBaseOffsetCm from the grid's row A edge, centered on the board's width, its base on the
+--     Config.twinBaseOffsetMm from the grid's row A edge, centered on the board's width, its base on the
 --     Slab top.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -42,8 +42,8 @@ local PatternMatch = ReplicatedStorage.PatternMatch:Clone()
 local Config = require(PatternMatch.Config)
 local Grid = require(PatternMatch.Grid)
 
-local CELL_PITCH = Config.boardCellStuds -- studs per cell (also the twin's cm -> stud scale)
-local STUDS_PER_CM = CELL_PITCH / Config.cellSizeCm
+local CELL_PITCH = Config.boardCellStuds -- studs per cell (also the twin's mm -> stud scale)
+local STUDS_PER_MM = CELL_PITCH / Config.cellSizeMm
 local GROOVE = 0.2          -- dark groove between squares (and between the outer squares and the frame)
 local TILE_THICKNESS = 0.2  -- inlaid squares; a vanished one leaves a hole this deep
 local BASE_THICKNESS = 0.15 -- the dark groove layer the squares sit on
@@ -77,7 +77,7 @@ local FONT = Font.new("rbxasset://fonts/families/Merriweather.json", Enum.FontWe
 local tableTop = tableTopPart.Position.Y + tableTopPart.Size.Y / 2
 local gridX = Config.gridCols * CELL_PITCH
 local gridZ = Config.gridRows * CELL_PITCH
-local twinOffset = Config.twinBaseOffsetCm * STUDS_PER_CM
+local twinOffset = Config.twinBaseOffsetMm * STUDS_PER_MM
 local twinBaseDepth = twinTemplate.Base.Size.Z
 
 local slabTop = tableTop + SLAB_THICKNESS
@@ -291,7 +291,7 @@ local function buildBoard(name, center)
 				child:Destroy() -- the Rig and Driver modules stay on the template only
 			end
 		end
-		-- On the apron, Config.twinBaseOffsetCm from the grid's row A edge, centered on the board's width.
+		-- On the apron, Config.twinBaseOffsetMm from the grid's row A edge, centered on the board's width.
 		twin:PivotTo(CFrame.new(x, slabTop, z + gridZ / 2 + twinOffset))
 		twin.Parent = board
 

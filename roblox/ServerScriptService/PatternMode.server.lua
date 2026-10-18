@@ -7,9 +7,12 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
+local Config = require(PatternMatch.Config)
 local Game = require(PatternMatch.Game)
 local BoardSpinner = require(PatternMatch.BoardSpinner)
-local TwinDriver = require(ReplicatedStorage:WaitForChild("ArmTwin"):WaitForChild("Driver"))
+local ArmTwin = ReplicatedStorage:WaitForChild("ArmTwin")
+local TwinDriver = require(ArmTwin:WaitForChild("Driver"))
+local Stick = require(ArmTwin:WaitForChild("Stick"))
 local Core = ReplicatedStorage:WaitForChild("Core")
 local StateStore = require(Core:WaitForChild("StateStore"))
 local Events = require(Core:WaitForChild("Events"))
@@ -29,7 +32,7 @@ local patternUI = getOrCreate(remotes, "RemoteEvent", "PatternUI")          -- s
 local patternPick = getOrCreate(remotes, "RemoteEvent", "PatternPick")      -- chooser -> server: "easy" / "hard"
 local ticketCycle = getOrCreate(remotes, "RemoteEvent", "TicketCycle")      -- any player -> server: -1 / +1 through the tickets
 local patternState = getOrCreate(remotes, "BindableEvent", "PatternState")  -- server only: state changes
-local armPose = getOrCreate(remotes, "UnreliableRemoteEvent", "ArmPose")    -- server -> clients: arm angles, 20 Hz
+local armPose = getOrCreate(remotes, "UnreliableRemoteEvent", "ArmPose")    -- server -> clients: arm points, 20 Hz
 
 local cabinet = workspace:WaitForChild("PatternCabinet")
 local prompt = cabinet:WaitForChild("Entry"):WaitForChild("PlayPrompt")
@@ -70,13 +73,19 @@ for _, name in ipairs({ "TargetBoard" }) do -- the LiveBoard and its arm twin ne
 	end)
 end
 
--- The arm twin: clients drive their copy of the rig from these samples (StarterPlayerScripts.ArmTwinClient).
--- While the attract demo runs (Idle) no arm data goes out, so the twin rests in its folded pose.
+-- The arm twin: clients draw a stick figure from these samples (StarterPlayerScripts.ArmTwinClient): the
+-- bridge's arm.points as world positions over the LiveBoard. While the attract demo runs (Idle), and while
+-- the link is OFFLINE or the arm data is stale, nothing goes out, so the twin rests in its folded pose.
+local liveBoard = cabinet:WaitForChild("LiveBoard")
 TwinDriver.serve(armPose, function()
-	if patternGame.attract.running then
+	if patternGame.attract.running or StateStore.status() == "offline" then
 		return nil
 	end
-	return StateStore.get().arm
+	local s = StateStore.get()
+	if s.arm == nil or (tonumber(s.arm_age) or 0) > Config.bridgeStaleSeconds then
+		return nil
+	end
+	return Stick.payload(s.arm.points, liveBoard)
 end, 20)
 
 -- A player who joins mid-game gets the current HUD state right away.
