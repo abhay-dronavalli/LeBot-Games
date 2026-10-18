@@ -71,4 +71,13 @@ return {
 		note = "Lights out, with pits you cannot see. Teal blocks GLOW -- the only obstacle solved by"
 			.. " what the block emits rather than what it blocks.",
 	},
+	[9] = {
+		obstacle = "Ice",
+		color = "red",
+		level = 1,
+		solveCells = {{0, 1}, {3, 1}},
+		finale = true,
+		note = "Finale: frictionless ice. You slide through a pinch point with lethal drops either"
+			.. " side; the blocks are guard rails that cover them.",
+	},
 }
