@@ -302,4 +302,30 @@ local function moveTo(angles, timeout)
 	end
 end
 
+----------------------------------------------------------------
+-- Job queue -- serializes every reach/place/remove so concurrent cell edits can't fight over
+-- the one shared arm.
+----------------------------------------------------------------
+local jobQueue = {}
+local processing = false
+
+local function processQueue()
+	if processing then
+		return
+	end
+	processing = true
+	task.spawn(function()
+		while #jobQueue > 0 do
+			local job = table.remove(jobQueue, 1)
+			job()
+		end
+		processing = false
+	end)
+end
+
+local function enqueue(job)
+	table.insert(jobQueue, job)
+	processQueue()
+end
+
 return SkyArm
