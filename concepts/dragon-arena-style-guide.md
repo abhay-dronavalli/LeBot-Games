@@ -252,7 +252,7 @@ converted with `Mapping.point`.
 - **Head roll comes from `arm.joints.wrist_roll`**, because the points alone do not define it.
   Check the sign once: roll the real wrist and confirm the head turns the same way.
 - **Lower-jaw angle.** Map the gripper reading onto 0° to 40°, using the jaw's observed range
-  learned at run time, the same way `bridge/world.py` `_grip_state` does. The reading is percent
+  learned at run time, the same way `bridge/board.py` `ReleaseTrigger.feed` does. The reading is percent
   open, roughly 8 when shut and 50 or more when open, but it differs from arm to arm.
 - **Decorations** are `Anchored`, and `CanCollide`, `CanQuery` and `CanTouch` are all false. The
   core segment parts are the hitbox (`CanQuery = true`). Check them with `GetPartsInPart`, as
