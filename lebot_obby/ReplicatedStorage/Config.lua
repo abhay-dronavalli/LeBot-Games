@@ -67,6 +67,17 @@ Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 Config.VoidShaftDepth = 48    -- studs from floor level down to the kill plane
 Config.VoidLightSpacing = 14  -- spacing of the red warning lights going down the shaft
 
+-- Bay 3 laser walk -- one crate walked ahead of the player across a lethal grid.
+--
+-- The cooldown is counted from the moment the crate SEATS in its new cell, not from when it
+-- was lifted, which is what lets this number be about the player's hop instead of the arm's
+-- speed: one reachAndPlace is ~5.5s and a move is a remove plus a place, so a cooldown started
+-- at lift would be gone before the crate even landed.
+Config.LaserCooldownSeconds = 6     -- how long the vacated cell stays safe once the crate lands
+Config.LaserRearmWarnSeconds = 1.5  -- the pad pulses fast for this long before the beams return
+Config.LaserRouteMin = 6            -- steps in a generated route, inclusive
+Config.LaserRouteMax = 8
+
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
 Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area

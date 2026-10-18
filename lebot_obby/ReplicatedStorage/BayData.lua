@@ -17,6 +17,7 @@ return {
 		-- to the answer, not the answer. checkSolved skips this bay and the builder owns
 		-- state.solved itself. solveCells stays as the advisory "stack here" hint.
 		solveMode = "switches",
+		banner = "SAW  -  THROW BOTH LEVERS",
 		color = "orange",
 		level = 1,
 		solveCells = {{0, 1}, {3, 0}},
@@ -63,11 +64,22 @@ return {
 			.. " Nothing here is lethal but the drop, so the bridge is also the only safe footing.",
 	},
 	[3] = {
-		obstacle = "Laser",
+		obstacle = "LaserWalk",
+		-- An ACTION bay: there is no fixed set of cells to fill, so checkSolved is skipped and
+		-- the obstacle owns state.solved. It resolves when the player stands on the last cell
+		-- of the route, not when the crate merely arrives there.
+		solveMode = "action",
+		banner = "LASER WALK  -  FOLLOW THE CRATE",
 		color = "yellow",
 		level = 1,
-		solveCells = {{1, 1}},
-		note = "Heist-grid of red beams. The mirror crate cuts power to the whole lattice.",
+		-- Deliberately NO solveCells: the route is generated per run (Config.LaserRoute*), so
+		-- the answer does not exist until the bay arms. One cube is the whole cost -- it is the
+		-- same crate the whole way across, walked ahead of the player one cell at a time, which
+		-- is why this bay is affordable on a rig that owns two of each colour.
+		note = "Every cell of the grid is lethal. The one yellow crate switches off whatever cell"
+			.. " it sits in, and only the next cell of the route will accept it, so the operator"
+			.. " walks you across. The cell the crate just left stays safe for a few seconds"
+			.. " after the crate lands -- that gap is your window to follow it.",
 	},
 	[4] = {
 		obstacle = "Lava",

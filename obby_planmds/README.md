@@ -8,8 +8,9 @@ plan is the original intent and has diverged.
 | [obby_plan.md](obby_plan.md) | The master plan. Numbered sections (0–21) that the Luau comments cite — "Section 7", "Section 10.2" etc. refer to it. **§4.1–4.2 are superseded**; Part III (robot/vision/protocol) is still accurate and untouched. |
 | [bay-01-saw-wall.md](bay-01-saw-wall.md) | Bay 1, built and verified end to end. |
 | [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
+| [bay-03-laser-walk.md](bay-03-laser-walk.md) | Bay 3, built and verified end to end. |
 
-One doc per scenario lands here as each bay is designed. Bays 3–9 don't have one yet.
+One doc per scenario lands here as each bay is designed. Bays 4–9 don't have one yet.
 
 ---
 
@@ -37,8 +38,12 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 | `DebugCellEditor` | `StarterPlayerScripts/DebugCellEditor.client.lua` | 4×3 click grid, laid out as a map of the bay |
 | `GhostControl` | `StarterPlayerScripts/GhostControl.client.lua` | Camera-relative ghost flight |
 
-**Not built:** `Bridge` (the real robot feed), `ActiveBayTracker`, `GameState`/checkpoints,
+**Not built here:** `ActiveBayTracker`, `GameState`/checkpoints,
 `Events` (malfunctions), scoring, win/fail screens, Demo Run.
+
+`Bridge` (the real robot feed) exists in the place file but **not in the text mirror** — it
+arrived on the robot branch. Bay 3 publishes to it optionally, so a branch without it still
+plays. Anything that needs it must `pcall(require)` rather than assume it.
 
 ### Against the plan's build order (§10.2)
 
@@ -63,14 +68,16 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 
 Bay 1 was rebuilt around **one obstacle per 4×3 bay**, with the crates as a *ladder to the
 answer* rather than the answer. Bay 2 is the counterpart: a pure **placement** bay where
-filling the cells *is* the solve, and where the crates are the floor. Bays 3–9 are still the
-older sketch of that model and have not had a design pass.
+filling the cells *is* the solve, and where the crates are the floor. Bay 3 is the third
+shape — **one** crate, moved repeatedly, where the cell it sits in is the only safe ground
+and the route is randomised per run. Bays 4–9 are still the older sketch of that model and
+have not had a design pass.
 
 | # | Obstacle | Colour | Lvl | Solve | Redesigned |
 |---|---|---|---|---|---|
 | 1 | **Saw Wall** | orange + red | 1 + 2 | **two levers, hold E** | ✅ built & verified |
 | 2 | **Void** | red | 1 | cells (1,0) (1,1) | ✅ built & verified |
-| 3 | Laser grid | yellow | 1 | cell (1,1) | ❌ |
+| 3 | **Laser Walk** | yellow | 1 | **walk one crate along a random 6–8 cell route** | ✅ built & verified |
 | 4 | Lava | blue | 1 | cells (1,0) (1,1) | ❌ |
 | 5 | Crusher roof | green | 2 | cell (1,1) | ❌ |
 | 6 | Mobs | purple | 1 | cells (0,1) (3,1) | ❌ |
@@ -105,9 +112,13 @@ must mirror it, so no obstacle may destroy a crate. Resolve contact some other w
 1. **Placement** (bays 2–9, the default) — `checkSolved` watches `BlockSync.CellsChanged` and
    marks the bay solved when every `solveCell` holds a crate of the right colour at or above
    the required level.
-2. **Action** (`solveMode = "switches"`, bay 1) — the obstacle owns `state.solved` and sets it
-   itself; `checkSolved` skips the bay and `solveCells` degrades to a "stack here" hint. Use
-   this whenever the crates are the *means* rather than the goal.
+2. **Action** (`solveMode = "switches"` in bay 1, `"action"` in bay 3) — the obstacle owns
+   `state.solved` and sets it itself; `ownsItsSolve(info)` makes `checkSolved` skip the bay,
+   and `solveCells` degrades to a hint or can be omitted entirely. Use this whenever the
+   crates are the *means* rather than the goal, or when the cells are decided at runtime.
+
+An action bay should set its own `info.banner`; the default describes a placement bay
+(`"<COLOUR> x<N>"`), and switch-mode bays used to inherit bay 1's `THROW BOTH LEVERS`.
 
 Both go through one `state.setSolved`, which owns the label and the edge-triggered `onSolved`.
 A switch-mode bay **cannot be un-solved by clearing cells** — the R hotkey resets every bay.
@@ -126,6 +137,17 @@ widens the catchment toward the entrance so a bay can brief the player on the ap
 delivery into its own bay. A refusal is **parked, not discarded** — the operator's cube is
 still on the real table — and `BlockSync.retryRejected(bayModel)` re-offers it when the guard
 changes its mind.
+
+**`CellsChanged` is the snapshot, not the arrival.** It fires the moment the operator's cube
+moves on the real table — before the arm has carried anything, and whether or not a guard
+ends up refusing it. If a bay's *timing or safety* depends on the crate actually being there,
+listen to **`BlockSync.CratePlaced(bayModel, cell)`**, which fires from the delivery's
+`onArrive`. Bay 3 marked a refused cell safe to stand on until this existed.
+
+**One bay owns the HUD at a time.** `pad` windows of neighbouring bays overlap (the gap is
+6 studs, a pad is usually a whole 8-stud cell), so `hudBayFor(pos, pad)` picks a single owner:
+containment wins, and outside every bay body the bay you're walking *towards* beats the one
+you just left. `publishObjective` already uses it — don't re-derive ownership per bay.
 
 **Presentation must not hang off `state.solved`.** `buildBay`'s `setSolved` only calls
 `onSolved` on the way *in*, so anything driven from it stays stuck on "cleared" when the bay
@@ -171,4 +193,7 @@ things out of reach: a default Roblox jump clears about **12.8 studs of head hei
 - **`ProximityPrompt:InputHoldBegin()` is client-side.** From the server it does nothing.
 - **A closure only sees locals declared above it.** A guard that read a local declared further
   down silently got a nil global and allowed everything through.
+- **Don't hardcode a randomised route into a test.** A bay-3 test that assumed step 1 was
+  `(3,0)` "passed" against a run whose step 1 was elsewhere, and masked a real safety bug.
+  Read the expected target off the HUD payload.
 - Mirror edits back out of Studio and **verify with a checksum**; transcription drifts silently.
