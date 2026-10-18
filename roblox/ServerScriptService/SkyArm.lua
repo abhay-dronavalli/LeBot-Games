@@ -221,4 +221,85 @@ function SkyArm.debugSolve(pos)
 	return solveIK(pos)
 end
 
+----------------------------------------------------------------
+-- Angle interpolation / idle loop
+----------------------------------------------------------------
+-- Park pose is solved rather than hand-tuned, so it stays correct if the link lengths change.
+-- Gripper parks ~7 studs below and ~7 ahead of the shoulder, well clear of the floor.
+local function copyAngles(a)
+	return {
+		shoulder_pan = a.shoulder_pan, shoulder_lift = a.shoulder_lift, elbow_flex = a.elbow_flex,
+		wrist_flex = a.wrist_flex, wrist_roll = a.wrist_roll, gripper = a.gripper,
+	}
+end
+
+local IDLE_ANGLES = solveIKWithGripper(
+	carriage.Position + Vector3.new(0, -SHOULDER_OFFSET - 7.05, -8),
+	20
+)
+
+local current = copyAngles(IDLE_ANGLES)
+local target = copyAngles(IDLE_ANGLES)
+
+-- Place the whole rig before the first frame renders. Without this every part sits at the
+-- world origin for one frame and the arm visibly flashes through the floor on spawn.
+applyFK(current)
+
+local busy = false
+local heldCrate = nil
+
+RunService.Heartbeat:Connect(function(dt)
+	local alpha = math.clamp(dt * 4.0, 0, 1)
+	for key in pairs(current) do
+		current[key] += (target[key] - current[key]) * alpha
+	end
+	applyFK(current)
+
+	if heldCrate and heldCrate.Parent and heldCrate:FindFirstChild("Base") then
+		local base = heldCrate.Base
+		base.CFrame = CFrame.new(gripperTipWorld - Vector3.new(0, base.Size.Y / 2 + 0.5, 0))
+		local stripe = heldCrate:FindFirstChild("Stripe")
+		if stripe then
+			stripe.CFrame = base.CFrame * CFrame.new(0, base.Size.Y / 2 + 0.05, 0)
+		end
+		local topper = heldCrate:FindFirstChild("Topper")
+		if topper then
+			topper.CFrame = base.CFrame * CFrame.new(0, base.Size.Y / 2 + topper.Size.Y / 2, 0)
+			local topperStripe = heldCrate:FindFirstChild("TopperStripe")
+			if topperStripe then
+				topperStripe.CFrame = topper.CFrame * CFrame.new(0, topper.Size.Y / 2 + 0.05, 0)
+			end
+		end
+	end
+
+	if not busy then
+		local t = os.clock()
+		target.shoulder_pan = math.sin(t * 0.15) * 15
+		target.shoulder_lift = IDLE_ANGLES.shoulder_lift + math.sin(t * 0.2 + 1) * 6
+		target.elbow_flex = IDLE_ANGLES.elbow_flex + math.sin(t * 0.18 + 2) * 8
+		target.wrist_flex = IDLE_ANGLES.wrist_flex + math.sin(t * 0.25) * 5
+		target.wrist_roll = math.sin(t * 0.1) * 20
+		target.gripper = IDLE_ANGLES.gripper
+	end
+end)
+
+local function angleError(a, b)
+	local sum = 0
+	for key in pairs(a) do
+		sum += math.abs(a[key] - b[key])
+	end
+	return sum
+end
+
+local function moveTo(angles, timeout)
+	for key, v in pairs(angles) do
+		target[key] = v
+	end
+	local elapsed = 0
+	while angleError(current, target) > 1.5 and elapsed < (timeout or 1.5) do
+		task.wait(0.03)
+		elapsed += 0.03
+	end
+end
+
 return SkyArm
