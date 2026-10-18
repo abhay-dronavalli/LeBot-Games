@@ -104,3 +104,41 @@ local function applyAndBroadcast()
 	return newList
 end
 
+CellEdit.OnServerEvent:Connect(function(player, col, row, action)
+	if type(col) ~= "number" or type(row) ~= "number" then
+		return
+	end
+	if col < 0 or col >= Config.BayCols or row < 0 or row >= Config.BayRows then
+		return
+	end
+
+	cellState[col] = cellState[col] or {}
+	local cell = cellState[col][row]
+
+	if action == "toggleLevel" then
+		if cell then
+			cell.level = (cell.level == 1) and 2 or 1
+		end
+	else -- "cycle"
+		local currentIndex = 1
+		if cell then
+			for i, name in ipairs(COLOR_CYCLE) do
+				if name == cell.color then
+					currentIndex = i
+					break
+				end
+			end
+		end
+		local nextIndex = (currentIndex % #COLOR_CYCLE) + 1
+		local nextColor = COLOR_CYCLE[nextIndex]
+		if nextColor == "none" then
+			cellState[col][row] = nil
+		else
+			cellState[col][row] = {color = nextColor, level = (cell and cell.level) or 1}
+		end
+	end
+
+	applyAndBroadcast()
+end)
+
+----------------------------------------------------------------
