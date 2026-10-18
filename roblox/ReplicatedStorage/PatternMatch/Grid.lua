@@ -127,9 +127,11 @@ end
 
 -- Cell -> world position at the center of that cell on top of the board's Base part.
 -- boardModel is a board Model with a Base part, or the Base part itself.
--- Columns 1-4 run along the Base's local +X (column 1, the tag 0 side, at the -X edge). Rows A-C run
--- along its local -Z (row A, the arm side, at the +Z edge). Seen from the row A edge this is the table
--- as the operator sees it, not a mirror image. The result follows the board when it is moved or spun.
+-- Rows A-C run along the Base's local -Z (row A, the arm side, at the +Z edge). Columns 1-4 run along
+-- its local -X (column 1, the tag 0 side, at the +X edge). That matches the printed sheet: standing at
+-- the row C (tripod) side looking toward row A, A1 is far-left and the columns read 1 2 3 4 left to
+-- right; standing at the arm side looking toward the tripod, tag 0 / A1 is on the right. Rendering only:
+-- Grid.cellOf (table cm -> cell) is unaffected. The result follows the board when it is moved or spun.
 function Grid.worldPositionOf(cell, boardModel)
 	local row, col = Grid.parseCell(cell)
 	if not row then
@@ -142,7 +144,7 @@ function Grid.worldPositionOf(cell, boardModel)
 	assert(base and base:IsA("BasePart"), "Grid.worldPositionOf: board needs a Base part")
 
 	local size = base.Size
-	local localX = ((col - 0.5) / Config.gridCols - 0.5) * size.X
+	local localX = (0.5 - (col - 0.5) / Config.gridCols) * size.X
 	local localZ = (0.5 - (row - 0.5) / Config.gridRows) * size.Z
 	return base.CFrame:PointToWorldSpace(Vector3.new(localX, size.Y / 2, localZ))
 end

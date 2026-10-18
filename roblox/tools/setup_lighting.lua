@@ -9,7 +9,6 @@
 --   - A warm downward SpotLight in the ceiling lamp over the table, so both boards stay bright and readable.
 --   - Lighting.CabinetFocus, the DepthOfFieldEffect that StarterPlayerScripts.CabinetFocus drives every
 --     frame (its values here are only the starting point).
--- Lighting.Technology isn't scriptable from here: set it to Future by hand in the Properties panel.
 
 local Lighting = game:GetService("Lighting")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")

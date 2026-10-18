@@ -237,14 +237,14 @@ check("tower on a vanished cell .blocked", r.blocked, { "B2" }); check(".missing
 check(".problemLevels B2 = both levels", tostring(r.problemLevels.B2[0]) .. " " .. tostring(r.problemLevels.B2[1]), "true true")
 check("Target.count(tall)", table.concat({ Target.count(tall) }, ","), "4,2")
 
-section("12. worldPositionOf on an 8 x 1 x 6 base at (0, 5, 0): row A at +Z, column 1 at -X")
+section("12. worldPositionOf on an 8 x 1 x 6 base at (0, 5, 0): row A at +Z, column 1 at +X")
 local base = Instance.new("Part")
 base.Size = Vector3.new(8, 1, 6)
 base.CFrame = CFrame.new(0, 5, 0)
-check("A1", tostring(Grid.worldPositionOf("A1", base)), "-3, 5.5, 2")
-check("A4", tostring(Grid.worldPositionOf("A4", base)), "3, 5.5, 2")
-check("C1", tostring(Grid.worldPositionOf("C1", base)), "-3, 5.5, -2")
-check("C4", tostring(Grid.worldPositionOf("C4", base)), "3, 5.5, -2")
+check("A1", tostring(Grid.worldPositionOf("A1", base)), "3, 5.5, 2")
+check("A4", tostring(Grid.worldPositionOf("A4", base)), "-3, 5.5, 2")
+check("C1", tostring(Grid.worldPositionOf("C1", base)), "3, 5.5, -2")
+check("C4", tostring(Grid.worldPositionOf("C4", base)), "-3, 5.5, -2")
 check("D1 / A5", tostring(Grid.worldPositionOf("D1", base)) .. " / " .. tostring(Grid.worldPositionOf("A5", base)), "nil / nil")
 base:Destroy()
 
@@ -262,6 +262,7 @@ check("update() fires changed with new seq", fired, 7)
 check("get() returns updated blocks", #Store.get().blocks, 1)
 
 section("14. built boards")
+local boardView, VIEW_OK -- set in section 14, reused in section 23
 local cab = workspace:FindFirstChild("PatternCabinet")
 if cab then
 	local names = {}
@@ -270,6 +271,48 @@ if cab then
 	end
 	table.sort(names)
 	check("TargetBoard tiles", names, cells)
+	-- How a board reads for someone at its row C edge looking toward row A, from world positions and
+	-- the board's own facing (so it also holds after a spin). Returns a short report string.
+	boardView = function(boardModel)
+		local base = boardModel.Base
+		local look = (boardModel.A1.Position - boardModel.C1.Position) * Vector3.new(1, 0, 1)
+		look = look.Unit -- row C toward row A
+		local up = base.CFrame.UpVector
+		local right = look:Cross(up)
+		local function far(c) return boardModel[c].Position:Dot(look) end
+		local function rightOf(c) return boardModel[c].Position:Dot(right) end
+		local corners = (far("A1") > far("C1") and rightOf("A1") < rightOf("A4") and "A1 far-left" or "A1 wrong")
+			.. ", " .. (far("A4") > far("C4") and rightOf("A4") > rightOf("A1") and "A4 far-right" or "A4 wrong")
+			.. ", " .. (far("C1") < far("A1") and rightOf("C1") < rightOf("C4") and "C1 near-left" or "C1 wrong")
+			.. ", " .. (far("C4") < far("A4") and rightOf("C4") > rightOf("C1") and "C4 near-right" or "C4 wrong")
+		local labels = {}
+		local upright = true
+		for _, c in ipairs(boardModel:GetChildren()) do
+			if c.Name == "ColumnLabel" then
+				table.insert(labels, c)
+				-- A Top-face SurfaceGui's up is the part's -X and its right is the part's -Z.
+				local textUp = c.CFrame:VectorToWorldSpace(Vector3.new(-1, 0, 0))
+				local textRight = c.CFrame:VectorToWorldSpace(Vector3.new(0, 0, -1))
+				if textUp:Dot(look) < 0.99 or textRight:Dot(right) < 0.99 then upright = false end
+			end
+		end
+		table.sort(labels, function(a, b) return a.Position:Dot(right) < b.Position:Dot(right) end)
+		local text = ""
+		for _, l in ipairs(labels) do text ..= l.SurfaceGui.TextLabel.Text end
+		local nearest = labels[1] and labels[1].Position:Dot(look) < far("C1")
+		return corners .. "; border reads " .. text .. (upright and ", upright" or ", NOT upright")
+			.. (nearest and " on the row C edge" or " off the row C edge")
+	end
+	VIEW_OK = "A1 far-left, A4 far-right, C1 near-left, C4 near-right; border reads 1234, upright on the row C edge"
+	check("TargetBoard from the row C side", boardView(cab.TargetBoard), VIEW_OK)
+	check("LiveBoard from the row C side", boardView(cab.LiveBoard), VIEW_OK)
+	check("rendering only: table-cm data mapping unchanged (A1 / A4 / C1 corners of the sheet)",
+		Grid.cellOf(at(1, 1)) .. Grid.cellOf(at(1, 4)) .. Grid.cellOf(at(3, 1)), "A1A4C1")
+	check("arm twin centered on the LiveBoard's width, on the row A side", cab.LiveBoard:FindFirstChild("ArmTwin") ~= nil
+		and math.abs(cab.LiveBoard.ArmTwin.Base.Position.X - cab.LiveBoard.Base.Position.X) < 0.001
+		and cab.LiveBoard.ArmTwin.Base.Position.Z > cab.LiveBoard.A1.Position.Z, true)
+	check("SpinClick only on the TargetBoard", tostring(cab.TargetBoard:FindFirstChild("SpinClick") ~= nil) .. " "
+		.. tostring(cab.LiveBoard:FindFirstChildWhichIsA("ClickDetector", true) ~= nil), "true false")
 	local liveA1 = Grid.worldPositionOf("A1", cab.LiveBoard)
 	check("LiveBoard tile A1 sits on Grid.worldPositionOf(A1)", (cab.LiveBoard.A1.Position - liveA1).Magnitude < 0.11, true)
 
@@ -317,9 +360,9 @@ if cab then
 			if c.Name == name and c.SurfaceGui.TextLabel.Text == text then return c end
 		end
 	end
-	check("row A carved on the arm side (+Z), row C toward -Z; column 1 at -X, on the row C border",
+	check("row A carved on the arm side (+Z), row C toward -Z; column 1 at +X (tag 0 side), on the row C border",
 		labelAt(lb, "RowLabel", "A").Position.Z > lb.Base.Position.Z + 3 and labelAt(lb, "RowLabel", "C").Position.Z < lb.Base.Position.Z - 3
-		and labelAt(lb, "ColumnLabel", "1").Position.X < labelAt(lb, "ColumnLabel", "4").Position.X
+		and labelAt(lb, "ColumnLabel", "1").Position.X > labelAt(lb, "ColumnLabel", "4").Position.X
 		and labelAt(lb, "ColumnLabel", "1").Position.Z < lb.Base.Position.Z - lb.Base.Size.Z / 2, true)
 	check("TARGET / LIVE carved in the row A border, gold vs green accents", labelAt(tb, "BoardLabel", "TARGET") ~= nil
 		and labelAt(lb, "BoardLabel", "LIVE") ~= nil and labelAt(tb, "BoardLabel", "TARGET").Position.Z > tb.Base.Position.Z
@@ -686,11 +729,10 @@ if cab then
 	Config.debugForceMode = nil
 	g:setState("Idle")
 
-	section("23. spinning a board keeps tiles and blocks on their cells")
+	section("23. only the TargetBoard spins; the LiveBoard and the arm twin stay fixed")
 	local BoardSpinner = require(pm.BoardSpinner)
 	g.liveBoard:render({ block("A1", "red"), block("B3", "teal"), block("C4", "yellow") })
 	local function offCells(boardModel)
-		boardModel = boardModel or board.LiveBoard
 		local bad = 0
 		for _, c in ipairs(cells) do
 			local tile = boardModel[c]
@@ -707,28 +749,25 @@ if cab then
 		repeat task.wait() until not spinner:busy() or os.clock() - from > limit
 		return os.clock() - from
 	end
+
+	local liveBase0 = board.LiveBoard.Base.CFrame
+	local twinBase0 = board.LiveBoard:FindFirstChild("ArmTwin") and board.LiveBoard.ArmTwin.Base.CFrame
 	local liveSpinner = BoardSpinner.new(board.LiveBoard)
-	local look0, a1Start = board.LiveBoard.Base.CFrame.LookVector, board.LiveBoard.A1.Position
-	liveSpinner:request()
-	waitIdle(liveSpinner, 2)
-	check("1 spin: base turned 90 degrees", math.abs(board.LiveBoard.Base.CFrame.LookVector:Dot(look0)) < 0.001, true)
-	check("1 spin: tiles on Grid.worldPositionOf, block parts on their tiles (cells off)", offCells(), 0)
-	check("1 spin: A1 / B3 / C4 blocks still shown in their colors",
-		board.LiveBoard.Blocks.A1.Transparency == 0 and board.LiveBoard.Blocks.A1.Color == Config.colors.red
-		and board.LiveBoard.Blocks.B3.Color == Config.colors.teal and board.LiveBoard.Blocks.C4.Color == Config.colors.yellow, true)
 	liveSpinner:request()
 	liveSpinner:request()
-	liveSpinner:request()
-	waitIdle(liveSpinner, 4)
-	check("3 more queued spins run one after another: back to the start", board.LiveBoard.Base.CFrame.LookVector:Dot(look0) > 0.9999
-		and (board.LiveBoard.A1.Position - a1Start).Magnitude < 0.001, true)
-	check("after 4 spins: cells off", offCells(), 0)
+	task.wait(0.6)
+	check("LiveBoard: spin requests are ignored (not busy, Base exactly where it was)",
+		not liveSpinner:busy() and board.LiveBoard.Base.CFrame == liveBase0, true)
+	if twinBase0 then
+		check("LiveBoard: the arm twin stays fixed", board.LiveBoard.ArmTwin.Base.CFrame == twinBase0, true)
+	end
+	check("LiveBoard: A1 / B3 / C4 blocks still on their cells", offCells(board.LiveBoard), 0)
 	liveSpinner:destroy()
 
-	g.targetBoard:show(towers({ A1 = "red", C3 = "teal" }), false, false)
+	g.targetBoard:show(towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "teal" }), false, false)
 	local shakingNow = true
 	local targetSpinner = BoardSpinner.new(board.TargetBoard, { isShaking = function() return shakingNow end })
-	local tlook0 = board.TargetBoard.Base.CFrame.LookVector
+	local tlook0, ta1Start = board.TargetBoard.Base.CFrame.LookVector, board.TargetBoard.A1.Position
 	targetSpinner:request()
 	task.wait(0.6)
 	check("during a tremor the spin waits", board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0) > 0.9999, true)
@@ -736,20 +775,20 @@ if cab then
 	local took = waitIdle(targetSpinner, 3)
 	check("tremor over: the spin runs, after the 0.5 s margin", math.abs(board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0)) < 0.001
 		and took >= BoardSpinner.AFTER_SHAKE_SECONDS + BoardSpinner.SPIN_SECONDS - 0.05, true)
-	check("TargetBoard spin: target blocks stay on their tiles (cells off)", offCells(board.TargetBoard), 0)
-	check("TargetBoard spin: A1 / C3 target blocks still shown, B2 still empty",
-		board.TargetBoard.Blocks.A1.Color == Config.colors.red and board.TargetBoard.Blocks.C3.Color == Config.colors.teal
-		and board.TargetBoard.Blocks.A1.Transparency == 0 and board.TargetBoard.Blocks.B2.Transparency == 1, true)
-	if board.LiveBoard:FindFirstChild("ArmTwin") then
-		local twinSpinner = BoardSpinner.new(board.LiveBoard)
-		local baseRel = board.LiveBoard.Base.CFrame:ToObjectSpace(board.LiveBoard.ArmTwin.Base.CFrame)
-		twinSpinner:request()
-		waitIdle(twinSpinner, 2)
-		local baseRelAfter = board.LiveBoard.Base.CFrame:ToObjectSpace(board.LiveBoard.ArmTwin.Base.CFrame)
-		check("LiveBoard spin carries the arm twin (same offset from the board's Base)",
-			(baseRel.Position - baseRelAfter.Position).Magnitude < 0.001, true)
-		twinSpinner:destroy()
-	end
+	check("1 spin: tiles on Grid.worldPositionOf, block parts (both levels) on their tiles (cells off)", offCells(board.TargetBoard), 0)
+	check("1 spin: A1 / B2 tower / C3 target blocks still shown, A2 still empty",
+		board.TargetBoard.Blocks.A1.Color == Config.colors.red and board.TargetBoard.Blocks.B2_1.Color == Config.colors.teal
+		and board.TargetBoard.Blocks.C3.Color == Config.colors.teal and board.TargetBoard.Blocks.A1.Transparency == 0
+		and board.TargetBoard.Blocks.A2.Transparency == 1, true)
+	check("1 spin: the board still reads right from its own row C side", boardView(board.TargetBoard), VIEW_OK)
+	check("the spin left the LiveBoard alone", board.LiveBoard.Base.CFrame == liveBase0, true)
+	targetSpinner:request()
+	targetSpinner:request()
+	targetSpinner:request()
+	waitIdle(targetSpinner, 4)
+	check("3 more queued spins run one after another: back to the start", board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0) > 0.9999
+		and (board.TargetBoard.A1.Position - ta1Start).Magnitude < 0.001, true)
+	check("after 4 spins: cells off", offCells(board.TargetBoard), 0)
 	targetSpinner:destroy()
 	board:Destroy()
 end

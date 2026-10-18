@@ -51,8 +51,9 @@ patternPick.OnServerEvent:Connect(function(player, choice)
 	patternGame:pick(player, choice)
 end)
 
--- Click a board to spin it 90 degrees. Spins wait while clients are shaking the boards for a tremor.
-for _, name in ipairs({ "TargetBoard", "LiveBoard" }) do
+-- Click the TargetBoard to spin it 90 degrees. Spins wait while clients are shaking the boards for a
+-- tremor. The LiveBoard never spins: it and the arm twin stay fixed, like the real table.
+for _, name in ipairs({ "TargetBoard" }) do -- the LiveBoard and its arm twin never spin
 	local board = cabinet:WaitForChild(name)
 	local spinner = BoardSpinner.new(board, {
 		isShaking = function()

@@ -1,5 +1,5 @@
 -- Edit-time build script for the two game boards in Workspace.PatternCabinet: TargetBoard and LiveBoard.
--- Run it after build_pattern_cabinet.lua (which builds the floor, island, entry and table), and again
+-- Run it after build_pattern_cabinet.lua (which builds the entry pad and the table), and again
 -- whenever the board look changes: it destroys both board Models and builds them fresh on the table.
 -- Not part of the game: run it in Studio's command bar (or via the MCP execute_luau tool) in Edit mode.
 -- Undo with Ctrl+Z.
@@ -16,13 +16,16 @@
 -- What game code relies on (keep it when restyling):
 --   Base: exactly the grid's size in X and Z (Config.gridCols / gridRows x Config.boardCellStuds), no
 --     rotation, the board's PrimaryPart. Grid.worldPositionOf lays the cells out on its top face: row A
---     at its +Z edge (the arm side), column 1 at its -X edge. It is the dark groove color, so the gaps
+--     at its +Z edge (the arm side), column 1 at its +X edge (so from the row C side the columns read
+--     1 2 3 4 left to right, like the printed sheet). It is the dark groove color, so the gaps
 --     between squares, and a vanished square (tile Transparency = 1, LiveBoard.setVanished), read as a
 --     dark groove / hole.
 --   Cell tiles A1..C4: on Base's top at Grid.worldPositionOf, turned +90 degrees, no SurfaceGui inside.
 --     BlockPool stands each block on its tile's top face.
---   SpinClick ClickDetector on the Model, a Blocks Folder on the LiveBoard, the twin clone on the apron
---     Config.twinBaseOffsetCm from the grid's row A edge, its base on the Slab top.
+--   SpinClick ClickDetector on the TargetBoard Model only (the LiveBoard and its arm twin never spin,
+--     like the real table), a Blocks Folder on the LiveBoard, the twin clone on the apron
+--     Config.twinBaseOffsetCm from the grid's row A edge, centered on the board's width, its base on the
+--     Slab top.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
@@ -262,7 +265,7 @@ local function buildBoard(name, center)
 		end
 	end
 	for col = 1, Config.gridCols do
-		local colX = x + ((col - 0.5) / Config.gridCols - 0.5) * gridX
+		local colX = x + (0.5 - (col - 0.5) / Config.gridCols) * gridX -- column 1 at +X, like Grid
 		carving(board, "ColumnLabel", Vector3.new(colX, 0, z - gridZ / 2 - textMid), textDepth, textDepth, tostring(col), BURN)
 	end
 	-- TARGET / LIVE in the row A border, inlaid in the accent color.
@@ -297,12 +300,14 @@ local function buildBoard(name, center)
 		blocks.Parent = board
 	end
 
-	-- Click anywhere on the board to spin it (ServerScriptService.PatternMode). On the Model rather than
-	-- the Base alone, because the tiles cover the Base's top.
-	local spinClick = Instance.new("ClickDetector")
-	spinClick.Name = "SpinClick"
-	spinClick.MaxActivationDistance = 40
-	spinClick.Parent = board
+	-- TargetBoard only: click anywhere on it to spin it (ServerScriptService.PatternMode). On the Model
+	-- rather than the Base alone, because the tiles cover the Base's top. The LiveBoard stays fixed.
+	if name == "TargetBoard" then
+		local spinClick = Instance.new("ClickDetector")
+		spinClick.Name = "SpinClick"
+		spinClick.MaxActivationDistance = 40
+		spinClick.Parent = board
+	end
 	board.PrimaryPart = base
 	return board
 end

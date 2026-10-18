@@ -4,6 +4,8 @@
 -- Model, and Grid.worldPositionOf follows the Base, so cells keep their blocks.
 -- Requests queue: one spin at a time, and none while isShaking() says a tremor is on (clients shake
 -- the boards locally then), plus a short margin after it ends so their restore lands first.
+-- Only a board with a SpinClick ClickDetector spins (the TargetBoard). Requests on any other board, the
+-- LiveBoard with the arm twin, are ignored: it stays fixed like the real table.
 --   local spinner = BoardSpinner.new(boardModel, { isShaking = function() return false end })
 --   spinner:request()
 
@@ -23,6 +25,7 @@ function BoardSpinner.new(board, opts)
 	opts = opts or {}
 	local self = setmetatable({}, BoardSpinner)
 	self.board = board
+	self.spinnable = board:FindFirstChild("SpinClick") ~= nil
 	self.isShaking = opts.isShaking or function()
 		return false
 	end
@@ -36,6 +39,9 @@ function BoardSpinner.new(board, opts)
 end
 
 function BoardSpinner:request()
+	if not self.spinnable then
+		return
+	end
 	self.pending += 1
 end
 
