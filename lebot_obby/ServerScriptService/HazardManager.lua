@@ -2110,6 +2110,27 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 				Vector3.new(x + inward * 0.36, SCONCE_Y, z), WARM,
 				Enum.Material.Neon, folder, {Transparency = 1, CanQuery = false})
 
+			-- Which cell is this lamp? Six fittings a wall and no way to tell them apart was
+			-- the actual problem with the lighting UI -- "light column two" is useless if the
+			-- operator cannot find column two's lamp. The number is painted on the fitting,
+			-- facing into the room.
+			local tag = Instance.new("SurfaceGui")
+			tag.Face = onLeft and Enum.NormalId.Right or Enum.NormalId.Left
+			tag.LightInfluence = 0
+			tag.PixelsPerStud = 40
+			tag.Adornee = body
+			tag.Parent = body
+			local tagText = Instance.new("TextLabel")
+			tagText.Size = UDim2.new(1, 0, 1, 0)
+			tagText.BackgroundTransparency = 1
+			tagText.Font = Enum.Font.GothamBold
+			tagText.TextScaled = true
+			tagText.TextColor3 = hot and Color3.fromRGB(255, 200, 110)
+				or Color3.fromRGB(150, 158, 175)
+			tagText.TextStrokeTransparency = 0.3
+			tagText.Text = string.format("%d,%d", col, row)
+			tagText.Parent = tag
+
 			local light = Instance.new("SpotLight")
 			light.Color = WARM
 			light.Angle = 150
@@ -2120,7 +2141,7 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 			light.Parent = glass
 
 			lamps[key] = {body = body, trim = trim, glass = glass, light = light,
-				hot = hot, on = false}
+				tag = tagText, hot = hot, on = false}
 		end
 	end
 
@@ -2135,6 +2156,10 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 		l.light.Brightness = on and (l.hot and 5.0 or 2.6) or 0
 		l.trim.Color = on and (l.hot and Color3.fromRGB(255, 190, 90) or Color3.fromRGB(190, 150, 90))
 			or (l.hot and Color3.fromRGB(120, 80, 20) or Color3.fromRGB(30, 30, 38))
+		if l.tag then
+			l.tag.TextColor3 = on and Color3.fromRGB(255, 240, 210)
+				or (l.hot and Color3.fromRGB(255, 200, 110) or Color3.fromRGB(150, 158, 175))
+		end
 	end
 
 	-- How far a lamp REVEALS, in cells.

@@ -21,6 +21,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
@@ -44,6 +45,24 @@ local DIMMED = Color3.fromRGB(96, 104, 122)
 
 local active = false
 local activeBay = Config.LiveBay or 1
+
+-- Camera the overseer can actually drive. A fixed shot is fine until you need to look at one
+-- corner of the bay, which is most of the time once a run is underway.
+--
+-- PAN IS ON THE RIGHT MOUSE BUTTON, not on keys. Every key that reads as "move the view" --
+-- WASD and the arrows alike -- is already a key that WALKS THE RUNNER, and in solo the
+-- overseer and the runner are the same person. Panning with the arrows marched the character
+-- out of the bay while the operator thought they were looking around.
+local zoom, panX, panZ = 1, 0, 0
+local ZOOM_MIN, ZOOM_MAX = 0.45, 2.3
+local PAN_LIMIT = 26        -- studs from the bay centre; past that the bay leaves the screen
+local PAN_PER_PIXEL = 0.09
+local panning = false
+
+-- X-ray is a toggle, not a fixture. Sometimes you want to see the room as the runner sees it
+-- -- walls, roof and all -- and then put them back.
+local xray = true
+local xrayBtn, recenterBtn
 local solveCells, bayName = nil, "?"
 local occupied = {}
 local markers = {}
@@ -93,6 +112,32 @@ sub.TextColor3 = Color3.fromRGB(176, 186, 202)
 sub.Text = "V returns to the runner"
 sub.Parent = gui
 Instance.new("UICorner", sub).CornerRadius = UDim.new(0, 5)
+
+----------------------------------------------------------------
+-- Controls the operator can hit without knowing a keybind. The keys stay, but a hackathon
+-- demo gets driven by someone who has never seen this screen before, and a visible button is
+-- the difference between "the walls are in my way" and "I pressed the walls button".
+----------------------------------------------------------------
+local function ctrlButton(text, y)
+	local b = Instance.new("TextButton")
+	b.AnchorPoint = Vector2.new(1, 0)
+	b.Position = UDim2.new(1, -18, 0, y)
+	b.Size = UDim2.new(0, 214, 0, 28)
+	b.BackgroundColor3 = Color3.fromRGB(34, 38, 48)
+	b.BackgroundTransparency = 0.08
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = true
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 11
+	b.TextColor3 = DIMMED
+	b.Text = text
+	b.Parent = gui
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	return b
+end
+
+xrayBtn = ctrlButton("WALLS: SEE-THROUGH  (G)", 18)
+recenterBtn = ctrlButton("RECENTER VIEW", 52)
 
 ----------------------------------------------------------------
 -- Mini grid. The same 4x3 the operator has in front of them on the table, in the same
@@ -270,6 +315,14 @@ local function ghostWalls(on)
 		end
 	end
 
+	-- The crane hangs directly over the bay and is the single biggest thing between this
+	-- camera and the floor. Faded rather than hidden: where the jaw is still tells the
+	-- operator what the arm is doing.
+	local rig = Workspace:FindFirstChild("SkyArmRig")
+	for _, p in ipairs(rig and rig:GetDescendants() or {}) do
+		ghost(p, 0.75)
+	end
+
 	-- The bay's own box. Matched by NAME rather than by size or position, because a bay builds
 	-- whatever it needs and only its walls and roof should disappear -- the obstacle itself has
 	-- to stay visible, which is the entire point of looking.
@@ -338,9 +391,17 @@ local function aimCamera()
 	local midZ = zStart + Config.BayDepth / 2
 	-- Aimed past the middle of the bay, which pushes the whole grid DOWN the screen and out
 	-- from under the objective panel. Aiming at the centre put the far row behind it.
+	local h = HEIGHT * zoom
+	local back = SETBACK * zoom
+	-- Clamped, because an unbounded pan is a way to lose the bay entirely and no way to find
+	-- it again: a few flicks and the operator is staring at empty sky with no horizon to
+	-- steer by. The limit scales with zoom -- zoomed out you can afford to roam further.
+	local lim = PAN_LIMIT * zoom
+	panX = math.clamp(panX, -lim, lim)
+	panZ = math.clamp(panZ, -lim, lim)
 	cam.CFrame = CFrame.lookAt(
-		Vector3.new(midX, HEIGHT, midZ - SETBACK),
-		Vector3.new(midX, 0, midZ + 10))
+		Vector3.new(midX + panX, h, midZ - back + panZ),
+		Vector3.new(midX + panX, 0, midZ + 10 + panZ))
 end
 
 local function paintGrid()
@@ -368,13 +429,14 @@ local function setActive(on)
 	end
 	if on then
 		cam.CameraType = Enum.CameraType.Scriptable
-		ghostWalls(true)
+		ghostWalls(xray)
 		setHighlight(true)
 		buildMarkers()
 		aimCamera()
 		paintGrid()
 	else
 		clearMarkers()
+		panning = false
 		ghostWalls(false)
 		setHighlight(false)
 		cam.CameraType = Enum.CameraType.Custom
@@ -388,10 +450,50 @@ end
 local function refreshBanner()
 	banner.Text = ("OVERSEER VIEW   -   BAY %02d   -   %s"):format(activeBay, bayName:upper())
 	local n = #(solveCells or {})
-	sub.Text = (n > 0)
-		and ("green cells want a block  (%d marked)   -   V returns to the runner"):format(n)
-		or "this bay is cleared by an action, not by filling cells   -   V returns to the runner"
+	sub.Text = ("%s   -   scroll zoom, right-drag pan, G walls %s, V back to the runner"):format(
+		(n > 0) and ("%d cells want a block"):format(n) or "cleared by an action, not by cells",
+		xray and "see-through" or "solid")
 end
+
+-- X-RAY, one place. It is reached three ways -- the G key, the on-screen button, and a bay
+-- change re-applying it -- and having each of those poke the flag by hand is how the banner
+-- and the world drifted apart.
+--
+-- G IS CLAIMED THROUGH ContextActionService, not UserInputService.InputBegan. V arrives on
+-- InputBegan and G did not: something upstream was marking it handled, and InputBegan's
+-- gameProcessedEvent guard then dropped it before this script ever saw it. A bound action
+-- sits above that and sinks the key, so the binding holds regardless of who else wants it.
+local function setXray(on)
+	xray = on
+	ghostWalls(false)
+	ghostWalls(xray)
+	refreshBanner()
+	if xrayBtn then
+		xrayBtn.Text = xray and "WALLS: SEE-THROUGH  (G)" or "WALLS: SOLID  (G)"
+		xrayBtn.BackgroundColor3 = xray and Color3.fromRGB(26, 52, 86) or Color3.fromRGB(34, 38, 48)
+		xrayBtn.TextColor3 = xray and HELD or DIMMED
+	end
+end
+
+ContextActionService:BindActionAtPriority("OverseerXray", function(_, state)
+	if not active then
+		-- the runner is driving; G is none of this script's business
+		return Enum.ContextActionResult.Pass
+	end
+	if state == Enum.UserInputState.Begin then
+		setXray(not xray)
+	end
+	return Enum.ContextActionResult.Sink
+end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.G)
+
+xrayBtn.MouseButton1Click:Connect(function()
+	setXray(not xray)
+end)
+
+recenterBtn.MouseButton1Click:Connect(function()
+	zoom, panX, panZ = 1, 0, 0
+	aimCamera()
+end)
 
 DebugStatus.OnClientEvent:Connect(function(status)
 	local moved = status.activeBay ~= activeBay
@@ -401,13 +503,14 @@ DebugStatus.OnClientEvent:Connect(function(status)
 	bayName = info and info.obstacle or "?"
 	if moved then
 		occupied = {}
+		zoom, panX, panZ = 1, 0, 0    -- a new bay gets the default framing back
 	end
 	refreshBanner()
 	if active then
 		-- the bay moved under us, or a solve changed which cells matter, and the x-ray has to
 		-- follow: the walls being ghosted belong to the bay we were looking at
 		ghostWalls(false)
-		ghostWalls(true)
+		ghostWalls(xray)
 		buildMarkers()
 		paintGrid()
 		if moved then
@@ -431,10 +534,39 @@ BayCells.OnClientEvent:Connect(function(bayIndex, cellsList)
 end)
 
 UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or input.KeyCode ~= Enum.KeyCode.V then
+	if input.KeyCode == Enum.KeyCode.V and not processed then
+		setActive(not active)
 		return
 	end
-	setActive(not active)
+	-- Right button starts a pan. The processed guard is skipped on purpose: the operator
+	-- grabs the view by dragging over the middle of the screen, and the objective panel and
+	-- the mini grid both sit in that space.
+	if active and input.UserInputType == Enum.UserInputType.MouseButton2 then
+		panning = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		panning = false
+	end
+end)
+
+-- Scroll to zoom, right-drag to pan.
+UserInputService.InputChanged:Connect(function(input, processed)
+	if not active then
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.MouseWheel and not processed then
+		zoom = math.clamp(zoom - input.Position.Z * 0.12, ZOOM_MIN, ZOOM_MAX)
+		aimCamera()
+	elseif panning and input.UserInputType == Enum.UserInputType.MouseMovement then
+		-- The camera looks down -Z-ish, so screen-right is world +X and screen-up is world
+		-- +Z. Scaled by zoom so a drag covers the same amount of SCREEN at any zoom.
+		panX -= input.Delta.X * PAN_PER_PIXEL * zoom
+		panZ += input.Delta.Y * PAN_PER_PIXEL * zoom
+		aimCamera()
+	end
 end)
 
 -- The camera and the highlight are both lost on respawn; re-assert rather than leaving the
@@ -446,6 +578,9 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
+-- The camera is re-asserted every frame rather than only when it moves: Roblox hands the
+-- camera back to the default scripts on respawn and on a few CoreGui transitions, and a
+-- one-shot CFrame would silently lose the view.
 RunService.RenderStepped:Connect(function()
 	if active then
 		aimCamera()
