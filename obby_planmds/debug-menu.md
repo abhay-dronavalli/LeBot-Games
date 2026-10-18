@@ -9,17 +9,24 @@
 
 ## 1. What it does
 
-A panel in the top-left (F1 hides it) listing all nine bays by obstacle name. Click one to jump
-to it; **START RUN HERE** begins a clean run on it. Underneath, one button decides whether a
-second player exists at all.
+A panel in the top-left (F1 hides it) listing every bay in scope by obstacle name. Click one
+to jump to it; **START RUN HERE** begins a clean run on it. Underneath, one button decides
+whether a second player exists at all.
+
+The list is built from `Config.NumBays`, so it is **four** entries today — Saw, Void,
+LaserWalk, DarkZone. Every bay index is clamped to that, so there is no way to jump to a parked
+bay: raise `NumBays` and the menu grows by itself.
 
 | Control | Does |
 |---|---|
-| Bay 1–9 | Jump to that scenario. The active bay follows, so the mat maps to it |
+| Bay 1–`NumBays` | Jump to that scenario. The active bay follows, so the mat maps to it |
 | **START RUN HERE** | Rebuild the obstacle, wipe its crates, heal, place you outside the door |
 | RESET THIS BAY | Same rebuild, without moving you |
-| RESET ALL BAYS | All nine, from scratch |
+| RESET ALL BAYS | Every bay in scope, from scratch |
 | **P2** | Cycle the crate source: LIVE ARM → SIMULATED → NOBODY |
+| **F1** | Hide / show the panel |
+| **F2** | **RESET EVERYTHING** — every bay rebuilt and you back on the spawn. Bound to a key rather than only a button because it has to be reachable with the panel hidden, which is how you would actually be playing |
+| **R** | Rebuild every bay, leaving you where you are (handled in `HazardManager`, not the menu) |
 
 The panel renders only what the server pushes it (`DebugStatus`), so it cannot drift from what
 the game believes. A bay that is solved shows green.
@@ -91,6 +98,18 @@ Player 2's view. **V** toggles between the runner's over-the-shoulder camera and
 shot of the active bay, so in solo one person can flip between the two halves of the game and
 check what the operator is looking at.
 
+| Control | Does |
+|---|---|
+| **V** | Toggle the overseer view on / off |
+| **G** | Toggle the x-ray walls (also a button on the panel) |
+| **−** / **=** / mouse wheel | Zoom out / in |
+| **Right-drag** | Pan across the bay. Right rather than left, and with no `gameProcessed` guard, because the drag starts over the middle of the screen where the objective panel and the mini grid both live |
+| RECENTER VIEW | Back to the default zoom and centre. Switching bays also resets the framing |
+
+Every binding is `ContextActionService:BindActionAtPriority` and **passes rather than sinks
+while the view is off**, so none of these keys is stolen from the runner — **G** is none of
+this script's business until the overseer view is actually up.
+
 The angle is elevated, from the entrance end, looking down the bay. That is not arbitrary:
 
 - Columns (X) spread left-to-right and rows (Z) recede, which is exactly how the printed mat
@@ -130,7 +149,7 @@ all** — correct text, laid-out `AbsoluteSize`, nothing on screen — so the la
 `SurfaceGui`'s own axes run across the bay, so the text needs `Rotation = -90` to face the
 camera; `+90` renders it upside down, which at a glance looks merely mirrored.
 
-## 5. One mat, nine bays
+## 5. One mat, every bay
 
 `RunControl.activeBay` is the single answer to "which bay does the mat map to", because three
 things have to agree on it: both crate sources, and `Mapping`, whose `ORIGIN` is derived from
@@ -140,17 +159,24 @@ that bay's `Cell_0_0` anchor.
 after the first looked unsolvable — the clicks went to a bay nobody was standing in. Both
 sources now follow `RunControl`, and crates are cleared out of the bay being left behind.
 
-**This is the shape `ActiveBayTracker` should take.** When it arrives it calls
-`RunControl.setActiveBay` from player 1's position and nothing else changes.
+**This was the shape `ActiveBayTracker` should take, and it is the shape it took.** It is
+built: it calls `RunControl.setActiveBay` from the runner's position and nothing else changed.
+The one rule worth knowing is that **the catwalk counts as the bay ahead**, so the mat is ready
+before you walk in rather than a moment after — which also keeps it agreeing with this menu,
+whose "start run" drops you on that approach catwalk.
 
 ## 6. Verified
 
+Measured when all nine bays were in scope. The bay-5 and bay-9 jumps are no longer reachable
+— every index is clamped to `Config.NumBays` — but they are kept because what they prove is the
+arithmetic (`zStart - 4` on the approach catwalk), which did not change.
+
 | Check | Result |
 |---|---|
-| Teleport to bay 5 | Z = 116, against a bay starting at Z = 120 |
-| Teleport to bay 9 | Z = 236 |
+| Teleport to bay 5 | Z = 116, against a bay starting at Z = 120 *(out of scope now)* |
+| Teleport to bay 9 | Z = 236 *(out of scope now)* |
 | `startRun 3` | Z = 56, healed, bay 3 active |
-| Status push | 9 bays named, active bay and feed mode correct |
+| Status push | bays named, active bay and feed mode correct (9 then, 4 now) |
 | Cell editor targets the active bay | placed into **Bay 2** after jumping there (was pinned to Bay 1) |
 | Solve then reset | `solved` true → **false**, **0 crates left**, obstacle folder rebuilt |
 | `none` mode | clicking the grid produces **0** crates |
@@ -166,5 +192,7 @@ sources now follow `RunControl`, and crates are cleared out of the bay being lef
 - **No checkpoints.** Dying still respawns at world spawn; the menu is the way back.
 - **Bay 1's levers still need a human.** `ProximityPrompt:InputHoldBegin()` is client-side, so
   the throw itself cannot be driven from a test.
-- **The panel is player-1 shaped.** When the overseer client exists it will want its own view —
-  which bay is live and what that bay wants — rather than this one.
+- **The panel is player-1 shaped.** The overseer has a camera (§4b) but not a panel: what they
+  want is which bay is live and what that bay wants, not a list of bays to teleport into.
+- **Nothing assigns the roles.** `P2` decides whether a second crate source exists, not who is
+  player 2. In solo one person flips between both views with **V**.

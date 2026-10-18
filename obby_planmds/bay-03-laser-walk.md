@@ -1,17 +1,3 @@
-> **The cube is a token, not an object.** This bay sets `VirtualCrates`, so no crate is
-> ever built: placing a block disarms the matching tile and the player walks on the floor,
-> because the pad is what kills and a safe pad does not. Moving the cube on starts the
-> `LaserCooldownSeconds` grace on the tile behind, which is the time you have to step
-> across. Verified: 0 crate parts, 7 laser parts disarmed per tile, both tiles safe for
-> the overlap and then the old one re-arms.
->
-> **The clock is on the tile.** `LaserCooldownSeconds` is **10** (was 6 -- swapping a block is
-> a physical action on a physical table, and the clock does not start until the NEW tile is
-> live). The cooling pad paints the remaining seconds on itself, switching to tenths in red
-> for the last `LaserRearmWarnSeconds` (**2**). The HUD names the cell too --
-> `COL 2, ROW 0 GOES LIVE IN 0:03` -- because with two cells cooling a bare number told you
-> how long but not which ground it belonged to.
-
 # Bay 3 — Laser Walk
 
 **Status:** built and verified in Studio. Solvable end to end.
@@ -23,6 +9,18 @@
 
 > Replaces the old `BUILDERS.Laser` (a whole-volume beam lattice killed by one mirror crate),
 > which shared nothing with this design and has been removed.
+
+**The cube is a token, not an object.** This bay sets `VirtualCrates`, so no crate is ever
+built: placing a block disarms the matching tile and the player walks on the floor, because the
+pad is what kills and a safe pad does not. Moving the cube on starts the `LaserCooldownSeconds`
+grace on the tile behind, which is the time you have to step across. A crate here was scenery
+that read as "climb me" in the one bay where climbing is not the point. Verified: 0 crate parts,
+7 laser parts disarmed per tile, both tiles safe for the overlap and then the old one re-arms.
+
+**The clock is on the tile.** The cooling pad paints the remaining seconds on itself, switching
+to tenths in red for the last `LaserRearmWarnSeconds` (**2**). The HUD names the cell too —
+`COL 2, ROW 0 GOES LIVE IN 0:03` — because with two cells cooling, a bare number told you how
+long but not which ground it belonged to.
 
 ---
 
@@ -63,12 +61,18 @@ crate lifted from (3,0)
    v
 crate seats at (2,0)           (2,0) -> SAFE
    |
-   |   (3,0) cooldown: 6s      player walks (3,0) -> (2,0)
+   |   (3,0) cooldown: 10s     player walks (3,0) -> (2,0)
    v
 (3,0) beams return
 ```
 
-Measured in Studio: `5.7 → 3.8 → 1.8 → LIVE`, i.e. exactly the configured 6s.
+`Config.LaserCooldownSeconds` is **10**. It was 6, and 6 was not enough: swapping a block is a
+physical action on a physical table, and because the clock does not start until the **new** tile
+is live, this number is about the player's hop rather than the arm's speed — it has to cover
+reaching for the cube, moving it, and the player then walking the step.
+
+Measured in Studio at the old value: `5.7 → 3.8 → 1.8 → LIVE`, i.e. exactly the configured 6s.
+The mechanism is what that proved; only the constant changed.
 
 **This is why `BlockSync.CratePlaced` had to exist** — see §5.1.
 
@@ -186,9 +190,9 @@ the player arm it from the catwalk, read the callout, and wait for the first pla
 | solved | `CLEARED` | ok |
 
 The countdown shows `CELL GOES LIVE IN` for **the cell the crate just left** — the one the
-player is standing on. Showing whichever cooldown expired soonest looked fine until two
-overlapped, and then it counted down a cell already behind them, reading `0.3s` while the
-ground underfoot still had a full 6s.
+player is standing on, named by cell so two overlapping cooldowns can be told apart. Showing
+whichever cooldown expired soonest looked fine until two overlapped, and then it counted down a
+cell already behind them, reading `0.3s` while the ground underfoot still had its full 10s.
 
 A refused placement flashes the reason, e.g. `NOT THE NEXT CELL - COL 3, ROW 0`.
 
@@ -208,9 +212,12 @@ A refused placement flashes the reason, e.g. `NOT THE NEXT CELL - COL 3, ROW 0`.
 
 Driven through the real `CellEdit` / `DebugHotkey` remotes.
 
+Measured before the scope cut to four bays and at the old 6s cooldown. The mechanisms are
+unchanged; the cooldown is 10 now.
+
 | Check | Result |
 |---|---|
-| All 9 bays still build | no errors; Bay03 = `LaserWalk`, 85 parts (12 pads, 72 beams) |
+| All bays still build | no errors; Bay03 = `LaserWalk`, 85 parts (12 pads, 72 beams) *(9 bays then, 4 now)* |
 | Banner | `LASER WALK - FOLLOW THE CRATE`; bay 1 still `SAW - THROW BOTH LEVERS` |
 | Grid lethal before arming | 12/12 pads live |
 | Arms from the catwalk | armed at z=57, route generated, target published |
@@ -218,7 +225,7 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes.
 | Any colour accepted | a **blue** crate requested into all four row-0 cells: the route's start cell took it and seated it, the other three refused (11/12 pads still LIVE) |
 | Refusal flash | `NOT THE NEXT CELL - COL 3, ROW 0` |
 | Correct cell | crate seated in 4.6s, pad → SAFE, HUD advanced to step 2 |
-| Cooldown | vacated cell `5.7 → 3.8 → 1.8 → LIVE` (configured 6s) |
+| Cooldown | vacated cell `5.7 → 3.8 → 1.8 → LIVE` (the configured 6s at the time; **10s** now) |
 | Full route | 8 steps driven, each seating in 3.8–5.3s |
 | Route exhausted | `STAND ON THE LAST CELL` |
 | Solve | player stepped on final cell → `CLEARED`, 0 live pads, survived |
@@ -245,8 +252,9 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes.
 - **Nothing consumes the `t = "target"` frame yet.** The Python overlay needs a handler, and
   the frame shape above should be agreed against `PROTOCOL.md` (which lives on the robot side,
   not in this branch).
-- **`LaserCooldownSeconds = 6` is unplaytested** against a real operator. It is the bay's whole
-  difficulty in one number.
+- **`LaserCooldownSeconds = 10` is unplaytested** against a real operator. It is the bay's whole
+  difficulty in one number. 6 was already found to be too short in Studio — a block swap is a
+  physical action — so 10 is a second guess, not a measurement.
 - **Death restarts the route**, which means the operator physically carries the cube back to a
   newly-generated start cell for a mistake the *player* made. Chosen deliberately; it is one
   branch in `disarm()` if it proves too harsh.

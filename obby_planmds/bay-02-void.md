@@ -45,20 +45,48 @@ skipped, and there is no need to widen the void to all three rows or raise the f
 Keeping row 2's floor also gives the player somewhere to land, and keeps the bay solvable
 on **2 cubes**, which is what every bay is designed around.
 
-Verified by raycasting the route rather than trusting the arithmetic:
+> ⚠️ **The raycast below predates two changes and no longer describes the bay.** It was
+> measured against a 4-stud crate sitting *on* the floor. The crate is **6.72 studs** now
+> (the real cube's size — [robot-link.md](robot-link.md) §2), and this bay sets
+> **`CrateSink`** to one full cube, so the bridge is **flush with the walkway** instead of
+> standing a cube proud of it. Kept because the conclusion it reached — every hop inside
+> 8.67, the gap as a whole far outside it — is the thing that had to be true, and still is,
+> by a wider margin.
+>
+> ```
+> z 26.0..29.5   surface y=0.0     <- approach catwalk
+> z 30.0..31.5   GAP  2.0 studs
+> z 32.0..36.0   surface y=4.0     <- crate at cell (1,0)   [4-stud crate, resting ON the floor]
+> z 36.5..39.5   GAP  3.5 studs
+> z 40.0..44.0   surface y=4.0     <- crate at cell (1,1)
+> z 44.5..45.5   GAP  1.5 studs
+> z 46.0..53.0   surface y=0.0     <- floor resumes, exit at z=54
+> ```
+
+What the geometry is now, derived from the cube size and the baked anchors (row centres at
+z = 34 / 42 / 50, a 6.72-stud cube, sunk one cube so its top is at y = 0):
 
 ```
-z 26.0..29.5   surface y=0.0     <- approach catwalk
-z 30.0..31.5   GAP  2.0 studs
-z 32.0..36.0   surface y=4.0     <- crate at cell (1,0)
-z 36.5..39.5   GAP  3.5 studs
-z 40.0..44.0   surface y=4.0     <- crate at cell (1,1)
-z 44.5..45.5   GAP  1.5 studs
-z 46.0..53.0   surface y=0.0     <- floor resumes, exit at z=54
+z ..30.00      surface y=0.0     <- approach catwalk, near lip
+z 30.00..30.64 GAP  0.64 studs
+z 30.64..37.36 surface y=0.0     <- crate at cell (1,0), FLUSH with the walkway
+z 37.36..38.64 GAP  1.28 studs
+z 38.64..45.36 surface y=0.0     <- crate at cell (1,1), flush
+z 45.36..46.00 GAP  0.64 studs
+z 46.00..54.00 surface y=0.0     <- floor resumes, exit at z=54
 ```
 
-Every individual hop (2 / 4 / 2) is comfortably inside 8.67, while the gap as a whole is
-not. **The bay is hard for the operator and easy for the player**, which is the split this
+**The bridge is now a flat walk, not three hops.** A 6.72-stud cube in an 8-stud cell leaves
+0.64 of clearance per side, so the two crates and the two lips form a near-continuous surface
+at one level — the gaps are 0.64 / 1.28 / 0.64 against a 8.67-stud jump, which is a stride
+rather than a jump. That is a *better* fit for what this bay is about: the difficulty is the
+operator getting the cells right, and the player should not also be fighting a platforming
+test. The 16-stud void is still nearly twice a running jump, so nothing can be skipped.
+
+**Not re-measured in Studio since the rescale** — the numbers above are derived, not
+raycast. Worth re-running the sweep.
+
+**The bay is hard for the operator and easy for the player**, which is the split this
 project wants.
 
 ---
@@ -149,6 +177,10 @@ The builder shrinks the baked `Floor` part down to the kept rows (`32 x 1 x 8` c
 z=50) rather than hiding it, and that calculation is absolute rather than relative, so
 re-running the builder is idempotent.
 
+It also sets **`CrateSink = Mapping.cubeStuds()`** on the bay model, which is what makes the
+two crates land flush with the walkway rather than a cube above it (§2). That attribute is read
+by `BlockSync.cellToWorld`, so it applies on both the solo and the live path.
+
 Below the opening: four dark shaft walls, cut-edge fascia showing the slab thickness at
 both lips, three red warning lights going down, and the kill plane. All of it is
 `CanCollide = false` so nothing catches a falling player half way down.
@@ -166,7 +198,9 @@ land in bay 1 behind you. **Every bay past the first was unreachable by the real
 `DebugMode` now keeps one `activeBayIndex` that the number keys and `N` move, and each bay
 keeps its **own** cell state — sharing one table would make `BlockSync`, which diffs per bay
 model, see every cell vanish from the bay you just left and have the arm dutifully unload
-it. This is a minimal stand-in for the still-unbuilt `ActiveBayTracker`.
+it. This was a minimal stand-in for `ActiveBayTracker`, which is **built** now — the active
+bay lives in `RunControl`, the tracker drives it from the runner's position, and the debug menu
+drives the same call ([debug-menu.md](debug-menu.md) §5).
 
 Quick-travel also now lands you on the approach catwalk (`zStart - 3`) instead of
 `zStart + 2`, which in this bay was thin air over the void.
@@ -197,15 +231,19 @@ its presentation from what has actually landed (`refresh()`), so it survives un-
 
 Driven through the real `CellEdit` / `DebugHotkey` remotes, not by requiring modules.
 
+Measured before the cube rescale and the scope cut to four bays, so the heights and the bay
+count below are historical. Everything structural — the floor cut, the delivery target, the
+arbitration — is unchanged.
+
 | Check | Result |
 |---|---|
-| All 9 bays still build | `one obstacle per bay built for all 9 bays`, no errors |
+| All bays still build | `one obstacle per bay built for all 9 bays`, no errors *(4 bays now)* |
 | Floor cut back | `32 x 1 x 8`, z 46..54, collidable |
 | Void empty before placing | 0 collidable parts in z 30..46 |
 | Crate delivered to the right bay | Bay01=0, **Bay02=2** (was the hard-coded bug) |
-| Crate at rest | base y=2.00, top=4.00, `CanCollide=true` |
+| Crate at rest | base y=2.00, top=4.00, `CanCollide=true` *(4-stud crate, pre-`CrateSink`; the top is at y=0 now — see §2)* |
 | Delivery time | 3.7s and 4.4s per crate |
-| Route gaps | 2.0 / 3.5 / 1.5 studs — all under the 8.67 jump |
+| Route gaps | 2.0 / 3.5 / 1.5 studs — all under the 8.67 jump *(0.64 / 1.28 / 0.64 now, and flat)* |
 | Gap uncrossable unplaced | 16 studs vs 8.67 |
 | Kill plane | dropped at (16,6,38) → dead in 0.8s |
 | HUD on approach, unsolved | 14/14 payloads `COL 1, ROW 0`, **zero** interleaved clears |
@@ -215,7 +253,7 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes, not by requiring mod
 | Un-solve (clearing (1,1)) | lips 0 green / 16 amber, 1 hologram back, HUD reverts |
 | Re-verified after colour requirements were dropped | solved on **2 blue crates**, seated y=2.00, 16 green lips |
 | Bay 1 regression | `LEVER A — KILL THE BLADES`, countdown live at 57.1s |
-| Bay with no driver (bay 4) | HUD hidden |
+| Bay with no driver | HUD hidden *(bay 4 at the time — it drives its own HUD now that DarkZone lives there)* |
 | Returning to bay 2 | bay 2 takes the channel back, 14/14 clean |
 
 ---

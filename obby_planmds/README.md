@@ -39,7 +39,7 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 |---|---|---|
 | `Config` | `ReplicatedStorage/Config.lua` | All tunables, single source of truth |
 | `CrateDefs` | `ReplicatedStorage/CrateDefs.lua` | 7 colour-coded crates + L1/L2 effect names |
-| `BayData` | `ReplicatedStorage/BayData.lua` | One obstacle per bay, 9 bays |
+| `BayData` | `ReplicatedStorage/BayData.lua` | One obstacle per bay. 9 entries, the first 4 in scope |
 | `BlockSync` | `ServerScriptService/BlockSync.lua` | Cell→world, snapshot diffing, crate delivery, **placement guards** |
 | `SkyArm` | `ServerScriptService/SkyArm.lua` | SO-101-proportioned rig, FK + IK, gantry travel, serialized job queue |
 | `HazardManager` | `ServerScriptService/HazardManager.lua` | All 9 obstacle builders, solve detection, bay reset |
@@ -90,8 +90,9 @@ Bay 1 was rebuilt around **one obstacle per 4×3 bay**, with the crates as a *la
 answer* rather than the answer. Bay 2 is the counterpart: a pure **placement** bay where
 filling the cells *is* the solve, and where the crates are the floor. Bay 3 is the third
 shape — **one** crate, moved repeatedly, where the cell it sits in is the only safe ground
-and the route is randomised per run. Bays 4–9 are still the older sketch of that model and
-have not had a design pass.
+and the route is randomised per run. Bay 4 is the fourth — a **search**, where a block is a
+lantern rather than footing. Bays 5–9 are still the older sketch of that model and have not had
+a design pass; they are also out of scope (see below), so they are parked rather than pending.
 
 No bay requires a colour any more — **any block satisfies any cell** — so the old Colour
 column has been replaced by what a bay actually costs in cubes.
@@ -159,10 +160,11 @@ must mirror it, so no obstacle may destroy a crate. Resolve contact some other w
 
 **Two ways a bay can be solved**
 
-1. **Placement** (bays 2–9, the default) — `checkSolved` watches `BlockSync.CellsChanged` and
-   marks the bay solved when every `solveCell` holds a crate at or above the required level.
-   Colour is not checked.
-2. **Action** (`solveMode = "switches"` in bay 1, `"action"` in bay 3) — the obstacle owns
+1. **Placement** (the default, and **bay 2** is the only bay in scope that uses it) —
+   `checkSolved` watches `BlockSync.CellsChanged` and marks the bay solved when every
+   `solveCell` holds a crate at or above the required level. Colour is not checked. The parked
+   bays 5–9 are all written as placement bays.
+2. **Action** (`solveMode = "switches"` in bay 1, `"action"` in bays 3 and 4) — the obstacle owns
    `state.solved` and sets it itself; `ownsItsSolve(info)` makes `checkSolved` skip the bay,
    and `solveCells` degrades to a hint or can be omitted entirely. Use this whenever the
    crates are the *means* rather than the goal, or when the cells are decided at runtime.
@@ -256,7 +258,7 @@ resizes to fit, so a bay that sends neither looks exactly as it did before.
 - ~~The mat sweep un-solves placement bays.~~ **Fixed.** Solved placement bays now latch;
   reproduced and re-verified on Bay 2 (see [robot-link.md](robot-link.md) §5).
 - ~~Reset is partial.~~ **Fixed.** A bay is reset by rebuilding it, which terminates every run
-  loop (`while folder.Parent do`) and re-runs the builder, so all nine come back genuinely
+  loop (`while folder.Parent do`) and re-runs the builder, so every bay comes back genuinely
   fresh — see [debug-menu.md](debug-menu.md) §3.
 - **Nothing is playtested with a real arm.** Every timing number is a placeholder for human
   fumbling time nobody has measured.

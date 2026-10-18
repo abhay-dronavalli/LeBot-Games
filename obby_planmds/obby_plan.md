@@ -361,10 +361,12 @@ You will spend most of the weekend without the robot.
 | 12 | Demo Run, audio pass, polish | A full Demo Run is reliable |
 
 **Progress against this order** (detail in [README.md](README.md)): steps 1-3 done; step 5
-reinterpreted as one obstacle per bay and done for all nine; step 6 partly — the bays exist
-but `ActiveBayTracker` does not, so only Bay 1 is wired; step 7 partly — an objective HUD with
-a live timer exists, scoring and win/fail screens do not; step 8 done against the mock feed.
-Steps 4, 9, 10, 11 and 12 not started.
+reinterpreted as one obstacle per bay and built for all nine, though only the first **four** are
+in scope; step 6 done for those four — `ActiveBayTracker` is built and the mat follows the
+runner, and the overseer camera exists; step 7 partly — an objective HUD with a live timer
+exists, scoring and win/fail screens do not; step 8 done against the mock feed; step 9 done
+against a protocol-faithful mock, never against real hardware. Steps 4, 10, 11 and 12 not
+started.
 
 **Cut order if time is tight:** spectator camera, scrap tokens, override panels, Teal side objectives, Bays 3 and 6, malfunction variety (keep `earthquake` and `freeze`), L2 effects for the lowest-impact colors. **Never cut** Debug Mode, the HUD, or the Demo Run.
 

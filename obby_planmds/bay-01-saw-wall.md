@@ -213,11 +213,14 @@ unchanged.
 
 The arithmetic that matters: one `SkyArm.reachAndPlace` is **~5.5s of animation**, and
 the job queue **serializes** them (no overlap). A level-2 cell is one arm trip, not two.
-So three placements cost **~17s of a 30s run** before the player has climbed anything.
+So three placements cost **~17s** before the player has climbed anything — about a quarter
+of the 75s run.
 
-30s played too fast once the no-place band went in, because stalling is no longer
-available to buy that time back — hence 60. Retune after the first real teleop run; the
-number is still a placeholder for human fumbling time, which hasn't been measured.
+The history, because each step is a reason not to go back: **30s** played too fast once the
+no-place band went in, since stalling was no longer available to buy that time back → **60s**.
+Then the wall was rebuilt unvaultable at 16 studs, so every crossing has to be earned by
+actually solving the bay → **75s**. Retune after the first real teleop run; the number is
+still a placeholder for human fumbling time, which hasn't been measured.
 
 The wall advances off **measured elapsed time**, not tick count. `task.wait(0.05)` sleeps
 longer than 0.05s, which made a nominal 30s traverse take ~34s before this was fixed.
@@ -236,11 +239,15 @@ opted out of the usual path:
 
 **Consequence:** clearing cells cannot un-solve a switch-mode bay. Without a reset the
 bay stays open for the rest of the session and the wall sits frozen wherever it stopped.
-The **R hotkey** now resets every bay (`state.reset`).
+The **R hotkey** resets every bay, and **F2** resets the whole course and returns you to the
+spawn — see [debug-menu.md](debug-menu.md).
 
-**Known caveat:** obstacles that present "solved" as a one-shot tween (the laser grid
-fading out) do not animate back on reset. Their run loops resume but the visual stays
-cleared. Only the saw bay rebuilds itself properly.
+~~**Known caveat:** obstacles that present "solved" as a one-shot tween (the laser grid
+fading out) do not animate back on reset.~~ **Gone.** A bay is reset by **rebuilding** it now:
+`buildBay` destroys the `Obstacle` folder and re-runs the builder, and every run loop in
+`HazardManager` is `while folder.Parent do`, so destroying the folder terminates all of them
+cleanly. Every bay comes back genuinely fresh, not just this one — the caveat was removed
+rather than documented ([debug-menu.md](debug-menu.md) §3).
 
 ---
 
@@ -333,11 +340,14 @@ gets a *different instance* and proves nothing.
   misnaming a cube. Do not be tempted to add a colour test.
 - **No checkpoint.** Dying respawns at world spawn; you walk back through the bays.
   `GameState` doesn't exist yet.
-- **`ActiveBayTracker` doesn't exist**; `RunControl.activeBay` stands in and the debug menu
-  drives it, so every bay is reachable — see [debug-menu.md](debug-menu.md). Previously only Bay 1 was
-  wired to the arm.
-- **Two players** — not yet decided whether to fold into `ActiveBayTracker` or stay
-  single-runner.
+- ~~**`ActiveBayTracker` doesn't exist**~~ — **built.** `RunControl.activeBay` is still the
+  single answer to "which bay does the mat map to", but the tracker now drives it from the
+  runner's position, and the debug menu drives the same call. Previously only Bay 1 was wired
+  to the arm.
+- ~~**Two players** — not yet decided.~~ **Decided:** player 1 runs the bay, player 2 is the
+  overseer whose only input is the real arm ([robot-link.md](robot-link.md) §1). It did not
+  fold into `ActiveBayTracker` — the tracker follows whoever is furthest along, because nothing
+  assigns the roles yet.
 - **The guard allows everything while the bay is dormant** (`not running`). Harmless
   today — on arming the blades are live, so a pre-placed crate is cut through rather than
   stalling anything — but worth revisiting if the arming rules change.

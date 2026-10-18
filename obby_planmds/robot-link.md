@@ -189,34 +189,43 @@ from `robot/assets/workspace_sheet.json` and scripts Bay 1's exact solution.
 | Held block | reported, and reports `grey` as the protocol says |
 | Jaw arrives at the cell | `tip=(4.0, 4.3, 12.0)` vs `Cell_0_1` anchor `(4, 0, 12)` |
 | Backpressure | gap of 39 frames opened at startup then **stopped growing** (2342 received / 2303 applied) — no queue buildup |
-| Arm vertical extent (`mirror`) | 0 → 38.8 studs against `WallHeight = 28` — too tall |
-| **Arm vertical extent (`gantry`)** | **6.97 → 19.95 studs, clear of the 28-stud ceiling** |
+| Arm vertical extent (`mirror`) | 0 → 38.8 studs against the then-`WallHeight = 28` — too tall; fits under today's 48 |
+| **Arm vertical extent (`gantry`)** | **6.97 → 19.95 studs, clear of the ceiling** |
 | Trolley travel | full **24 studs** of rail (limits 4..28) as the operator works the mat |
-| Bay centring | all nine within 0.5 studs of the bay centre |
+| Bay centring | all nine within 0.5 studs of the bay centre (measured before the scope cut to 4) |
 | Cube in its cell | 6.72 studs in an 8-stud cell, **0.64 clearance per side** |
 | Crate heights after the rescale | `(0,1)` top 6.72, `(3,0)` top 13.44 — Bay 1's gate intact |
-| Source round-trip | all 12 modules byte-identical between disk and Studio |
+| Source round-trip | every module byte-identical between disk and Studio (12 at the time; 20 now) |
 | **Crates from real cubes** | cube appears, is carried, lands on the anchor, stacks, and is swept away |
 | Resting cube on its anchor | `(4.00, 3.36, 12.00)` for `Cell_0_1`, top 6.72 |
 | Stack | second cube at top **13.44**, exactly two cube heights |
 | Carried cube tracks the jaw | mean error **1.30** studs, worst 2.14 (60 studs/s cap) |
 | Reach gating sees live cubes | floor → 0 · one cube → 6.72 · stacked pair → 13.44 |
 | Bay 1's gate at the real scale | floor: A✗ B✗ · one cube: A✓ B✗ · pair: A✓ B✓ |
-| Solve chain, Bay 2 | `VOID - RED x1` → **`VOID - CLEARED`** with 2 crates down |
+| Solve chain, Bay 2 | solved with 2 crates down → **`VOID  -  CLEARED`**. The banner read `VOID - RED x1` then; with colour gone `blockReq` emits `VOID  -  BLOCK` |
 | Latch after the mat sweep | stays `CLEARED` at 0 crates (was re-arming — see §5) |
-| `DebugMode` stands down | prints and returns when `Config.LiveFeed` is on |
+| `DebugMode` stands down | prints and stays quiet while it is not the current source. (It keyed off the old `Config.LiveFeed` then; the switch is `RunControl.feedMode` now, so flipping mode mid-session no longer takes the debug menu out with it) |
 | Console | no errors, no `HazardManager` warnings |
 
 ## 8. Not built yet
 
-- **Shell regeneration** at `WallHeight ≈ 50`, `BayGap ≥ 12`, with the generator extracted into
-  `build/` so `Config` becomes authoritative again (§4). The arm currently pokes through the
-  roof and its base intersects `Shell.EndCapBack`.
-- **`ActiveBayTracker`** — now on the critical path, not optional: it is what makes one mat
-  serve nine bays. `Config.LiveBay` is the hardcoded stand-in and is the shape it should take.
-- **The overseer client** — role assignment, spectator camera, the §8 ghost minimap as player
-  2's instrument panel, and a `CONTROLLER OFFLINE` banner. `BridgeFeed` already tracks and
-  prints that state; nothing surfaces it on screen.
+Three of these have since closed, fully or in part. Kept rather than deleted, because what
+each one was *for* is the argument for the thing that replaced it.
+
+- **Shell regeneration** — **partly done.** `WallHeight` is 48 and `build/fit_shell.lua` fits
+  the shell walls and roof trusses to it, which is the first piece of the generator extracted.
+  Still open: `BayGap` is **6**, so a literal mirror's base would stand inside the previous bay
+  (§5) and still intersects `Shell.EndCapBack`. In the default `"gantry"` style none of this
+  bites — the arm hangs from the rails and clears the roof.
+- ~~**`ActiveBayTracker`**~~ — **built.** It calls `RunControl.setActiveBay` from the runner's
+  position, and the catwalk counts as the bay *ahead* so the operator is placing while player 1
+  approaches. `Config.LiveBay` survives only as the boot value. See
+  [debug-menu.md](debug-menu.md) §5.
+- **The overseer client** — **camera built**, the rest open. `OverseerCam` (**V**) gives player
+  2 a drivable top-down shot of the active bay with x-ray walls, labelled cells and a mini grid
+  — the plan's §8 ghost minimap, in effect ([debug-menu.md](debug-menu.md) §4b). Still open: **role
+  assignment** (nothing decides who is player 2) and a **`CONTROLLER OFFLINE` banner** —
+  `BridgeFeed` tracks and prints that state, but nothing surfaces it on screen.
 - **The sabotage channel** — `Bridge.sendEvent` with §9's telegraph/no-overlap/cooldown rules
   and a gate on `held`, so an effect never fires into player 2's hands mid-carry.
 - **A real Bay 1 solve** — the levers need a client holding E (`ProximityPrompt:InputHoldBegin()`
