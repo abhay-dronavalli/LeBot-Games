@@ -201,16 +201,16 @@ as his files with minimal edits, so a later design change can be ported by diffi
 
 | Repo | Studio | What |
 |---|---|---|
-| `roblox/ServerStorage/Modes/Obby/Module.lua` | `ServerStorage.Modes.Obby.Module` | The mode: Start/Stop/PlayerLeft, run clock, finish, respawn checkpoint, lobby pad. `DisplayName "Robo Obby"`, `WinsToUnlock 0`, `MaxDuration 500` |
+| `roblox/ServerStorage/Modes/Obby/Module.lua` | `ServerStorage.Modes.Obby.Module` | The mode: Start/Stop/PlayerLeft/IsDecided, run clock, finish, respawn checkpoint, lobby pad, runner scale. `DisplayName "Robo Obby"`, `WinsToUnlock 0`, `MaxDuration 500` |
 | `roblox/ServerStorage/Modes/Obby/Server/*.lua` | `ServerStorage.Modes.Obby.Server.*` (ModuleScripts) | His server code, cloned fresh as `Modes.Obby.Runtime` each round: RunControl, BlockSync, SkyArm, ArmMirror, HazardManager, ActiveBayTracker, BridgeFeed, DebugMode (the solo crate source), Status (new: the always-on half of his DebugMenu), DebugMenu and GhostMode (debug only), BayData, CrateDefs, Mapping |
-| `roblox/ReplicatedStorage/Obby/Config.lua` | `ReplicatedStorage.Obby.Config` | His tunables, plus `OriginZ = 1100`, `ArcadeDebug = false`, `ResultSeconds`, `RespawnSettleSeconds`, `Dark*` |
+| `roblox/ReplicatedStorage/Obby/Config.lua` | `ReplicatedStorage.Obby.Config` | His tunables, plus `OriginZ = 1100`, `ArcadeDebug = false`, `RunnerScale = 1`, `ArcadeScale = 1.5`, `ResultSeconds`, `RespawnSettleSeconds`, `Dark*` |
 | (made by Module and the installer) | `ReplicatedStorage.Obby.Remotes` | His 9 remotes (`DebugStatus` is renamed `Status`) |
 | `roblox/ReplicatedStorage/Obby/Views/PlayerView.lua`, `RobotView.lua` | `ReplicatedStorage.Obby.Views.*` | Role views. RobotView is OverseerCam, always on, with the objective panel and run/link status |
 | `roblox/ReplicatedStorage/Obby/Views/Player/*.client.lua` | `...Views.Player.*` (LocalScripts) | ObjectiveHud (plus a run clock), CellEditor (solo only), BackdropFx, CameraPolish, DarkRoom (new) |
 | `roblox/ReplicatedStorage/Obby/Views/Debug/*.client.lua` | `...Views.Debug.*` | DebugMenu (F1/F2) and GhostControl (Q), cloned only when ArcadeDebug is on |
 | `roblox/ReplicatedStorage/Core/Games/Obby.lua` | `ReplicatedStorage.Core.Games.Obby` | Registry entry. `ArcadeActiveGame` makes it active while the Obby bay runs, so the core needed no edit |
 | `roblox/tools/prepare_obby_map.lua` | (command bar, in Place1) | Packs the map |
-| `roblox/tools/install_obby_mode.lua` | (command bar, in the arcade) | Installs every script, module and remote, then checks the map, the cabinet and leftovers |
+| `roblox/tools/install_obby_mode.lua` | (command bar, in the arcade) | **Generated** by `roblox/tools/build_install_obby.py` (re-run it after any change). Embeds every script and module, makes the remotes, keeps and checks the Map, the cabinet and leftover standalone scripts |
 
 How the contract is met:
 
@@ -234,9 +234,14 @@ The rules of a round:
   fires once in list form.
 - **Death:** the runner respawns at the approach to the furthest bay they reached. That bay is rebuilt fresh, unless
   another runner is standing in it.
-- **Lobby pad:** `Map.LobbyPad` is Enabled from Start until the runner enters bay 1, and again once the round is
-  decided. The arcade forfeits the win of anyone who takes a pad (`awardWins` skips `leftEarly`), so it stays off while
-  a finished runner waits for the others.
+- **Runner size:** runners play at 1.0 (the size the course was built for), not the arcade's 1.5×. Start shrinks
+  them, every respawn is shrunk again, and a 0.25 s check catches CharacterScale growing a new character late (it
+  waits for the avatar to load). Stop and PlayerLeft give them 1.5 back. ScaleTo keeps the feet on the floor and
+  restores StarterPlayer's walk speed and jump height.
+- **Lobby pad and IsDecided:** `Map.LobbyPad` is Enabled from Start until the runner enters bay 1, and again from the
+  moment the round is decided. `Mode.IsDecided()` is true once a runner has finished or the clock ran out (or the round
+  is over). The arcade asks it before a pad, so a decided player keeps their result: a finish is a win, anything else
+  a loss. When the last runner leaves, `Finished` fires at once (the arcade only waits a moment).
 
 ### Getting the map in
 
@@ -253,10 +258,12 @@ The rules of a round:
    `*.rbxm` is gitignored, so use `git add -f` if you want it in the repo.
 4. Open `places/LeBot_Arcade.rbxl`. Right click `ServerStorage.Modes.Obby` (make the Folder if it isn't there) →
    **Insert from File…** → `places/ObbyMap.rbxm`. It arrives as `Map`.
-5. Same command bar, now in the arcade:
+5. In the arcade, run `roblox/tools/install_obby_mode.lua` in Edit mode. Either paste it into the command bar or the
+   Studio MCP's execute_luau, or, with the HTTP server from step 1 running, run this in the command bar:
    ```lua
    loadstring(game:GetService("HttpService"):GetAsync("http://127.0.0.1:8771/roblox/tools/install_obby_mode.lua"))()
    ```
+   It's generated: after changing any obby file, run `python roblox/tools/build_install_obby.py` first.
    Fix every warning it prints. It checks for the Map's parts, a SpawnLocation or script in the map, Cell_0_0 at
    Z ≈ 1104, the Obby cabinet in `Workshop.Bays` (Mode `Obby`), the core Bridge, and standalone copies of obby scripts.
    Then save the arcade place.
@@ -264,6 +271,9 @@ The rules of a round:
 
 ### Unsure, check these first
 
+- **1.5× (resolved by running at 1.0).** The notes below are what 1.5× would have done; runners are now 1.0 for the
+  round. What's left to check is the scale switch itself: a runner grown back late by CharacterScale shows 1.5× for up to
+  0.25 s before the check shrinks them.
 - **1.5× saw-wall levers.** The level gate holds: it raycasts 9 studs down from the root and compares the *support's*
   height to the lever's stand level (±3.02). So a lever still can't be thrown one level too low. What changes:
   - One level too low, the hold prompt now shows from about 7.7 studs away instead of 6.6, then gets refused.

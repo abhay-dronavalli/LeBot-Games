@@ -50,9 +50,18 @@ Config.ArcadeDebug = false
 -- + slack). ResultSeconds is how long the win/lose screen shows before the arcade takes everyone back.
 Config.ResultSeconds = 4
 
+-- Character size. The course was built and tuned around 1.0 characters (lever stand levels, the laser
+-- walk's beam heights, the void's gap), and the arcade grows everyone to 1.5x (ServerScriptService.
+-- CharacterScale). So runners are shrunk to RunnerScale for the round -- on Start and on every respawn,
+-- re-checked every 0.25 s because CharacterScale grows a new character only once its appearance has
+-- loaded -- and given ArcadeScale back on Stop and when they take the Back to Lobby pad.
+-- ArcadeScale must match CharacterScale's SCALE.
+Config.RunnerScale = 1
+Config.ArcadeScale = 1.5
+
 -- A dead runner comes back at the approach to the furthest bay they have reached (that bay is rebuilt
--- fresh, like the debug menu's "start run"). Seconds after CharacterAdded before the teleport, so
--- the arcade's CharacterScale (1.5x) has finished resizing the new character.
+-- fresh, like the debug menu's "start run"). Seconds after CharacterAdded before the teleport (the
+-- runner is shrunk back to RunnerScale first).
 Config.RespawnSettleSeconds = 0.6
 
 -- The dark room without touching Lighting (the arcade owns it): HazardManager sets the attribute

@@ -11,15 +11,21 @@
 --                   Feed mode for the round: "live" (the real arm owns the crates) when the core robot link
 --                   is up, else "solo" (the runner places blocks on the on-screen grid). Puts the runners on
 --                   Map.Start facing the course, enables the Back to Lobby pad and starts the run clock.
+--                   Runners play at Config.RunnerScale (1.0, the size the course was built for), not the
+--                   arcade's 1.5x: Start shrinks them, every respawn during the round is shrunk again, and
+--                   Stop / PlayerLeft give them back Config.ArcadeScale (CharacterScale's 1.5).
 --   the run         reach Map.Finish (past bay 4's exit door, bay 4 solved) before the clock
 --                   (Config.FullRunSeconds) runs out: won = true. A runner who dies comes back at the
 --                   approach to the furthest bay they reached, rebuilt fresh. When every runner has finished
 --                   or gone, or the clock hits 0, the result shows for Config.ResultSeconds and
 --                   Finished:Fire({ { player = p, won = ... }, ... }) goes out exactly once, one entry per
---                   player passed to Start (won = false for anyone who left or took the pad).
+--                   player passed to Start (won = true for everyone who reached the finish, false otherwise).
+--   IsDecided()     true once a runner has finished or the clock ran out. The arcade asks before a Back to
+--                   Lobby pad: decided, the player keeps the result this mode reports; not decided, a pad
+--                   is a loss.
 --   PlayerLeft(p)   the arcade took p out through the Back to Lobby pad (Map.LobbyPad, tagged
---                   LobbyTeleporter; Enabled before the runner enters bay 1 and once the round is decided):
---                   p loses; nobody left ends the round.
+--                   LobbyTeleporter; Enabled before the runner enters bay 1, and from the moment the round
+--                   is decided): p keeps a finish, otherwise loses; nobody left ends the round right away.
 --   Stop()          stops every module (their tracked connections and threads), clears the HUDs, destroys
 --                   the map and the Runtime clone. Start works again afterwards.
 -- The robot role has no character, so the arcade never passes it to Start: it gets Views.RobotView (the
@@ -30,6 +36,7 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
+local StarterPlayer = game:GetService("StarterPlayer")
 
 local folder = script.Parent
 local Obby = ReplicatedStorage:WaitForChild("Obby")
@@ -116,6 +123,40 @@ local function inside(part, position)
 	return math.abs(p.X) <= half.X and math.abs(p.Y) <= half.Y and math.abs(p.Z) <= half.Z
 end
 
+-- Scales a runner's character to `scale` (Model:ScaleTo is absolute) and keeps the feet where they were:
+-- ScaleTo scales about the pivot (the root), so growing would sink the legs into the floor and shrinking
+-- would leave them in the air. Walk speed and jump height go back to StarterPlayer's, because ScaleTo
+-- scales those too (the arcade's CharacterScale does the same after its 1.5x). Returns true if it scaled.
+local function setScale(player, scale)
+	local character = player.Character
+	local hum = character and character:FindFirstChildOfClass("Humanoid")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not (hum and hrp) or hum.Health <= 0 or math.abs(character:GetScale() - scale) < 1e-3 then
+		return false
+	end
+	local function standHeight() -- the root's height over what the character stands on
+		if hum.RigType == Enum.HumanoidRigType.R15 then
+			return hum.HipHeight + hrp.Size.Y / 2
+		end
+		return hrp.Size.Y * 1.5 -- R6: legs as tall as the torso
+	end
+	local before = standHeight()
+	character:ScaleTo(scale)
+	character:PivotTo(character:GetPivot() + Vector3.new(0, standHeight() - before, 0))
+	hum.WalkSpeed = StarterPlayer.CharacterWalkSpeed
+	hum.JumpHeight = StarterPlayer.CharacterJumpHeight
+	return true
+end
+
+-- Every runner at the course's size. Run every POLL as well as on Start and respawn, because the arcade's
+-- CharacterScale grows a new character only once its appearance has loaded (up to 5 s after it spawns), so
+-- a respawned runner can be grown back to 1.5x after we placed them.
+local function enforceScale(s)
+	for _, p in ipairs(s.runners) do
+		setScale(p, Config.RunnerScale or 1)
+	end
+end
+
 -- Which bay a course Z belongs to, counting the catwalk after a bay as the next one (ActiveBayTracker's rule).
 local function bayAtCourseZ(z)
 	if z < 0 then
@@ -126,6 +167,11 @@ local function bayAtCourseZ(z)
 		i += 1
 	end
 	return math.clamp(i, 1, Config.NumBays)
+end
+
+-- Decided: a runner has reached the finish, or the round is over (the clock ran out, or everyone left).
+local function decided(s)
+	return s.done or next(s.finishedAt) ~= nil
 end
 
 local function setPad(s, on)
@@ -149,18 +195,28 @@ local function hold(s, player, payload)
 	objective:FireClient(player, payload)
 end
 
+local function fireFinished(s)
+	if session ~= s or s.firedFinished then
+		return
+	end
+	s.firedFinished = true
+	local results = {}
+	for _, p in ipairs(s.list) do
+		-- a finish counts even for a runner who then took the pad: the round was decided (IsDecided)
+		table.insert(results, { player = p, won = s.finishedAt[p] ~= nil })
+	end
+	Mode.Finished:Fire(results)
+end
+
 -- Ends the round once: the result screen, then Finished. why: "finished" / "time" / "everyone left".
-local function endRound(s, why)
+-- immediate: Finished right away, no result screen (nobody is left to see it, and the arcade only waits
+-- a moment for a mode whose last player left).
+local function endRound(s, why, immediate)
 	if s.done then
 		return
 	end
 	s.done = true
-	local anyWon = false
-	for _, p in ipairs(s.list) do
-		if s.finishedAt[p] and not s.left[p] then
-			anyWon = true
-		end
-	end
+	local anyWon = next(s.finishedAt) ~= nil
 	Obby:SetAttribute("RunState", anyWon and "Won" or "Lost")
 	setPad(s, true) -- the round is decided: taking the pad now costs nothing
 	s.hudHeld.all = true
@@ -184,21 +240,17 @@ local function endRound(s, why)
 	end
 	local names = {}
 	for _, p in ipairs(s.list) do
-		table.insert(names, p.Name .. "=" .. ((s.finishedAt[p] and not s.left[p]) and "WIN" or "LOSE"))
+		table.insert(names, p.Name .. "=" .. (s.finishedAt[p] and "WIN" or "LOSE"))
 	end
 	log("round over (%s): %s", why, #names > 0 and table.concat(names, " ") or "no players")
 
+	if immediate then
+		fireFinished(s)
+		return
+	end
 	s.spawn(function()
 		task.wait(Config.ResultSeconds or 4)
-		if session ~= s or s.firedFinished then
-			return
-		end
-		s.firedFinished = true
-		local results = {}
-		for _, p in ipairs(s.list) do
-			table.insert(results, { player = p, won = s.finishedAt[p] ~= nil and not s.left[p] and p.Parent ~= nil })
-		end
-		Mode.Finished:Fire(results)
+		fireFinished(s)
 	end)
 end
 
@@ -209,7 +261,7 @@ local function tick(s)
 	end
 	refreshRunners(s)
 	if #s.runners == 0 then
-		endRound(s, "everyone left")
+		endRound(s, "everyone left", true)
 		return
 	end
 	local RunControl = s.RunControl
@@ -231,6 +283,7 @@ local function tick(s)
 			if not s.finishedAt[p] and s.finish and inside(s.finish, hrp.Position) and lastBay and lastBay.solved then
 				s.finishedAt[p] = math.floor(now - s.startedAt)
 				log("%s reached the finish in %d s", p.Name, s.finishedAt[p])
+				setPad(s, true) -- decided: a pad now keeps the result (IsDecided)
 				hold(s, p, {
 					title = "COURSE CLEAR!",
 					task = #s.runners > 1 and "Waiting for the others..." or "You made it!",
@@ -253,13 +306,14 @@ end
 -- rebuilt fresh so a sealed gate or a half-closed saw wall can't lock them out.
 local function onRespawn(s, player)
 	local respawnedAt = os.clock()
-	task.wait(Config.RespawnSettleSeconds or 0.6) -- the arcade's CharacterScale resizes the new character first
+	task.wait(Config.RespawnSettleSeconds or 0.6) -- let the new character settle (Humanoid, root) first
 	if session ~= s or s.done or s.left[player] or not rootOf(player) then
 		return
 	end
 	if (s.placedAt[player] or -math.huge) >= respawnedAt then
 		return -- a debug command (LoadCharacter + teleport) already placed this character
 	end
+	setScale(player, Config.RunnerScale or 1) -- the arcade grew the new character to 1.5x
 	local RunControl = s.RunControl
 	local i = s.furthest[player] or 1
 	if s.phase == "Ready" then
@@ -365,7 +419,8 @@ function Mode.Start(players)
 		end
 	end
 
-	-- The runners on the start, side by side across it, facing down the course.
+	-- The runners at the course's size, on the start, side by side across it, facing down the course.
+	enforceScale(s)
 	local start = RunControl.startCFrame()
 	for i, p in ipairs(s.runners) do
 		local k = i - 1
@@ -378,9 +433,10 @@ function Mode.Start(players)
 	setPad(s, true)
 
 	s.spawn(function()
-		while session == s and s.alive and not s.done do
+		while session == s and s.alive do
 			task.wait(POLL)
 			if session == s and s.alive then
+				enforceScale(s) -- until Stop, result screen included
 				tick(s)
 			end
 		end
@@ -401,10 +457,18 @@ function Mode.PlayerLeft(player)
 	s.hudHeld[player] = true
 	objective:FireClient(player, nil)
 	refreshRunners(s)
-	log("%s went back to the lobby", player.Name)
+	setScale(player, Config.ArcadeScale or 1.5) -- back to the arcade's size, already in the Workshop
+	log("%s went back to the lobby%s", player.Name, s.finishedAt[player] and " (keeps the finish)" or "")
 	if #s.runners == 0 then
-		endRound(s, "everyone left")
+		endRound(s, "everyone left", true)
 	end
+end
+
+-- The arcade asks this before a Back to Lobby pad: once a runner has finished or the clock ran out, the
+-- player keeps the result reported in Finished (a finish is a win, anything else a loss).
+function Mode.IsDecided()
+	local s = session
+	return s ~= nil and decided(s)
 end
 
 function Mode.Stop()
@@ -436,6 +500,9 @@ function Mode.Stop()
 	for _, p in ipairs(s.list) do
 		if p.Parent then
 			objective:FireClient(p, nil)
+			if not s.left[p] then
+				setScale(p, Config.ArcadeScale or 1.5) -- (pad leavers were given it back in PlayerLeft)
+			end
 		end
 	end
 	for _, r in ipairs(s.robots()) do
