@@ -38,6 +38,14 @@ Config.MalfunctionGraceAfterBayChange = 3
 Config.CrateConfirmDelay = 0.2
 Config.CrateRemoveDelay = 0.4
 
+-- Bay 1 saw wall -- the advancing wall IS this obstacle's clock, so this single number sets
+-- the whole bay's difficulty. Budget check: one reachAndPlace is ~5.5s of arm animation and
+-- the job queue serializes them, so three placements cost ~17s before the player has climbed
+-- anything. At 30 the brake crate is effectively compulsory; nearer 45 it becomes a choice.
+Config.SawWallSeconds = 30
+Config.SawWallBrakeEnabled = true
+Config.SawWallGrindFactor = 0.25 -- speed multiplier while live blades chew through a crate
+
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
 Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area
