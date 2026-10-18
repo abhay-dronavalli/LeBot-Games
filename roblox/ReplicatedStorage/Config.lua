@@ -12,4 +12,13 @@ Config.BayDepth = Config.CellSize * Config.BayRows   -- 24
 Config.BayPitch = Config.BayDepth + Config.BayGap    -- 30, Z distance from one bay's start to the next
 Config.NumBays = 9
 
+-- Transport (Section 7, 12)
+Config.PollRateHz = 3.5
+Config.WebSocketHz = 25
+Config.StaleAfterSeconds = 2
+
+-- Units -- Open Item #1 (Section 20), unconfirmed with the robot teammate
+Config.StudsPerCm = 1
+Config.ArmAngleUnits = "degrees"
+
 return Config
