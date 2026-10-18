@@ -12,8 +12,8 @@ Depends on the core only through `StateStore.blocks` (fields from plan.md: `id, 
 - Cell lookup: block `(x, y)` in cm -> `(row, col)` using `Config.gridOriginCm`, `Config.cellSizeCm`. A block counts as in a cell only if it sits inside the middle 70% of that cell. Anything else is "off grid" and ignored.
 - `Config.flipX = true` mirrors columns (1 <-> 4) and `Config.flipY = true` mirrors rows (A <-> C) in the cell lookup, in case the sheet or the tags turn out reversed at the venue. Both default to false. The boards don't change.
 - Held blocks (`held == true`) are ignored. Blocks in an ignored zone (`Config.ignoreZones`, default the tray) are ignored. `visible == false` blocks still count (the core keeps tracking a hidden marker at its last pose).
-- A block sitting on the table (`level == 0`) is the block that cell holds. Stack rule: a block with `level > 0` whose `(x, y)` falls in a cell counts as an extra block for that cell, so a stack can never clear a round.
-- Doubles rule: if 2+ counted `level == 0` blocks land in the same cell, that cell can never count as correct. `Target.compare` reports it in a `doubled` list and returns `clear = false`.
+- Stacks: a cell holds a tower, read from each block's `level` field (0 = on the table, 1 = on top of a level 0 block). `Grid.liveGridFrom` builds every cell as a list indexed by level, `{ [0] = {"red"}, [1] = {"teal"} }`. The core owns stack logic, so a block is placed at the level it reports: a level 1 block with nothing under it still sits at level 1. Towers are at most `Config.maxStackGlobal` = 2 high; any block at a level at or above that always counts as extra.
+- Doubles rule: if 2+ counted blocks land in the same cell at the same level, that level can never count as correct. `Target.compare` reports the cell in a `doubled` list and returns `clear = false`.
 - Roblox boards: row A is the edge where the arm twin sits, and column 1 is on the same side as tag 0. Seen from the row A edge, a board is the table as the operator sees it, not a mirror image.
 
 ## 2. Colors
@@ -32,17 +32,18 @@ Lobby -> enter Pattern cabinet -> MODE SELECT -> ROUND 1 -> INTERMISSION -> ROUN
 - Back button to the lobby: later, not v1.
 
 ### Round
-- Target: `Config.blocksPerRound[round]` random cells (default 3, 4, 5), random colors from `Config.colors`. No two targets on the same cell. Colors can repeat.
+- Target: `Config.blocksPerRound[round]` blocks in total (default 3, 4, 5), random colors from `Config.colors`, arranged in towers no taller than `Config.maxStackByRound[round]` (default 1, 2, 2: round 1 is flat, rounds 2 and 3 may stack 2 high). A target cell is a list of colors bottom to top, e.g. `B2 = {"red", "teal"}`. `Target.generate(n, maxHeight)` places blocks one at a time: after the first, each block goes on top of a target tower that still has room with probability `Config.stackChance` (default 0.5), otherwise on a fresh cell, so at most 12 cells are used. Colors can repeat, within a tower too.
 - Round timer: `Config.roundSeconds[round]` (default 60, 75, 90).
 - Target board shows the pattern. Live board shows the real table from `StateStore.blocks`, redrawn every 0.2 s.
-- Clear condition: every target cell holds a block of the right color, no extra blocks on the grid, no block on a vanished cell. Must hold true for 1 s continuously (vision jitter).
+- Compare runs per cell, per level: `missing` (a target level with no block), `wrong` (wrong color at that level, including a tower built in the wrong order), `extra` (a block at a level the target doesn't have, on a non-target cell, or at or above `maxStackGlobal`), `doubled` (2+ blocks at one cell and level), `blocked` (any block on a vanished cell).
+- Clear condition: every target tower matches exactly bottom to top, nothing else on the grid, no block on a vanished cell. Must hold true for 1 s continuously (vision jitter).
 - On clear: round score = seconds left. On timeout: round score 0, game continues to the next round.
 
 ### Easy vs Hard
 | | Easy | Hard |
 |---|---|---|
 | Target colors | always shown | shown 5 s, hidden 5 s, repeating for the whole round |
-| Hidden look | n/a | tiles go gray, outlines stay, so cells still show where blocks go |
+| Hidden look | n/a | every target block, at every level, goes gray; outlines stay, so the player still sees where blocks go and how tall each tower is |
 | Event interval | every 45 s | every 30 s |
 
 ### Intermission (after every round)
@@ -69,9 +70,9 @@ Each event shows a 2 s warning banner before it starts, so the player can call i
 
 - Two boards in the world, side by side, 3D parts, not GUI: TargetBoard and LiveBoard. Player walks around them freely.
 - Click anywhere on a board to spin it 90 degrees around its vertical center axis, 0.3 s. The ClickDetector (`SpinClick`) sits on the whole board Model, not just the base, because the tiles cover the base's top. Spins run on the server so everyone sees the same orientation, queue up, and wait while a tremor is on.
-- Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell, made once, recolored or hidden, never created per tick.
-- LiveBoard: 12 cell parts plus a block on each cell with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`.
-- TargetBoard: 12 neutral cell parts plus a block, identical to the LiveBoard's, on each target cell in its target color; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase they turn neutral gray (same block, recolored). Intermission and Results show full colors.
+- Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell and level (12 cells x `maxStackGlobal` levels, named `B2` and `B2_1`), made once, each sitting one block height above the one below, recolored or hidden, never created per tick.
+- LiveBoard: 12 cell parts plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
+- TargetBoard: 12 neutral cell parts plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns neutral gray (same blocks, recolored). Intermission and Results show full colors.
 
 ## 6. Robot twin (v1, parts-built)
 
@@ -119,7 +120,7 @@ return {
   flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
   flipY = false,                       -- true mirrors rows (A <-> C)
   cellTolerance = 0.7,                 -- a block counts only inside the middle 70% of a cell
-                                       -- stacked blocks (level > 0) count as extra; 2+ table blocks in a cell = doubled
+  maxStackGlobal = 2,                  -- hard cap on tower height; a block at level >= this always counts as extra
   ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
   boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeCm this is the cm -> stud scale
   twinBaseOffsetCm = 9,                -- arm twin base center, measured from the grid's row A edge toward the operator
@@ -129,7 +130,10 @@ return {
   -- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
   colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
              orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
-  blocksPerRound = { 3, 4, 5 },
+  blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
+  maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
+  stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block
+                                       -- instead of a new cell, when the round's height allows
   roundSeconds = { 60, 75, 90 },
   holdToClear = 1,
   intermissionSeconds = 10,

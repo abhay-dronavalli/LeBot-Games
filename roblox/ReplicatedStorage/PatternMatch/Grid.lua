@@ -73,9 +73,9 @@ function Grid.cellOf(xCm, yCm)
 end
 
 -- StateStore block -> the cell its x,y sits in, or nil if it doesn't count: held, in an ignored zone
--- such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps them
--- apart. visible == false still counts: the core keeps tracking a block at its last pose while its
--- marker is hidden (under a stack, under the arm).
+-- such as the tray, or off grid. Stacked blocks (level > 0) get a cell too; liveGridFrom keeps the
+-- levels apart. visible == false still counts: the core keeps tracking a block at its last pose while
+-- its marker is hidden (under a stack, under the arm).
 function Grid.cellOfBlock(block)
 	if block.held == true or Config.ignoreZones[block.zone] then
 		return nil
@@ -83,9 +83,16 @@ function Grid.cellOfBlock(block)
 	return Grid.cellOf(block.x, block.y)
 end
 
--- StateStore blocks -> live grid: { [cell] = { colors = {...}, stacked = n } } for every cell holding
--- at least one counted block. colors lists the blocks sitting on the table (level 0), so it has 2+
--- entries when blocks share a cell. stacked counts blocks on top of others (level > 0).
+-- A block's stack level as a whole number >= 0 (0 = on the table). The core owns stack logic, so the
+-- reported level is taken as is: a level 1 block with nothing under it still sits at level 1.
+function Grid.levelOf(block)
+	return math.max(0, math.floor(tonumber(block.level) or 0))
+end
+
+-- StateStore blocks -> live grid: { [cell] = { [level] = { color, ... } } } for every cell holding at
+-- least one counted block. Each cell is a table indexed by level (0 = table, 1 = on top of a level 0
+-- block, ...) holding the colors of the blocks reported at that level: 2+ colors means a doubled level.
+-- Levels at or above Config.maxStackGlobal are kept too, so Target.compare can report them as extra.
 function Grid.liveGridFrom(blocks)
 	local liveGrid = {}
 	for _, block in ipairs(blocks) do
@@ -93,17 +100,29 @@ function Grid.liveGridFrom(blocks)
 		if cell then
 			local entry = liveGrid[cell]
 			if not entry then
-				entry = { colors = {}, stacked = 0 }
+				entry = {}
 				liveGrid[cell] = entry
 			end
-			if (block.level or 0) > 0 then
-				entry.stacked += 1
-			else
-				table.insert(entry.colors, block.color)
+			local level = Grid.levelOf(block)
+			local colors = entry[level]
+			if not colors then
+				colors = {}
+				entry[level] = colors
 			end
+			table.insert(colors, block.color)
 		end
 	end
 	return liveGrid
+end
+
+-- The levels present in a live grid cell entry, lowest first. {} for nil.
+function Grid.levelsOf(entry)
+	local levels = {}
+	for level in pairs(entry or {}) do
+		table.insert(levels, level)
+	end
+	table.sort(levels)
+	return levels
 end
 
 -- Cell -> world position at the center of that cell on top of the board's Base part.

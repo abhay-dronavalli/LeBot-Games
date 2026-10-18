@@ -46,12 +46,27 @@ local function block(cell, color, over)
 	for k, v in pairs(over or {}) do b[k] = v end
 	return b
 end
--- { A1 = "red", ... } -> live grid with one table block at each cell center
-local function live(map, more)
+-- { A1 = "red", B2 = {"red", "teal"}, ... } -> blocks at each cell center; a list is a tower bottom to top,
+-- with level and z set the way the core reports them.
+local function blocksFor(map)
 	local blocks = {}
-	for cell, color in pairs(map) do table.insert(blocks, block(cell, color)) end
+	for cell, tower in pairs(map) do
+		if type(tower) == "string" then tower = { tower } end
+		for i, color in ipairs(tower) do table.insert(blocks, block(cell, color, { level = i - 1, z = (i - 1) * 3.5 })) end
+	end
+	return blocks
+end
+-- Same map -> live grid, plus any extra blocks in `more`
+local function live(map, more)
+	local blocks = blocksFor(map)
 	for _, b in ipairs(more or {}) do table.insert(blocks, b) end
 	return Grid.liveGridFrom(blocks)
+end
+-- A target with single-color cells, written as { A1 = "red" }, in Target's tower form
+local function towers(map)
+	local t = {}
+	for cell, tower in pairs(map) do t[cell] = type(tower) == "string" and { tower } or tower end
+	return t
 end
 
 table.insert(lines, string.format("Config: origin=(%.3f, %.3f) cm, cell=%.3f cm, tolerance=%.1f, flipX=%s, flipY=%s",
@@ -83,9 +98,10 @@ check("x = 27, past column 4", Grid.cellOf(27, select(2, at(1, 1))), nil)
 check("y = 1.0, before row A", Grid.cellOf(at(1, 1), 1.0), nil)
 check("y = 21, past row C", Grid.cellOf(at(1, 1), 21), nil)
 
-local target = { A1 = "red", B2 = "teal", C3 = "yellow" }
+local flat = { A1 = "red", B2 = "teal", C3 = "yellow" }
+local target = towers(flat)
 table.insert(lines, "-- target used below: A1=red, B2=teal, C3=yellow")
-check("compare exact match .clear", Target.compare(target, live(target), {}).clear, true)
+check("compare exact match .clear", Target.compare(target, live(flat), {}).clear, true)
 
 section("4. compare with one extra block (purple on A4)")
 local r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", A4 = "purple" }), {})
@@ -96,7 +112,7 @@ section("5. compare with a block on a vanished cell (red on vanished B4)")
 r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", B4 = "red" }), { B4 = true })
 check(".clear", r.clear, false); check(".blocked", r.blocked, { "B4" }); check(".extra", r.extra, {})
 check(".missing", r.missing, {}); check(".wrong", r.wrong, {})
-check("same, block removed from B4 .clear", Target.compare(target, live(target), { B4 = true }).clear, true)
+check("same, block removed from B4 .clear", Target.compare(target, live(flat), { B4 = true }).clear, true)
 
 section("6. compare missing / wrong")
 r = Target.compare(target, live({ A1 = "red", B2 = "purple" }), {})
@@ -126,36 +142,100 @@ check("both: edge still off grid", Grid.cellOf(8.255, ay), nil)
 Config.flipX, Config.flipY = false, false
 check("flags off again: A1 -> A1", Grid.cellOf(ax, ay), "A1")
 
-section("9. stack rule: a block with level > 0 counts as extra for its cell")
-local stackOnTarget = live(target, { block("A1", "red", { level = 1, z = 3.5, visible = true }) })
-check("live A1 entry: table colors / stacked", table.concat(stackOnTarget.A1.colors, ",") .. " / " .. stackOnTarget.A1.stacked, "red / 1")
+section("9. live grid levels: a block's level field picks its slot in the cell")
+local stackOnTarget = live(flat, { block("A1", "red", { level = 1, z = 3.5, visible = true }) })
+check("live A1: level 0 / level 1 colors", stackOnTarget.A1[0][1] .. " / " .. stackOnTarget.A1[1][1], "red / red")
+check("levelsOf(A1)", Grid.levelsOf(stackOnTarget.A1), { 0, 1 })
+local floating = live({}, { block("B3", "teal", { level = 1, z = 3.5 }) })
+check("level 1 with nothing at level 0 stays at level 1", tostring(floating.B3[0]) .. " / " .. floating.B3[1][1], "nil / teal")
+check("level 2.7 / -1 / nil read as 2 / 0 / 0", Grid.levelOf({ level = 2.7 }) .. Grid.levelOf({ level = -1 }) .. Grid.levelOf({}), "200")
 r = Target.compare(target, stackOnTarget, {})
-check("red on red A1 .clear", r.clear, false); check(".extra", r.extra, { "A1" })
-check(".wrong", r.wrong, {}); check(".missing", r.missing, {})
-r = Target.compare(target, live(target, { block("A4", "red"), block("A4", "teal", { level = 1 }) }), {})
-check("stack on non-target A4 .extra", r.extra, { "A4" }); check(".doubled (stack is not a double)", r.doubled, {})
+check("red on red A1 (target wants a single) .clear", r.clear, false); check(".extra", r.extra, { "A1" })
+check(".wrong", r.wrong, {}); check(".missing", r.missing, {}); check(".doubled (a stack is not a double)", r.doubled, {})
+check(".problemLevels A1 = level 1 only", tostring(r.problemLevels.A1[0]) .. " " .. tostring(r.problemLevels.A1[1]), "nil true")
+r = Target.compare(target, live(flat, { block("A4", "red"), block("A4", "teal", { level = 1 }) }), {})
+check("stack on non-target A4 .extra", r.extra, { "A4" }); check(".doubled", r.doubled, {})
+check(".problemLevels A4 = both levels", tostring(r.problemLevels.A4[0]) .. " " .. tostring(r.problemLevels.A4[1]), "true true")
+r = Target.compare(target, live(flat, { block("B3", "teal", { level = 1, z = 3.5 }) }), {})
+check("floating level 1 block on non-target B3 .extra", r.extra, { "B3" })
 
-section("10. doubles rule: 2+ table blocks in one cell")
-r = Target.compare(target, live(target, { block("A1", "red", { x = select(1, at(1, 1, 0.3)) }) }), {})
+section("10. doubles rule: 2+ blocks at one cell and level")
+r = Target.compare(target, live(flat, { block("A1", "red", { x = select(1, at(1, 1, 0.3)) }) }), {})
 check("two reds in A1 .clear", r.clear, false); check(".doubled", r.doubled, { "A1" })
 check(".wrong", r.wrong, {}); check(".missing", r.missing, {}); check(".extra", r.extra, {})
-r = Target.compare(target, live(target, { block("B4", "red"), block("B4", "teal") }), {})
+r = Target.compare(target, live(flat, { block("B4", "red"), block("B4", "teal") }), {})
 check("double on non-target B4 .doubled", r.doubled, { "B4" }); check(".extra", r.extra, { "B4" })
 check("describe()", Target.describe(r), "clear=false missing={} wrong={} extra={B4} blocked={} doubled={B4}")
 
-section("11. generate")
+section("11. generate(n, maxHeight): n blocks, towers no taller than maxHeight, never above the global cap")
 local bad = 0
+local tallestSeen = {}
 for _ = 1, 500 do
 	for _, n in ipairs({ 3, 4, 5, 12 }) do
-		local t, count = Target.generate(n), 0
-		for cell, color in pairs(t) do
-			count += 1
-			if not Grid.parseCell(cell) or not Config.colors[color] then bad += 1 end
+		for _, maxHeight in ipairs({ 1, 2, 3 }) do
+			local t = Target.generate(n, maxHeight)
+			local count, tallest = Target.count(t)
+			for cell, tower in pairs(t) do
+				if not Grid.parseCell(cell) or #tower == 0 then bad += 1 end
+				for _, color in ipairs(tower) do
+					if not Config.colors[color] then bad += 1 end
+				end
+			end
+			if count ~= n then bad += 1 end
+			if tallest > math.min(maxHeight, Config.maxStackGlobal) then bad += 1 end
+			tallestSeen[maxHeight] = math.max(tallestSeen[maxHeight] or 0, tallest)
 		end
-		if count ~= n then bad += 1 end
 	end
 end
-check("2000 patterns, problems", bad, 0)
+check("6000 patterns, problems", bad, 0)
+check("tallest tower seen with maxHeight 1 / 2 / 3 (global cap 2)", tallestSeen[1] .. tallestSeen[2] .. tallestSeen[3], "122")
+check("Config: maxStackByRound / maxStackGlobal / stackChance", table.concat(Config.maxStackByRound, ",") .. " " .. Config.maxStackGlobal .. " " .. Config.stackChance, "1,2,2 2 0.5")
+check("same seed, same towers", (function()
+	local a, b = Target.generate(5, 2, Random.new(42)), Target.generate(5, 2, Random.new(42))
+	for cell, tower in pairs(a) do
+		if table.concat(tower, "/") ~= table.concat(b[cell] or {}, "/") then return false end
+	end
+	return Target.count(a) == Target.count(b)
+end)(), true)
+local stacked = 0
+for _ = 1, 200 do
+	local _, tallest = Target.count(Target.generate(4, 2))
+	if tallest == 2 then stacked += 1 end
+end
+check("stackChance 0.5: 200 four-block round 2 targets, some with a tower, some flat", stacked > 20 and stacked < 200, true)
+check("24 blocks at maxHeight 2 fills every cell twice", select(1, Target.count(Target.generate(24, 2))), 24)
+check("13 blocks at maxHeight 1 is refused", pcall(Target.generate, 13, 1), false)
+
+section("11b. compare with towers (target A1=red, B2=red/teal, C3=yellow)")
+local tall = towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" })
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" }), {})
+check("correct 2-tower .clear", r.clear, true)
+r = Target.compare(tall, live({ A1 = "red", B2 = { "teal", "red" }, C3 = "yellow" }), {})
+check("wrong order (teal under red) .clear", r.clear, false); check(".wrong", r.wrong, { "B2" })
+check(".extra / .missing / .doubled", { #r.extra, #r.missing, #r.doubled }, { 0, 0, 0 })
+r = Target.compare(tall, live({ A1 = "red", B2 = "red", C3 = "yellow" }), {})
+check("missing top block .clear", r.clear, false); check(".missing", r.missing, { "B2" }); check(".wrong", r.wrong, {})
+r = Target.compare(tall, live({ A1 = { "red", "red" }, B2 = { "red", "teal" }, C3 = "yellow" }), {})
+check("extra block on top of a correct single .clear", r.clear, false); check(".extra", r.extra, { "A1" })
+check(".problemLevels A1 = level 1", tostring(r.problemLevels.A1[0]) .. " " .. tostring(r.problemLevels.A1[1]), "nil true")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal", "purple" }, C3 = "yellow" }), {})
+check("third block on a 2-tower .extra (level 2 >= global cap)", r.extra, { "B2" }); check(".wrong / .missing", { #r.wrong, #r.missing }, { 0, 0 })
+check(".problemLevels B2 = level 2 only", tostring(r.problemLevels.B2[1]) .. " " .. tostring(r.problemLevels.B2[2]), "nil true")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" },
+	{ block("B2", "teal", { level = 1, z = 3.5, x = select(1, at(2, 2, 0.3)) }) }), {})
+check("doubled level 1 on B2 .doubled", r.doubled, { "B2" }); check(".clear", r.clear, false); check(".extra", r.extra, {})
+check(".problemLevels B2 = level 1 only", tostring(r.problemLevels.B2[0]) .. " " .. tostring(r.problemLevels.B2[1]), "nil true")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow", C4 = { "red", "teal" } }), {})
+check("tower on non-target C4 .extra", r.extra, { "C4" }); check(".clear", r.clear, false)
+check(".problemLevels C4 = both levels", tostring(r.problemLevels.C4[0]) .. " " .. tostring(r.problemLevels.C4[1]), "true true")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "purple" }, C3 = "yellow" }), {})
+check("wrong color on top only .wrong", r.wrong, { "B2" }); check(".missing", r.missing, {})
+r = Target.compare(tall, live({ A1 = "red", C3 = "yellow" }, { block("B2", "teal", { level = 1, z = 3.5 }) }), {})
+check("top block reported with nothing under it: .missing (level 0)", r.missing, { "B2" }); check(".wrong", r.wrong, {}); check(".extra", r.extra, {})
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" }), { B2 = true })
+check("tower on a vanished cell .blocked", r.blocked, { "B2" }); check(".missing (blocked cells skip it)", r.missing, {})
+check(".problemLevels B2 = both levels", tostring(r.problemLevels.B2[0]) .. " " .. tostring(r.problemLevels.B2[1]), "true true")
+check("Target.count(tall)", table.concat({ Target.count(tall) }, ","), "4,2")
 
 section("12. worldPositionOf on an 8 x 1 x 6 base at (0, 5, 0): row A at +Z, column 1 at -X")
 local base = Instance.new("Part")
@@ -228,11 +308,6 @@ if cab then
 	local function steps(n, dt)
 		for _ = 1, n do g:step(dt) end
 	end
-	local function blocksFor(target)
-		local list = {}
-		for cell, color in pairs(target) do table.insert(list, block(cell, color)) end
-		return list
-	end
 
 	local tester = { Name = "Tester", UserId = 1 }
 	-- Easy game from Idle to round 1: mode select runs out, auto-picks Easy, then the confirmation.
@@ -249,8 +324,12 @@ if cab then
 	check("start() while running is ignored", g:start(tester), false)
 	check("debugForceMode=hard skips mode select: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
 	check("round 1 starts in show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
-	local tcell, tcolor = next(g.target)
+	local tcell, ttower = next(g.target)
+	local tcolor = ttower[1]
+	check("round 1 (maxStackByRound 1): 3 blocks, all flat", table.concat({ Target.count(g.target) }, ","), "3,1")
 	local tblock = board.TargetBoard.Blocks[tcell]
+	check("BlockPool: 12 cells x 2 levels of block parts, level 1 one block higher", #board.TargetBoard.Blocks:GetChildren() == 24
+		and math.abs((board.TargetBoard.Blocks[tcell .. "_1"].Position - tblock.Position).Y - tblock.Size.Y) < 0.001, true)
 	local other
 	for _, c in ipairs(cells) do
 		if not g.target[c] then other = board.TargetBoard.Blocks[c] break end
@@ -291,11 +370,39 @@ if cab then
 	check("round 2 state", g.state .. " " .. g.round, "Round 2")
 	check("round 2 reset to show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
 
-	section("17. Easy mode unchanged, LiveBoard problem highlight")
+	section("16b. towers on the boards (round 2 target forced to A1=red, B2=red/teal, C3=yellow, C4=purple)")
+	g.target = towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow", C4 = "purple" })
+	g.targetBoard:show(g.target, false, true)
+	local b2lo, b2hi = board.TargetBoard.Blocks.B2, board.TargetBoard.Blocks.B2_1
+	check("TargetBoard B2: red below, teal on top, both outlined", b2lo.Color == Config.colors.red and b2hi.Color == Config.colors.teal
+		and b2lo.Transparency == 0 and b2hi.Transparency == 0 and b2lo.TargetOutline.Visible and b2hi.TargetOutline.Visible, true)
+	check("TargetBoard A1: single, level 1 hidden and not outlined", board.TargetBoard.Blocks.A1.Transparency == 0
+		and board.TargetBoard.Blocks.A1_1.Transparency == 1 and not board.TargetBoard.Blocks.A1_1.TargetOutline.Visible, true)
+	g.targetBoard:show(g.target, true, true)
+	check("hidden phase: both B2 levels gray, outlines stay", b2lo.Color == TargetBoard.HIDDEN and b2hi.Color == TargetBoard.HIDDEN
+		and b2lo.TargetOutline.Visible and b2hi.TargetOutline.Visible, true)
+	fakeBlocks = blocksFor({ A1 = "red", B2 = { "teal", "red" }, C3 = "yellow", C4 = "purple" }) -- B2 upside down
+	steps(8, 0.25)
+	check("LiveBoard B2: teal below, red on top", board.LiveBoard.Blocks.B2.Color == Config.colors.teal
+		and board.LiveBoard.Blocks.B2_1.Color == Config.colors.red and board.LiveBoard.Blocks.B2_1.Transparency == 0, true)
+	check("wrong order does not clear after 2 s", g.state .. " " .. Target.describe(Target.compare(g.target, g.liveGrid, {})),
+		"Round clear=false missing={} wrong={B2} extra={} blocked={} doubled={}")
+	fakeBlocks = blocksFor(g.target)
+	steps(5, 0.25)
+	check("right order clears", g.state, "Intermission")
+	fakeBlocks = {}
+	g:step(Config.intermissionSeconds)
+	check("round 3 target: 5 blocks, towers up to 2", (function()
+		local n, tallest = Target.count(g.target)
+		return n == 5 and tallest <= 2
+	end)(), true)
+
+	section("17. Easy mode unchanged, LiveBoard problem highlight on the specific block")
 	Config.debugForceMode = nil
 	startEasy()
 	check("debugForceMode=nil: auto-picked Easy, round 1", g.mode .. " " .. g.state, "Easy Round")
-	local ecell, ecolor = next(g.target)
+	local ecell, etower = next(g.target)
+	local ecolor = etower[1]
 	local eblock = board.TargetBoard.Blocks[ecell]
 	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(eblock.TargetOutline.Visible), "nil false")
 	check("easy: target block shown in its color", eblock.Transparency == 0 and eblock.Color == Config.colors[ecolor], true)
@@ -315,20 +422,20 @@ if cab then
 	table.insert(fakeBlocks, block(free[2], "teal", { x = select(1, at(Grid.parseCell(free[2]))) + 1 }))
 	table.insert(fakeBlocks, block(ecell, "purple", { level = 1 }))       -- stack on a correct target cell
 	g:step(0.25)
-	local lit = {}
-	for _, c in ipairs(cells) do
-		if board.LiveBoard[c].ProblemHighlight.Visible then table.insert(lit, c) end
+	local function litBlocks()
+		local lit = {}
+		for _, p in ipairs(board.LiveBoard.Blocks:GetChildren()) do
+			if p.ProblemHighlight.Visible then table.insert(lit, p.Name) end
+		end
+		table.sort(lit)
+		return lit
 	end
-	local want = { free[1], free[2], ecell }
+	local want = { free[1], free[2], ecell .. "_1" }
 	table.sort(want)
-	check("extra + double + stack cells highlighted", lit, want)
+	check("extra + double (level 0) + stacked block (level 1) outlined, not the correct block under the stack", litBlocks(), want)
 	fakeBlocks = blocksFor(g.target)
 	g:step(0.25)
-	lit = {}
-	for _, c in ipairs(cells) do
-		if board.LiveBoard[c].ProblemHighlight.Visible then table.insert(lit, c) end
-	end
-	check("problems removed -> highlights cleared", lit, {})
+	check("problems removed -> highlights cleared", litBlocks(), {})
 
 	local PatternEvents = require(pm.PatternEvents)
 
@@ -336,7 +443,7 @@ if cab then
 	local rng = Random.new(7)
 	local badPicks, maxPicked = 0, 0
 	for _ = 1, 300 do
-		local tgt = Target.generate(rng:NextInteger(3, 5), rng)
+		local tgt = Target.generate(rng:NextInteger(3, 5), 2, rng)
 		local occupied = {}
 		for _, c in ipairs(cells) do
 			if not tgt[c] and rng:NextNumber() < 0.4 then occupied[c] = "red" end
@@ -354,7 +461,7 @@ if cab then
 	check("never more than 2 cells", maxPicked <= 2, true)
 	local fullBoard = {}
 	for _, c in ipairs(cells) do fullBoard[c] = "red" end
-	check("no empty non-target cell -> nothing picked", PatternEvents.pickVanishCells({ A1 = "red" }, live(fullBoard), {}, 2, rng), {})
+	check("no empty non-target cell -> nothing picked", PatternEvents.pickVanishCells(towers({ A1 = "red" }), live(fullBoard), {}, 2, rng), {})
 	local allButB2 = {}
 	for _, c in ipairs(cells) do allButB2[c] = c ~= "B2" or nil end
 	check("already vanished cells are not picked again", PatternEvents.pickVanishCells({}, {}, allButB2, 2, rng), { "B2" })
@@ -383,7 +490,7 @@ if cab then
 	steps(8, 0.25) -- 6.0 s: target solved, but a block sits on a vanished cell
 	check("solved + block on a vanished cell: still Round", g.state, "Round")
 	check("compare reports it as blocked", Target.compare(g.target, g.liveGrid, g.events.vanished).blocked, { v1 })
-	check("white outline on the blocked cell", board.LiveBoard[v1].ProblemHighlight.Visible, true)
+	check("white outline on the blocked cell's block", board.LiveBoard.Blocks[v1].ProblemHighlight.Visible, true)
 	steps(20, 0.25) -- 11.0 s: the 6 s vanish timer ran out at 10 s
 	check("timer over, block still there: cell stays vanished", board.LiveBoard[v1].Transparency, 1)
 	if v2 then
@@ -508,7 +615,9 @@ if cab then
 			local tile = boardModel[c]
 			local d = tile.Position - Grid.worldPositionOf(c, boardModel)
 			local e = boardModel.Blocks[c].Position - tile.Position
-			if Vector3.new(d.X, 0, d.Z).Magnitude > 0.01 or Vector3.new(e.X, 0, e.Z).Magnitude > 0.01 then bad += 1 end
+			local f = boardModel.Blocks[c .. "_1"].Position - tile.Position
+			if Vector3.new(d.X, 0, d.Z).Magnitude > 0.01 or Vector3.new(e.X, 0, e.Z).Magnitude > 0.01
+				or Vector3.new(f.X, 0, f.Z).Magnitude > 0.01 then bad += 1 end
 		end
 		return bad
 	end
@@ -535,7 +644,7 @@ if cab then
 	check("after 4 spins: cells off", offCells(), 0)
 	liveSpinner:destroy()
 
-	g.targetBoard:show({ A1 = "red", C3 = "teal" }, false, false)
+	g.targetBoard:show(towers({ A1 = "red", C3 = "teal" }), false, false)
 	local shakingNow = true
 	local targetSpinner = BoardSpinner.new(board.TargetBoard, { isShaking = function() return shakingNow end })
 	local tlook0 = board.TargetBoard.Base.CFrame.LookVector

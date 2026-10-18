@@ -7,6 +7,7 @@
 -- on it changed.
 
 local Config = require(script.Parent.Config)
+local Grid = require(script.Parent.Grid)
 local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
 local TargetBoard = require(script.Parent.TargetBoard)
@@ -29,40 +30,30 @@ local function log(fmt, ...)
 	print("[PatternMode] " .. string.format(fmt, ...))
 end
 
--- "A1=red B2=teal+red C3=yellow^1": + joins blocks sharing a cell, ^n counts stacked blocks.
+-- "A1=red B2=teal/red C3=yellow|purple": / joins levels bottom to top, | joins blocks doubled on one
+-- level, and a level with nothing under it shows as "-" (e.g. "A1=-/red" for a level 1 block alone).
 local function describeLive(liveGrid)
 	local parts = {}
 	for cell, entry in pairs(liveGrid) do
-		local text = cell .. "=" .. (#entry.colors > 0 and table.concat(entry.colors, "+") or "?")
-		if entry.stacked > 0 then
-			text ..= "^" .. entry.stacked
+		local levels = Grid.levelsOf(entry)
+		local texts = {}
+		for level = 0, levels[#levels] do
+			table.insert(texts, entry[level] and table.concat(entry[level], "|") or "-")
 		end
-		table.insert(parts, text)
+		table.insert(parts, cell .. "=" .. table.concat(texts, "/"))
 	end
 	table.sort(parts)
 	return #parts > 0 and table.concat(parts, " ") or "(empty)"
 end
 
+-- "A1=red B2=teal/red": / joins a tower's colors bottom to top.
 local function describeTarget(target)
 	local parts = {}
-	for cell, color in pairs(target) do
-		table.insert(parts, cell .. "=" .. color)
+	for cell, tower in pairs(target) do
+		table.insert(parts, cell .. "=" .. table.concat(tower, "/"))
 	end
 	table.sort(parts)
 	return table.concat(parts, " ")
-end
-
--- Cells the LiveBoard should outline: extra blocks (stacks included), doubles, and blocks on vanished cells.
-local function problemCells(result)
-	local cells = table.clone(result.extra)
-	for _, list in ipairs({ result.doubled, result.blocked }) do
-		for _, cell in ipairs(list) do
-			if not table.find(cells, cell) then
-				table.insert(cells, cell)
-			end
-		end
-	end
-	return cells
 end
 
 -- Hard mode reveal cycle: seconds since round start -> "show" or "hide", and seconds left in that
@@ -111,7 +102,7 @@ states.ModeSelect = {
 
 states.Round = {
 	enter = function(self)
-		self.target = Target.generate(Config.blocksPerRound[self.round])
+		self.target = Target.generate(Config.blocksPerRound[self.round], Config.maxStackByRound[self.round] or 1)
 		self:startTimer(Config.roundSeconds[self.round])
 		self.roundElapsed = 0
 		self.clearFor = 0
@@ -138,7 +129,7 @@ states.Round = {
 		end
 
 		local result = Target.compare(self.target, self.liveGrid, self.events.vanished)
-		self.liveBoard:showProblems(problemCells(result))
+		self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and blocked blocks
 		local text = Target.describe(result)
 		if text ~= self.lastCompare then
 			self.lastCompare = text

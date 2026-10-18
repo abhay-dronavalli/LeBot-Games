@@ -9,6 +9,7 @@ return {
 	flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
 	flipY = false,                       -- true mirrors rows (A <-> C)
 	cellTolerance = 0.7,
+	maxStackGlobal = 2,                  -- hard cap on tower height; a block at level >= this always counts as extra
 	ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
 	boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeCm this is the cm -> stud scale
 	twinBaseOffsetCm = 9,                -- arm twin base center, measured from the grid's row A edge toward the operator
@@ -18,7 +19,10 @@ return {
 	-- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
 	colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
 	           orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
-	blocksPerRound = { 3, 4, 5 },
+	blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
+	maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
+	stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block
+	                                     -- instead of a new cell, when the round's height allows
 	roundSeconds = { 60, 75, 90 },
 	holdToClear = 1,
 	intermissionSeconds = 10,

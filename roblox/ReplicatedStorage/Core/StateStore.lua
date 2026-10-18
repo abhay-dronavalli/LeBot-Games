@@ -8,8 +8,9 @@
 --   StateStore.update(msg) -> store a new state message (what the Bridge calls) and fire changed
 --   StateStore.changed     -> signal (BindableEvent.Event) fired after every state update
 -- With PatternMatch.Config.useFakeState = true, the server changes one thing every 2 s: it moves, adds
--- or removes a block on the 4x3 grid, or adds/drops one off-grid block (in the tray, or on a cell
--- boundary) or one held block so the game can be seen ignoring those.
+-- or removes a block on the 4x3 grid, stacks a block on top of a grid block (level = tower height so far,
+-- up to Config.maxStackGlobal), or adds/drops one off-grid block (in the tray, or on a cell boundary) or
+-- one held block so the game can be seen ignoring those. Moves and removes take a cell's top block.
 -- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
 -- no random changes during a round or intermission, the exact target appears 5 s into each round, and
 -- the grid empties 3 s into each intermission. These two delays ignore debugFastTimers.
@@ -46,6 +47,7 @@ local FAKE_INTERVAL = 2
 local FAKE_JITTER_CM = 0.5
 local FAKE_MAX_GRID_BLOCKS = 8
 local FAKE_HELD_Z_CM = 8
+local FAKE_BLOCK_CM = 3.5 -- block height: a level n block reports z = n * this (plan.md release rule)
 
 local rng = Random.new()
 local nextId = 10 -- block ids are ArUco marker ids, 10 and up
@@ -71,13 +73,15 @@ local function randomColor()
 end
 
 -- A held block sits at the gripper tip with its marker covered, like the real world model reports it.
-local function newBlock(x, y, tag, color)
+-- level (default 0) is the block's stack level; z follows it.
+local function newBlock(x, y, tag, color, level)
 	local held = tag == "held"
+	level = level or 0
 	local block = {
 		id = nextId,
 		color = color or randomColor(),
-		x = x, y = y, z = held and FAKE_HELD_Z_CM or 0, yaw = rng:NextInteger(0, 89),
-		level = 0, held = held, visible = not held, zone = "play",
+		x = x, y = y, z = held and FAKE_HELD_Z_CM or level * FAKE_BLOCK_CM, yaw = rng:NextInteger(0, 89),
+		level = level, held = held, visible = not held, zone = "play",
 	}
 	nextId += 1
 	fakeCell[block.id] = tag
@@ -90,7 +94,7 @@ end
 
 local function fakeStep()
 	local blocks = table.clone(state.blocks)
-	local onGrid, offGrid, held, used = {}, nil, nil, {}
+	local onGrid, offGrid, held, towers = 0, nil, nil, {} -- towers: cell -> index of its top block, and height
 	for i, block in ipairs(blocks) do
 		local tag = fakeCell[block.id]
 		if tag == "offgrid" then
@@ -98,23 +102,39 @@ local function fakeStep()
 		elseif tag == "held" then
 			held = i
 		else
-			table.insert(onGrid, i)
-			used[tag] = true
+			onGrid += 1
+			local tower = towers[tag]
+			if not tower then
+				tower = { top = i, height = 0 }
+				towers[tag] = tower
+			end
+			tower.height += 1
+			if (block.level or 0) >= (blocks[tower.top].level or 0) then
+				tower.top = i
+			end
 		end
 	end
-	local free = {}
+	local free, cells, stackable = {}, {}, {}
 	for col = 1, Config.gridCols do
 		for row = 1, Config.gridRows do
-			if not used[cellLabel(col, row)] then
+			local cell = cellLabel(col, row)
+			local tower = towers[cell]
+			if not tower then
 				table.insert(free, { col, row })
+			else
+				table.insert(cells, cell)
+				if tower.height < Config.maxStackGlobal then
+					table.insert(stackable, cell)
+				end
 			end
 		end
 	end
 
 	local choices = { "offgrid", "held" }
-	if #free > 0 and #onGrid < FAKE_MAX_GRID_BLOCKS then table.insert(choices, "add"); table.insert(choices, "add") end
-	if #onGrid > 0 and #free > 0 then table.insert(choices, "move"); table.insert(choices, "move") end
-	if #onGrid > 0 then table.insert(choices, "remove") end
+	if #free > 0 and onGrid < FAKE_MAX_GRID_BLOCKS then table.insert(choices, "add"); table.insert(choices, "add") end
+	if #stackable > 0 and onGrid < FAKE_MAX_GRID_BLOCKS then table.insert(choices, "stack") end
+	if #cells > 0 and #free > 0 then table.insert(choices, "move"); table.insert(choices, "move") end
+	if #cells > 0 then table.insert(choices, "remove") end
 	local action = pick(choices)
 
 	local msg
@@ -129,16 +149,23 @@ local function fakeStep()
 			table.insert(blocks, block)
 			msg = string.format("add %s %s at %s", block.id, block.color, cell)
 		else
-			local i = pick(onGrid)
+			local i = towers[pick(cells)].top
 			local block = table.clone(blocks[i])
-			msg = string.format("move %s %s %s -> %s", block.id, block.color, fakeCell[block.id], cell)
-			block.x, block.y = x, y
+			msg = string.format("move %s %s %s (level %d) -> %s", block.id, block.color, fakeCell[block.id], block.level, cell)
+			block.x, block.y, block.z, block.level = x, y, 0, 0
 			fakeCell[block.id] = cell
 			blocks[i] = block
 		end
+	elseif action == "stack" then
+		local cell = pick(stackable)
+		local tower = towers[cell]
+		local under = blocks[tower.top]
+		local block = newBlock(under.x, under.y, cell, nil, tower.height)
+		table.insert(blocks, block)
+		msg = string.format("stack %s %s on %s at level %d", block.id, block.color, cell, block.level)
 	elseif action == "remove" then
-		local block = table.remove(blocks, pick(onGrid))
-		msg = string.format("remove %s %s from %s", block.id, block.color, fakeCell[block.id])
+		local block = table.remove(blocks, towers[pick(cells)].top)
+		msg = string.format("remove %s %s from %s (level %d)", block.id, block.color, fakeCell[block.id], block.level)
 		fakeCell[block.id] = nil
 	elseif action == "offgrid" and offGrid then
 		local block = table.remove(blocks, offGrid)
@@ -194,16 +221,19 @@ local function fakeArm(t)
 	}
 end
 
--- Blocks at the target's cells (centers plus jitter) in the target's colors.
+-- Blocks at the target's cells (centers plus jitter) in the target's colors: one block per tower level,
+-- bottom to top, with matching level values.
 local function solvedBlocks(target)
 	table.clear(fakeCell)
 	local blocks = {}
-	for cell, color in pairs(target) do
+	for cell, tower in pairs(target) do
 		local row, col = string.byte(cell) - 64, tonumber(string.sub(cell, 2))
 		local cx, cy = cellCenterCm(col, row)
 		local x = cx + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
 		local y = cy + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
-		table.insert(blocks, newBlock(x, y, cell, color))
+		for i, color in ipairs(tower) do
+			table.insert(blocks, newBlock(x, y, cell, color, i - 1))
+		end
 	end
 	return blocks
 end
@@ -246,8 +276,9 @@ end
 
 -- Testing hook, server only: ReplicatedStorage.Core.StateStore.Debug:Fire(command) with
 --   { op = "pause", on = true | false }        stop or resume the random changes
---   { op = "add", cell = "B2", color = "red" } add a block at that cell's center
---   { op = "remove", cell = "B2" }             remove the fake blocks on that cell
+--   { op = "add", cell = "B2", color = "red", level = 1 } add a block at that cell's center, at the given
+--                                              stack level (default 0, the table)
+--   { op = "remove", cell = "B2" }             remove the fake blocks on that cell, every level
 --   { op = "solve" }                           replace every block with the current round's target
 --   { op = "arm", angles = { shoulder_pan = 0, ... } }  hold the fake arm at exact joint angles (degrees,
 --                                              gripper 0..100); angles = nil goes back to the sine waves
@@ -260,7 +291,7 @@ local function debugCommand(cmd)
 		local row, col = string.byte(cmd.cell) - 64, tonumber(string.sub(cmd.cell, 2))
 		local x, y = cellCenterCm(col, row)
 		local blocks = table.clone(state.blocks)
-		table.insert(blocks, newBlock(x, y, cmd.cell, cmd.color))
+		table.insert(blocks, newBlock(x, y, cmd.cell, cmd.color, cmd.level))
 		publish(blocks)
 	elseif cmd.op == "remove" then
 		local blocks = {}
@@ -275,7 +306,8 @@ local function debugCommand(cmd)
 	elseif cmd.op == "solve" and currentTarget then
 		publish(solvedBlocks(currentTarget))
 	end
-	print(string.format("[StateStore fake] debug %s %s %s", cmd.op, cmd.cell or "", cmd.color or tostring(cmd.on or "")))
+	print(string.format("[StateStore fake] debug %s %s %s%s", cmd.op, cmd.cell or "", cmd.color or tostring(cmd.on or ""),
+		cmd.level and (" level " .. cmd.level) or ""))
 end
 
 if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
