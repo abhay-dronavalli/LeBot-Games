@@ -32,9 +32,18 @@ screenGui.Name = "DebugCellEditor"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
+-- This grid IS the operator in solo mode, so it is only on screen when it is actually the
+-- crate source. In live the real arm owns the cells, and a clickable grid that silently does
+-- nothing is worse than no grid at all.
+local DebugStatus = Remotes:WaitForChild("DebugStatus")
+screenGui.Enabled = false
+DebugStatus.OnClientEvent:Connect(function(status)
+	screenGui.Enabled = (status.feedMode == "solo")
+end)
+
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(0, 280, 0, 24)
-title.Position = UDim2.new(0, 20, 0, 20)
+title.Position = UDim2.new(0, 16, 0, 462)
 title.BackgroundTransparency = 0.3
 title.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -46,7 +55,7 @@ title.Parent = screenGui
 -- the grid reads as a map of the bay ahead of you, so say which end is which
 local farLabel = Instance.new("TextLabel")
 farLabel.Size = UDim2.new(0, 260, 0, 16)
-farLabel.Position = UDim2.new(0, 20, 0, 46)
+farLabel.Position = UDim2.new(0, 16, 0, 488)
 farLabel.BackgroundTransparency = 1
 farLabel.TextColor3 = Color3.fromRGB(150, 150, 165)
 farLabel.Font = Enum.Font.SourceSansBold
@@ -56,13 +65,13 @@ farLabel.Parent = screenGui
 
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 260, 0, 200)
-frame.Position = UDim2.new(0, 20, 0, 64)
+frame.Position = UDim2.new(0, 16, 0, 506)
 frame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 frame.BackgroundTransparency = 0.2
 frame.Parent = screenGui
 
 local nearLabel = farLabel:Clone()
-nearLabel.Position = UDim2.new(0, 20, 0, 266)
+nearLabel.Position = UDim2.new(0, 16, 0, 708)
 nearLabel.Text = "v ENTRANCE (where you came in)"
 nearLabel.Parent = screenGui
 

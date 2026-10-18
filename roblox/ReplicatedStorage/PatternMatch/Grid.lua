@@ -119,9 +119,16 @@ function Grid.isStale(block)
 	return block.visible == false and (tonumber(block.age) or 0) > Config.staleBlockSeconds
 end
 
+-- The bridge's vision board names the printed cell each block sits in (block.cell, PROTOCOL.md); that is
+-- the authoritative position and is used as is. Blocks without one (older producers, the fake generator)
+-- are looked up from x, y.
 function Grid.cellOfBlock(block)
 	if block.held == true or Grid.isStale(block) or Config.ignoreZones[block.zone] then
 		return nil
+	end
+	if type(block.cell) == "string" then
+		local row, col = Grid.parseCell(block.cell)
+		return row and Grid.cellName(row, col) or nil
 	end
 	return Grid.cellOf(block.x, block.y)
 end

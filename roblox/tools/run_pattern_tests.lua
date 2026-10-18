@@ -147,6 +147,9 @@ check("zone=\"tray\"", Grid.cellOfBlock(block("B2", "red", { zone = "tray" })), 
 check("zone=false (not tray)", Grid.cellOfBlock(block("B2", "red", { zone = false })), "B2")
 check("held=true, z=80", Grid.cellOfBlock(block("B2", "red", { held = true, z = 80, visible = true })), nil)
 check("level=1 gets its cell (stack rule decides)", Grid.cellOfBlock(block("B2", "red", { level = 1, z = 48 })), "B2")
+check("block.cell (the vision board's printed cell) wins over x, y", Grid.cellOfBlock(block("B2", "red", { cell = "C4" })), "C4")
+check("block.cell that isn't a grid cell (\"D9\") -> nil", Grid.cellOfBlock(block("B2", "red", { cell = "D9" })), nil)
+check("no held / visible fields at all (the new protocol): counts", Grid.cellOfBlock({ id = 99, color = "red", cell = "A3", x = 0, y = 0, level = 0 }), "A3")
 check("just past the column 2/3 line counts for column 3 (cellTolerance 1.0)", Grid.cellOfBlock(block("B2", "red", { x = O.X + 2 * S + 0.1 })), "B3")
 
 section("8. flipX / flipY (A1 center on the table)")
@@ -319,6 +322,20 @@ check("wrong color on top only .wrong", r.wrong, { "B2" }); check(".missing", r.
 r = Target.compare(tall, live({ A1 = "red", C3 = "yellow" }, { block("B2", "teal", { level = 1, z = 3.5 }) }), {})
 check("top block reported with nothing under it: .missing (level 0)", r.missing, { "B2" }); check(".wrong", r.wrong, {}); check(".extra", r.extra, {})
 check("Target.count(tall)", table.concat({ Target.count(tall) }, ","), "4,2")
+
+section("11c. grey: a stack's lower cube the camera can't see (PROTOCOL.md) matches any colour")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "grey", "teal" }, C3 = "yellow" }), {})
+check("grey under teal on B2 (target red/teal): clear", Target.describe(r), "clear=true missing={} wrong={} extra={} doubled={}")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "grey", "purple" }, C3 = "yellow" }), {})
+check("grey under the wrong top colour: only the top is wrong", r.wrong, { "B2" })
+r = Target.compare(tall, live({ A1 = "grey", B2 = { "red", "teal" }, C3 = "yellow" }), {})
+check("grey on its own (nothing on top) is a misread: wrong, outlined", table.concat(r.wrong, ",") .. " " .. tostring(r.problemLevels.A1 and r.problemLevels.A1[0]), "A1 true")
+r = Target.compare(tall, live({ A1 = { "grey", "teal" }, B2 = { "red", "teal" }, C3 = "yellow" }), {})
+check("grey under a block where the target is flat: the bottom passes, the top is extra", Target.describe(r), "clear=false missing={} wrong={} extra={A1} doubled={}")
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow", C4 = { "grey", "red" } }), {})
+check("a grey-bottom stack on a non-target cell: extra", r.extra, { "C4" })
+r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "grey" }, C3 = "yellow" }), {})
+check("grey at level 1 (a top cube) is a misread", r.wrong, { "B2" })
 
 section("12. worldPositionOf on an 8 x 1 x 6 base at (0, 5, 0): row A at +Z, column 1 at +X")
 local base = Instance.new("Part")
@@ -1263,16 +1280,23 @@ do
 	check("source / status before any hello", Store.source() .. " " .. Store.status(), "pending offline")
 	check("sendEvent without the bridge: Roblox side only", select(2, Store.sendEvent("earthquake", 0.5, 4)), "no robot bridge (pending)")
 	local function ls(...) return Store.linkStatus(...) end
+	-- linkStatus(helloSource, sinceFrame, armAge, boardState)
 	check("badge: mock -> MOCK; teleop, follower, auto, a new name or none -> ROBOT LIVE",
-		table.concat({ ls("mock", 0.1, 0.1, 0.03), ls("teleop", 0.1, 0.1, 0.03), ls("follower", 0.1, 0.1, 0.03),
-			ls("auto", 0.1, 0.1, 0.03), ls("crane2000", 0.1, 0.1, 0.03), ls(nil, 0.1, 0.1, 0.03) }, " "),
+		table.concat({ ls("mock", 0.1, 0.03), ls("teleop", 0.1, 0.03), ls("follower", 0.1, 0.03),
+			ls("auto", 0.1, 0.03), ls("crane2000", 0.1, 0.03), ls(nil, 0.1, 0.03) }, " "),
 		"mock live live live live live")
-	check("null ages: blocks_age or arm_age nil -> offline (both, and the first frame not in yet)",
-		table.concat({ ls("teleop", 0.1, nil, 0.03), ls("teleop", 0.1, 0.1, nil), ls("mock", 0.1, nil, nil), ls("mock", nil, 0.1, 0.03) }, " "),
-		"offline offline offline offline")
-	check("stale: no frame for 1.5 s, or blocks_age 1.5 -> offline; ages as strings still read",
-		table.concat({ ls("mock", 1.5, 0.1, 0.03), ls("mock", 0.1, 1.5, 0.03), ls("mock", 0.1, "0.1", "0.03") }, " "),
-		"offline offline mock")
+	check("offline: arm_age null, no frame yet, no frame for 1.5 s, arm_age 1.5; ages as strings still read",
+		table.concat({ ls("teleop", 0.1, nil), ls("mock", nil, 0.03), ls("mock", 1.5, 0.03), ls("mock", 0.1, 1.5), ls("mock", 0.1, "0.03") }, " "),
+		"offline offline offline offline mock")
+	check("board reader: no_credits / no_key / auth -> offline; ok, reading, rate_limit, error, none -> still up",
+		table.concat({ ls("teleop", 0.1, 0.03, "no_credits"), ls("teleop", 0.1, 0.03, "no_key"), ls("teleop", 0.1, 0.03, "auth"),
+			ls("teleop", 0.1, 0.03, "ok"), ls("teleop", 0.1, 0.03, "reading"), ls("teleop", 0.1, 0.03, "rate_limit"),
+			ls("teleop", 0.1, 0.03, "error"), ls("teleop", 0.1, 0.03, nil) }, " "),
+		"offline offline offline live live live live live")
+	check("blocks_age is not a staleness signal: status ignores it (30 s is a healthy board)", (function()
+		local src = core.StateStore.Source
+		return tostring(src:find("state.arm_age, state.board and state.board.state", 1, true) ~= nil)
+	end)(), "true")
 	check("a frame with every part null converts without an error", (function()
 		local ok, st = pcall(Store.fromFrame, { t = "state", seq = 1, ts = 0, arm = nil, arm_age = nil, blocks = nil, blocks_age = nil })
 		return tostring(ok) .. " " .. tostring(ok and st.arm) .. " " .. tostring(ok and #st.blocks)
@@ -1281,11 +1305,14 @@ do
 		arm = { joints = {}, points = { { name = "shoulder_pan", x = 1, y = 2, z = 3 }, { name = "tip", x = 4, y = 5, z = 6 } } },
 		blocks = {
 			{ id = 1, color = "light blue", x = 50, y = 50, z = 0, yaw = 0, level = 0, held = false, visible = true, age = 0 },
-			{ id = 2, color = "grey", x = 60, y = 60, z = 90, yaw = 0, level = 0, held = true, visible = true, age = 0 },
+			{ id = 2, color = "grey", cell = "B2", x = 60, y = 60, z = 0, yaw = 0, level = 0, visible = true, age = 0 },
 			{ id = 3, color = "red", x = 70, y = 70, z = 0, yaw = 0, level = 1, held = false, visible = true, age = 0 },
 		} }
 	local s1 = Store.fromFrame(frame)
-	check("fromFrame: light blue -> skyblue, held grey left alone, red kept", s1.blocks[1].color .. " " .. s1.blocks[2].color .. " " .. s1.blocks[3].color, "skyblue grey red")
+	check("fromFrame: light blue -> skyblue, grey kept (no warning), red kept; cell carried", s1.blocks[1].color .. " " .. s1.blocks[2].color .. " " .. s1.blocks[3].color
+		.. " " .. tostring(s1.blocks[2].cell), "skyblue grey red B2")
+	check("fromFrame: notes.board carried as state.board", tostring(Store.fromFrame({ blocks = {}, notes = { board = { state = "no_credits" } } }).board.state)
+		.. " " .. tostring(Store.fromFrame({ blocks = {} }).board), "no_credits nil")
 	check("fromFrame: arm kept with its points, blocks_age carried", #s1.arm.points .. " " .. s1.blocks_age, "2 0.1")
 	check("fromFrame: an arm with no points is no arm data", Store.fromFrame({ blocks = {}, arm = { joints = {}, points = {} } }).arm, nil)
 	check("fromFrame does not touch the frame it was given", frame.blocks[1].color, "light blue")

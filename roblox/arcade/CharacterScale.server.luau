@@ -4,6 +4,8 @@
 -- Rising Flood is tuned around the default 7.2-stud jump and resets walk speed after each round.
 -- Only the "player" role walks the room (ServerScriptService.CoreRoles): the robot and spectators have no
 -- character, so anyone whose Role attribute is "robot" or "spectator" is never scaled or touched.
+-- A mode can opt a player out while they play it with the player attribute NoScale = true (the obby runs
+-- its runners at 1.0x and sets it on them for the round).
 
 local Players = game:GetService("Players")
 
@@ -11,7 +13,7 @@ local SCALE = 1.5
 local NO_CHARACTER_ROLES = { robot = true, spectator = true }
 
 local function wantsScale(player)
-	return not NO_CHARACTER_ROLES[player:GetAttribute("Role")]
+	return not NO_CHARACTER_ROLES[player:GetAttribute("Role")] and player:GetAttribute("NoScale") ~= true
 end
 
 local function scaleCharacter(player, char)

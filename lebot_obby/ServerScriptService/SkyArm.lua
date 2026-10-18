@@ -12,6 +12,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
+local Mapping = require(ReplicatedStorage:WaitForChild("Mapping"))
 
 local SkyArm = {}
 
@@ -54,11 +55,16 @@ local BASE_H = 1.6
 local YOKE_H = 1.7
 local SHOULDER_OFFSET = MOUNT_Y + BASE_H + YOKE_H
 
--- Crates are 4 studs tall and the gripper takes them from above, so every reach aims at the
--- crate's top face rather than the floor. MIN_TARGET_Y is a hard floor so the jaw tips can
--- never punch through the map even if a caller asks for something lower.
-local CRATE_GRIP_HEIGHT = 4.2
+-- Every reach aims at the crate's TOP face rather than the floor, because the gripper takes it
+-- from above. Cube-derived rather than the old flat 4.2, so it follows the mat scale.
+-- MIN_TARGET_Y is a hard floor so the jaw tips can never punch through the map even if a
+-- caller asks for something lower.
+
 local MIN_TARGET_Y = JAW_LEN * 0.4 + 0.3
+
+local function gripHeight()
+	return Mapping.cubeStuds() + 0.2
+end
 
 -- Trolley travel limits: it rides the two rail beams, so it stays between the outer columns.
 local TROLLEY_MIN_X = Config.CellSize / 2
@@ -162,8 +168,11 @@ local function applyFK(angles)
 
 	-- Parallel jaws: Moving_Jaw rides in, the fixed jaw mirrors it
 	local jawRoot = wristJoint * CFrame.new(0, 0, -WRIST_LEN - BODY_LEN)
-	-- Closed hugs a 4-stud crate rather than clipping through it; open clears it.
-	local openAmount = 2.05 + (1 - angles.gripper / 100) * 0.95
+	-- Closed hugs the cube rather than clipping through it; open clears it. This was a flat
+	-- 2.05, sized by hand for the old 4-stud crate -- against a real 6.72-stud cube the jaws
+	-- closed INSIDE it. Derived from the cube now, so it follows the mat scale automatically.
+	local half = Mapping.cubeStuds() / 2
+	local openAmount = (half + 0.15) + (1 - angles.gripper / 100) * (half * 0.45)
 	jawStatic.CFrame = jawRoot * CFrame.new(openAmount, 0, -JAW_LEN / 2)
 	jawMoving.CFrame = jawRoot * CFrame.new(-openAmount, 0, -JAW_LEN / 2)
 
@@ -249,7 +258,58 @@ applyFK(current)
 local busy = false
 local heldCrate = nil
 
+-- LIVE MODE -- the real arm steers this rig instead of its own job queue.
+--
+-- The gantry crane is the look we want: it hangs from the rails, slides along the roof between
+-- bays, and its links were deliberately kept short because the trolley moves, so it fits the
+-- room. A literal joint-for-joint mirror of the SO-101 does not fit the room -- it is a 43
+-- stud tower. So the real arm drives this rig by its TIP: wherever the real jaw is, this jaw
+-- goes, solved through the IK already here. The pose is not identical, but it reaches where
+-- the real arm reaches, which is what reads as mirroring.
+local liveMode = false
+local liveTrolleyX = nil
+
+function SkyArm.setLiveMode(on)
+	liveMode = on and true or false
+	if not liveMode then
+		liveTrolleyX = nil
+	end
+end
+
+function SkyArm.isLive()
+	return liveMode
+end
+
+-- Point the jaw at a world position. Called every frame off the wire, so nothing here may
+-- yield -- moveTrolleyTo tweens and waits, which is right for a queued job and wrong here.
+function SkyArm.followTip(worldPos, gripperPct)
+	if not liveMode or typeof(worldPos) ~= "Vector3" then
+		return
+	end
+	-- Keep the jaw below its own shoulder. The real arm lifts higher than this room allows,
+	-- and an arm reaching above its mount points straight through the roof.
+	local ceiling = carriageY - SHOULDER_OFFSET - 1
+	local y = math.clamp(worldPos.Y, MIN_TARGET_Y, ceiling)
+	local clamped = Vector3.new(worldPos.X, y, worldPos.Z)
+
+	liveTrolleyX = math.clamp(worldPos.X, TROLLEY_MIN_X, TROLLEY_MAX_X)
+
+	local angles = solveIKWithGripper(clamped, tonumber(gripperPct) or 50)
+	for key, v in pairs(angles) do
+		target[key] = v
+	end
+end
+
 RunService.Heartbeat:Connect(function(dt)
+	-- The trolley tracks the arm instead of being tweened to a stop, so it slides continuously
+	-- as the operator works across the mat.
+	if liveMode and liveTrolleyX then
+		local x = carriage.Position.X
+		local step = math.clamp(dt * 6.0, 0, 1)
+		carriage.CFrame = CFrame.new(x + (liveTrolleyX - x) * step,
+			carriageY, carriage.Position.Z)
+	end
+
 	local alpha = math.clamp(dt * 4.0, 0, 1)
 	for key in pairs(current) do
 		current[key] += (target[key] - current[key]) * alpha
@@ -333,11 +393,25 @@ end
 -- Public API
 ----------------------------------------------------------------
 function SkyArm.setActiveBay(bayModel)
-	local floor = bayModel:FindFirstChild("Floor")
-	if not floor then
+	if not bayModel then
 		return
 	end
-	local goal = CFrame.new(carriage.Position.X, carriageY, floor.Position.Z)
+	-- Centre on the middle ROW ANCHOR, not on the Floor part. An obstacle may legitimately
+	-- cut the floor about -- bay 2's Void removes it over rows 0-1 entirely -- which leaves
+	-- Floor.Position sitting over whatever slab survived, and parked the crane 8 studs off
+	-- the bay. The Cell_c_r anchors are baked and never modified, which is why everything
+	-- else positional already reads from them.
+	local anchors = bayModel:FindFirstChild("CrateAnchors")
+	local mid = anchors and anchors:FindFirstChild("Cell_0_1")
+	local z = mid and mid.Position.Z
+	if not z then
+		local floor = bayModel:FindFirstChild("Floor")
+		z = floor and floor.Position.Z
+	end
+	if not z then
+		return
+	end
+	local goal = CFrame.new(carriage.Position.X, carriageY, z)
 	local tween = TweenService:Create(carriage, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {CFrame = goal})
 	tween:Play()
 end
@@ -379,7 +453,7 @@ function SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, level, onArrive
 		end
 		busy = true
 		local cellPos = worldCFrame.Position
-		local grip = Vector3.new(cellPos.X, cellPos.Y + CRATE_GRIP_HEIGHT, cellPos.Z)
+		local grip = Vector3.new(cellPos.X, cellPos.Y + gripHeight(), cellPos.Z)
 		local hoverPos = grip + Vector3.new(0, 7, 0)
 
 		crateModel.Parent = bayModel
@@ -414,7 +488,7 @@ function SkyArm.reachAndRemove(bayModel, worldCFrame, crateModel, onLifted)
 	enqueue(function()
 		busy = true
 		local cellPos = worldCFrame.Position
-		local grip = Vector3.new(cellPos.X, cellPos.Y + CRATE_GRIP_HEIGHT, cellPos.Z)
+		local grip = Vector3.new(cellPos.X, cellPos.Y + gripHeight(), cellPos.Z)
 		local hoverPos = grip + Vector3.new(0, 7, 0)
 
 		moveTrolleyTo(cellPos.X)
