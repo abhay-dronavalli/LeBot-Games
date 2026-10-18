@@ -93,13 +93,15 @@ Theme.Font = {
 -- hello frame is authoritative for *which* effects exist, so this table is looked up, never
 -- iterated to build a UI: an effect the server grows that is missing here falls back to Power and
 -- its own name, which is ugly but correct, rather than vanishing from the game.
+-- The icon itself lives in Icons.lua, drawn from Frames rather than loaded from an asset id. See
+-- that file for why: a wrong or unmoderated id renders as nothing, which looks exactly like a bug.
 Theme.Effect = {
-	earthquake    = { label = "SHAKE",     color = "Shake",    icon = "rbxassetid://0" },
-	molasses      = { label = "SLOWED",    color = "Slow",     icon = "rbxassetid://0" },
-	mirror        = { label = "INVERTED",  color = "Inverted", icon = "rbxassetid://0" },
-	freeze        = { label = "FROZEN",    color = "Frozen",   icon = "rbxassetid://0" },
-	fog           = { label = "LAGGING",   color = "Lag",      icon = "rbxassetid://0" },
-	butterfingers = { label = "JAW JAMMED", color = "Jammed",  icon = "rbxassetid://0" },
+	earthquake    = { label = "SHAKE",      color = "Shake" },
+	molasses      = { label = "SLOWED",     color = "Slow" },
+	mirror        = { label = "INVERTED",   color = "Inverted" },
+	freeze        = { label = "FROZEN",     color = "Frozen" },
+	fog           = { label = "LAGGING",    color = "Lag" },
+	butterfingers = { label = "JAW JAMMED", color = "Jammed" },
 }
 
 -- The one place an effect name becomes a colour. Unknown names get Power, which is cool - so an
@@ -340,7 +342,8 @@ local NAMES = {
 	"Banner",     -- one-off centre text: countdown, round end, debuff toast
 	"Shake",      -- camera shake for a slam: (strength 0..1, seconds)
 	-- Client -> server
-	"SlotFire",   -- "spend ability slot n"
+	"SlotFire",     -- "spend ability slot n"
+	"SetOperator",  -- "I am the dragon now" / "I am a player again" (the V key)
 }
 
 local Remotes = {}
@@ -372,13 +375,138 @@ return Remotes
 ]]></ProtectedString>
 				</Properties>
 			</Item>
+			<Item class="ModuleScript" referent="RBX6">
+				<Properties>
+					<string name="Name">Icons</string>
+					<ProtectedString name="Source"><![CDATA[--!strict
+-- The power-up icons, drawn from plain Frames rather than loaded from the asset library.
+--
+-- WHY NOT IMAGES. An icon asset has to be uploaded, moderated and referenced by id, and an id that
+-- is wrong or not yet approved renders as nothing - a blank slot that looks exactly like a bug.
+-- Writing a made-up `rbxassetid` is worse still: it either fails silently or shows whatever that
+-- number happens to point at. Frames always render, cost nothing, and take the effect's colour, so
+-- the palette rule holds for free: these are player-side, so they come out cool.
+--
+-- They are deliberately chunky and geometric, which is the same language as the arena's parts.
+-- Each one is built from rotated bars and rounded squares inside a square container, sized in
+-- Scale so one definition serves a 64 px HUD slot and a pickup's billboard alike.
+--
+--   Icons.draw(someFrame, "freeze", Theme.Color.Frozen)
+--
+-- The same icon goes on the pickup in the world and in the slot it fills, which is what makes a
+-- crystal you ran across the arena for recognisable when it lands in your bar.
+
+local Icons = {}
+
+local function bar(parent: Instance, color: Color3, x: number, y: number, w: number, h: number,
+	rot: number, round: number?): Frame
+	local f = Instance.new("Frame")
+	f.BackgroundColor3 = color
+	f.BorderSizePixel = 0
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.Position = UDim2.fromScale(x, y)
+	f.Size = UDim2.fromScale(w, h)
+	f.Rotation = rot
+	f.Parent = parent
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(round or 0.35, 0)
+	c.Parent = f
+	return f
+end
+
+local function dot(parent: Instance, color: Color3, x: number, y: number, d: number): Frame
+	return bar(parent, color, x, y, d, d, 0, 0.5)
+end
+
+-- One builder per effect. Keyed by the protocol's own names.
+local Draw = {}
+
+-- SHAKE: a jolt. Three bars stepping across at alternating angles.
+function Draw.earthquake(p: Instance, c: Color3)
+	bar(p, c, 0.32, 0.30, 0.34, 0.12, 32)
+	bar(p, c, 0.50, 0.50, 0.34, 0.12, -32)
+	bar(p, c, 0.68, 0.70, 0.34, 0.12, 32)
+end
+
+-- SLOWED: a falling drop. A round body with a tapered cap above it.
+function Draw.molasses(p: Instance, c: Color3)
+	dot(p, c, 0.5, 0.62, 0.46)
+	bar(p, c, 0.5, 0.30, 0.26, 0.26, 45, 0.25)
+end
+
+-- INVERTED: two chevrons pointing into each other across a centre line.
+function Draw.mirror(p: Instance, c: Color3)
+	bar(p, c, 0.5, 0.5, 0.07, 0.72, 0, 0.5)
+	bar(p, c, 0.26, 0.38, 0.09, 0.30, 42)
+	bar(p, c, 0.26, 0.62, 0.09, 0.30, -42)
+	bar(p, c, 0.74, 0.38, 0.09, 0.30, -42)
+	bar(p, c, 0.74, 0.62, 0.09, 0.30, 42)
+end
+
+-- FROZEN: a six-pointed star, three bars through the centre.
+function Draw.freeze(p: Instance, c: Color3)
+	bar(p, c, 0.5, 0.5, 0.10, 0.78, 0, 0.5)
+	bar(p, c, 0.5, 0.5, 0.10, 0.78, 60, 0.5)
+	bar(p, c, 0.5, 0.5, 0.10, 0.78, 120, 0.5)
+end
+
+-- LAGGING: banks of fog, three bars of uneven width.
+function Draw.fog(p: Instance, c: Color3)
+	bar(p, c, 0.46, 0.32, 0.62, 0.13, 0, 0.5)
+	bar(p, c, 0.56, 0.52, 0.52, 0.13, 0, 0.5)
+	bar(p, c, 0.44, 0.72, 0.66, 0.13, 0, 0.5)
+end
+
+-- JAW JAMMED: a boulder wedged between two jaw plates.
+function Draw.butterfingers(p: Instance, c: Color3)
+	bar(p, c, 0.5, 0.20, 0.72, 0.12, 0, 0.3)
+	bar(p, c, 0.5, 0.80, 0.72, 0.12, 0, 0.3)
+	bar(p, c, 0.5, 0.50, 0.40, 0.34, 12, 0.3)
+end
+
+-- Anything unthemed, including an effect Python grows that nobody has drawn yet: a plain pickup
+-- diamond. Still legible, still the right colour, obviously generic.
+local function generic(p: Instance, c: Color3)
+	bar(p, c, 0.5, 0.5, 0.44, 0.44, 45, 0.18)
+end
+
+-- Draws `name` into `parent`, clearing whatever was there. Returns the square container it used,
+-- so a caller can hide or re-tint the whole icon in one go.
+function Icons.draw(parent: Instance, name: string, color: Color3): Frame
+	local existing = parent:FindFirstChild("Icon")
+	if existing then
+		existing:Destroy()
+	end
+
+	local box = Instance.new("Frame")
+	box.Name = "Icon"
+	box.BackgroundTransparency = 1
+	box.AnchorPoint = Vector2.new(0.5, 0.5)
+	box.Position = UDim2.fromScale(0.5, 0.44)
+	box.Size = UDim2.fromScale(0.62, 0.62)
+	box.Parent = parent
+
+	-- Square, whatever shape the slot is. Without this an icon in a wide chip shears into a
+	-- rectangle and the snowflake stops being a snowflake.
+	local ratio = Instance.new("UIAspectRatioConstraint")
+	ratio.AspectRatio = 1
+	ratio.Parent = box;
+
+	(Draw[name] or generic)(box, color)
+	return box
+end
+
+return Icons
+]]></ProtectedString>
+				</Properties>
+			</Item>
 		</Item>
 	</Item>
-	<Item class="ServerScriptService" referent="RBX6">
+	<Item class="ServerScriptService" referent="RBX7">
 		<Properties>
 			<string name="Name">ServerScriptService</string>
 		</Properties>
-		<Item class="ModuleScript" referent="RBX7">
+		<Item class="ModuleScript" referent="RBX8">
 			<Properties>
 				<string name="Name">Bridge</string>
 				<ProtectedString name="Source"><![CDATA[--!strict
@@ -551,7 +679,7 @@ return Bridge
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX8">
+		<Item class="ModuleScript" referent="RBX9">
 			<Properties>
 				<string name="Name">Mapping</string>
 				<ProtectedString name="Source"><![CDATA[--!strict
@@ -624,7 +752,7 @@ return Mapping
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="Script" referent="RBX9">
+		<Item class="Script" referent="RBX10">
 			<Properties>
 				<string name="Name">ArenaMain</string>
 				<ProtectedString name="Source"><![CDATA[--!strict
@@ -660,7 +788,7 @@ local Theme = require(ReplicatedStorage.Arena.Theme)
 -- the RemoteEvent instances. Doing it here, at the top of the one script that starts the mode,
 -- means they exist before any player's LocalScript can WaitForChild them. The modules below also
 -- require it, so this is belt and braces - but the ordering is load-bearing and worth stating.
-require(ReplicatedStorage.Arena.Remotes)
+local Remotes = require(ReplicatedStorage.Arena.Remotes)
 
 local modules = script.Parent.Arena
 local Arena = require(modules.Arena)
@@ -825,6 +953,12 @@ Players.PlayerRemoving:Connect(function(player)
 	rounds:playerRemoving(player)
 end)
 
+-- The V key on any client. The camera change is the client's business, but who is the dragon is
+-- the server's: they leave the round, lose their character, and stop counting as a survivor.
+Remotes.SetOperator.OnServerEvent:Connect(function(player, on)
+	rounds:setOperator(player, on == true)
+end)
+
 RunService.Heartbeat:Connect(function(dt)
 	pickups:step(dt)
 	rounds:step(dt)
@@ -845,11 +979,11 @@ return nil
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="Folder" referent="RBX10">
+		<Item class="Folder" referent="RBX11">
 			<Properties>
 				<string name="Name">Arena</string>
 			</Properties>
-			<Item class="ModuleScript" referent="RBX11">
+			<Item class="ModuleScript" referent="RBX12">
 				<Properties>
 					<string name="Name">Arena</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1312,7 +1446,7 @@ return Arena
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX12">
+			<Item class="ModuleScript" referent="RBX13">
 				<Properties>
 					<string name="Name">DragonArm</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -1839,7 +1973,7 @@ return DragonArm
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX13">
+			<Item class="ModuleScript" referent="RBX14">
 				<Properties>
 					<string name="Name">AttackDetect</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -2060,7 +2194,7 @@ return AttackDetect
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX14">
+			<Item class="ModuleScript" referent="RBX15">
 				<Properties>
 					<string name="Name">AttackFx</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -2553,7 +2687,7 @@ return AttackFx
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX15">
+			<Item class="ModuleScript" referent="RBX16">
 				<Properties>
 					<string name="Name">DragonEffects</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -2976,7 +3110,7 @@ return DragonEffects
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX16">
+			<Item class="ModuleScript" referent="RBX17">
 				<Properties>
 					<string name="Name">Pickups</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -3006,6 +3140,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
+local Icons = require(ReplicatedStorage.Arena.Icons)
 
 local Pickups = {}
 Pickups.__index = Pickups
@@ -3144,6 +3279,18 @@ function Pickups.spawnOne(self)
 	pool.CFrame = CFrame.new(at.X, self.arena.floorTopY + 0.06, at.Z) * CFrame.Angles(0, 0, math.pi / 2)
 	pool.Parent = model
 
+	-- The same icon the HUD slot will show, floating over the crystal. This is what makes a pickup
+	-- worth crossing the arena for: you can tell what it is before you commit to the run, and you
+	-- recognise it again when it lands in your bar.
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "Badge"
+	billboard.Size = UDim2.fromOffset(44, 44)
+	billboard.StudsOffsetWorldSpace = Vector3.new(0, 4.5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = 220
+	billboard.Parent = crystal
+	Icons.draw(billboard, name, color)
+
 	local entry = { model = model, crystal = crystal, name = name, baseY = at.Y, taken = false }
 
 	crystal.Touched:Connect(function(hit)
@@ -3247,7 +3394,7 @@ return Pickups
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX17">
+			<Item class="ModuleScript" referent="RBX18">
 				<Properties>
 					<string name="Name">Rounds</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -3305,9 +3452,53 @@ function Rounds.new(arena: any, dragon: any, pickups: any)
 	return self
 end
 
+-- Whoever is on the aerial view IS the dragon, and the dragon is not one of the people it is
+-- trying to kill. So they leave the round entirely: no body on the floor, not counted among the
+-- survivors, and not outlined on anyone's screen.
+--
+-- Without this the dragon was a survivor. The count read one too high all round, and a round where
+-- the dragon killed everybody never ended - it sat there with one "survivor" who was the dragon,
+-- until the timer ran out and awarded them the win.
+function Rounds.setOperator(self, player: Player, on: boolean)
+	if on then
+		if self.excluded[player] then
+			return
+		end
+		local wasAlive = self.alive[player] == true
+		self.excluded[player] = true
+		self.alive[player] = nil
+
+		-- Take the body away. Spectating in this mode is the absence of a character, and a dragon
+		-- standing on its own arena floor is one more thing for players to trip over.
+		local char = player.Character
+		if char then
+			player.Character = nil
+			char:Destroy()
+		end
+
+		-- They may have been the last one standing. Becoming the dragon is not a way to survive.
+		if wasAlive and self.state == "Round" and #self:aliveList() == 0 then
+			self:finish(false)
+		end
+	else
+		if not self.excluded[player] then
+			return
+		end
+		self.excluded[player] = nil
+		if self.state == "Round" or self.state == "Countdown" then
+			self.alive[player] = false    -- spectate until the next round, as a mid-round joiner
+		else
+			self.alive[player] = true
+			task.spawn(function()
+				self:spawnInto(player)
+			end)
+		end
+	end
+end
+
+-- Kept for ArenaMain's OPERATOR_NAME path, which assigns the dragon on join.
 function Rounds.exclude(self, player: Player)
-	self.excluded[player] = true
-	self.alive[player] = nil
+	self:setOperator(player, true)
 end
 
 function Rounds.aliveList(self): { Player }
@@ -3599,7 +3790,7 @@ return Rounds
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX18">
+			<Item class="ModuleScript" referent="RBX19">
 				<Properties>
 					<string name="Name">Sound</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -3719,15 +3910,15 @@ return Sound
 			</Item>
 		</Item>
 	</Item>
-	<Item class="StarterPlayer" referent="RBX19">
+	<Item class="StarterPlayer" referent="RBX20">
 		<Properties>
 			<string name="Name">StarterPlayer</string>
 		</Properties>
-		<Item class="StarterPlayerScripts" referent="RBX20">
+		<Item class="StarterPlayerScripts" referent="RBX21">
 			<Properties>
 				<string name="Name">StarterPlayerScripts</string>
 			</Properties>
-			<Item class="LocalScript" referent="RBX21">
+			<Item class="LocalScript" referent="RBX22">
 				<Properties>
 					<string name="Name">ArenaHud</string>
 					<ProtectedString name="Source"><![CDATA[--!strict
@@ -3757,6 +3948,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage:WaitForChild("Arena"):WaitForChild("Theme"))
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
+local Icons = require(ReplicatedStorage.Arena.Icons)
 
 local C = Theme.Color
 local player = Players.LocalPlayer
@@ -3880,9 +4072,14 @@ local function drawChips(effects: { any })
 		border.Thickness = 2
 		border.Parent = chip
 
+		local icon = Icons.draw(chip, e.name, e.color)
+		icon.AnchorPoint = Vector2.new(0, 0.5)
+		icon.Position = UDim2.new(0, 5, 0.5, 0)
+		icon.Size = UDim2.new(0, 20, 0, 20)
+
 		local label = text(chip, Theme.Font.Label, 13, e.color)
-		label.Position = UDim2.new(0, 6, 0, 0)
-		label.Size = UDim2.new(1, -12, 1, 0)
+		label.Position = UDim2.new(0, 30, 0, 0)
+		label.Size = UDim2.new(1, -36, 1, 0)
 		label.TextXAlignment = Enum.TextXAlignment.Left
 		label.Text = ("%s %ds"):format(e.label, math.ceil(e.remaining))
 	end
@@ -3924,10 +4121,11 @@ for i = 1, ArenaConfig.ABILITY_SLOTS do
 	border.Thickness = 2
 	border.Parent = tile
 
-	local label = text(tile, Theme.Font.Label, 12, C.UiText)
-	label.Position = UDim2.new(0, 2, 1, -18)
-	label.Size = UDim2.new(1, -4, 0, 16)
+	local label = text(tile, Theme.Font.Label, 11, C.UiText)
+	label.Position = UDim2.new(0, 2, 1, -16)
+	label.Size = UDim2.new(1, -4, 0, 14)
 	label.Text = ""
+	label.ZIndex = 3
 
 	local key = text(tile, Theme.Font.Label, 12, C.UiText)
 	key.Position = UDim2.new(0, 4, 0, 2)
@@ -3954,7 +4152,7 @@ for i = 1, ArenaConfig.ABILITY_SLOTS do
 		Remotes.SlotFire:FireServer(i)
 	end)
 
-	slotTiles[i] = { tile = tile, border = border, label = label, cd = cd }
+	slotTiles[i] = { tile = tile, border = border, label = label, cd = cd, icon = nil, held = nil }
 end
 
 local function fitSlots()
@@ -3982,6 +4180,21 @@ end)
 local function drawSlots(slots: { any })
 	for i, tile in slotTiles do
 		local s = slots and slots[i]
+
+		-- Only redraw when the contents actually change. drawSlots runs on every payload, and a
+		-- slot that rebuilds its frames eight times a second visibly flickers.
+		local want = s and s.name or nil
+		if want ~= tile.held then
+			tile.held = want
+			if tile.icon then
+				tile.icon:Destroy()
+				tile.icon = nil
+			end
+			if want then
+				tile.icon = Icons.draw(tile.tile, want, s.color)
+			end
+		end
+
 		if s and s.name then
 			-- A slot holding a picked-up debuff carries that effect's colour.
 			tile.border.Color = s.color
@@ -4388,6 +4601,10 @@ local function setAerial(on: boolean)
 		end
 		aerial = true
 		aerialView = view
+		-- Whoever is up here IS the dragon. The server takes their body away and stops counting
+		-- them as a survivor; without telling it, the dragon stays a player and a round where it
+		-- kills everyone never ends.
+		Remotes.SetOperator:FireServer(true)
 		hint.Text = "V — PLAYER VIEW"
 		bar.Visible = false              -- the ability bar is the players' tool
 		opText.Visible = true
@@ -4423,6 +4640,7 @@ local function setAerial(on: boolean)
 	else
 		aerial = false
 		aerialView = nil
+		Remotes.SetOperator:FireServer(false)
 		hint.Text = "V — AERIAL VIEW"
 		bar.Visible = true
 		opText.Visible = false

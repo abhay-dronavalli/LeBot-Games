@@ -25,6 +25,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
+local Icons = require(ReplicatedStorage.Arena.Icons)
 
 local Pickups = {}
 Pickups.__index = Pickups
@@ -162,6 +163,18 @@ function Pickups.spawnOne(self)
 	pool.Shape = Enum.PartType.Cylinder
 	pool.CFrame = CFrame.new(at.X, self.arena.floorTopY + 0.06, at.Z) * CFrame.Angles(0, 0, math.pi / 2)
 	pool.Parent = model
+
+	-- The same icon the HUD slot will show, floating over the crystal. This is what makes a pickup
+	-- worth crossing the arena for: you can tell what it is before you commit to the run, and you
+	-- recognise it again when it lands in your bar.
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "Badge"
+	billboard.Size = UDim2.fromOffset(44, 44)
+	billboard.StudsOffsetWorldSpace = Vector3.new(0, 4.5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = 220
+	billboard.Parent = crystal
+	Icons.draw(billboard, name, color)
 
 	local entry = { model = model, crystal = crystal, name = name, baseY = at.Y, taken = false }
 

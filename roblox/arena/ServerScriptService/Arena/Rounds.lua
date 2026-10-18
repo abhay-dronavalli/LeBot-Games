@@ -53,9 +53,53 @@ function Rounds.new(arena: any, dragon: any, pickups: any)
 	return self
 end
 
+-- Whoever is on the aerial view IS the dragon, and the dragon is not one of the people it is
+-- trying to kill. So they leave the round entirely: no body on the floor, not counted among the
+-- survivors, and not outlined on anyone's screen.
+--
+-- Without this the dragon was a survivor. The count read one too high all round, and a round where
+-- the dragon killed everybody never ended - it sat there with one "survivor" who was the dragon,
+-- until the timer ran out and awarded them the win.
+function Rounds.setOperator(self, player: Player, on: boolean)
+	if on then
+		if self.excluded[player] then
+			return
+		end
+		local wasAlive = self.alive[player] == true
+		self.excluded[player] = true
+		self.alive[player] = nil
+
+		-- Take the body away. Spectating in this mode is the absence of a character, and a dragon
+		-- standing on its own arena floor is one more thing for players to trip over.
+		local char = player.Character
+		if char then
+			player.Character = nil
+			char:Destroy()
+		end
+
+		-- They may have been the last one standing. Becoming the dragon is not a way to survive.
+		if wasAlive and self.state == "Round" and #self:aliveList() == 0 then
+			self:finish(false)
+		end
+	else
+		if not self.excluded[player] then
+			return
+		end
+		self.excluded[player] = nil
+		if self.state == "Round" or self.state == "Countdown" then
+			self.alive[player] = false    -- spectate until the next round, as a mid-round joiner
+		else
+			self.alive[player] = true
+			task.spawn(function()
+				self:spawnInto(player)
+			end)
+		end
+	end
+end
+
+-- Kept for ArenaMain's OPERATOR_NAME path, which assigns the dragon on join.
 function Rounds.exclude(self, player: Player)
-	self.excluded[player] = true
-	self.alive[player] = nil
+	self:setOperator(player, true)
 end
 
 function Rounds.aliveList(self): { Player }

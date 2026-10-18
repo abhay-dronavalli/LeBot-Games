@@ -31,6 +31,7 @@ TREE = {
         ("ModuleScript", "Theme", "arena/ReplicatedStorage/Arena/Theme.lua"),
         ("ModuleScript", "ArenaConfig", "arena/ReplicatedStorage/Arena/ArenaConfig.lua"),
         ("ModuleScript", "Remotes", "arena/ReplicatedStorage/Arena/Remotes.lua"),
+        ("ModuleScript", "Icons", "arena/ReplicatedStorage/Arena/Icons.lua"),
     ])],
     "ServerScriptService": [
         ("ModuleScript", "Bridge", "Bridge.lua"),

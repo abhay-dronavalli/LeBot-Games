@@ -81,13 +81,15 @@ Theme.Font = {
 -- hello frame is authoritative for *which* effects exist, so this table is looked up, never
 -- iterated to build a UI: an effect the server grows that is missing here falls back to Power and
 -- its own name, which is ugly but correct, rather than vanishing from the game.
+-- The icon itself lives in Icons.lua, drawn from Frames rather than loaded from an asset id. See
+-- that file for why: a wrong or unmoderated id renders as nothing, which looks exactly like a bug.
 Theme.Effect = {
-	earthquake    = { label = "SHAKE",     color = "Shake",    icon = "rbxassetid://0" },
-	molasses      = { label = "SLOWED",    color = "Slow",     icon = "rbxassetid://0" },
-	mirror        = { label = "INVERTED",  color = "Inverted", icon = "rbxassetid://0" },
-	freeze        = { label = "FROZEN",    color = "Frozen",   icon = "rbxassetid://0" },
-	fog           = { label = "LAGGING",   color = "Lag",      icon = "rbxassetid://0" },
-	butterfingers = { label = "JAW JAMMED", color = "Jammed",  icon = "rbxassetid://0" },
+	earthquake    = { label = "SHAKE",      color = "Shake" },
+	molasses      = { label = "SLOWED",     color = "Slow" },
+	mirror        = { label = "INVERTED",   color = "Inverted" },
+	freeze        = { label = "FROZEN",     color = "Frozen" },
+	fog           = { label = "LAGGING",    color = "Lag" },
+	butterfingers = { label = "JAW JAMMED", color = "Jammed" },
 }
 
 -- The one place an effect name becomes a colour. Unknown names get Power, which is cool - so an

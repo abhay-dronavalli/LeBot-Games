@@ -25,6 +25,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage:WaitForChild("Arena"):WaitForChild("Theme"))
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
+local Icons = require(ReplicatedStorage.Arena.Icons)
 
 local C = Theme.Color
 local player = Players.LocalPlayer
@@ -148,9 +149,14 @@ local function drawChips(effects: { any })
 		border.Thickness = 2
 		border.Parent = chip
 
+		local icon = Icons.draw(chip, e.name, e.color)
+		icon.AnchorPoint = Vector2.new(0, 0.5)
+		icon.Position = UDim2.new(0, 5, 0.5, 0)
+		icon.Size = UDim2.new(0, 20, 0, 20)
+
 		local label = text(chip, Theme.Font.Label, 13, e.color)
-		label.Position = UDim2.new(0, 6, 0, 0)
-		label.Size = UDim2.new(1, -12, 1, 0)
+		label.Position = UDim2.new(0, 30, 0, 0)
+		label.Size = UDim2.new(1, -36, 1, 0)
 		label.TextXAlignment = Enum.TextXAlignment.Left
 		label.Text = ("%s %ds"):format(e.label, math.ceil(e.remaining))
 	end
@@ -192,10 +198,11 @@ for i = 1, ArenaConfig.ABILITY_SLOTS do
 	border.Thickness = 2
 	border.Parent = tile
 
-	local label = text(tile, Theme.Font.Label, 12, C.UiText)
-	label.Position = UDim2.new(0, 2, 1, -18)
-	label.Size = UDim2.new(1, -4, 0, 16)
+	local label = text(tile, Theme.Font.Label, 11, C.UiText)
+	label.Position = UDim2.new(0, 2, 1, -16)
+	label.Size = UDim2.new(1, -4, 0, 14)
 	label.Text = ""
+	label.ZIndex = 3
 
 	local key = text(tile, Theme.Font.Label, 12, C.UiText)
 	key.Position = UDim2.new(0, 4, 0, 2)
@@ -222,7 +229,7 @@ for i = 1, ArenaConfig.ABILITY_SLOTS do
 		Remotes.SlotFire:FireServer(i)
 	end)
 
-	slotTiles[i] = { tile = tile, border = border, label = label, cd = cd }
+	slotTiles[i] = { tile = tile, border = border, label = label, cd = cd, icon = nil, held = nil }
 end
 
 local function fitSlots()
@@ -250,6 +257,21 @@ end)
 local function drawSlots(slots: { any })
 	for i, tile in slotTiles do
 		local s = slots and slots[i]
+
+		-- Only redraw when the contents actually change. drawSlots runs on every payload, and a
+		-- slot that rebuilds its frames eight times a second visibly flickers.
+		local want = s and s.name or nil
+		if want ~= tile.held then
+			tile.held = want
+			if tile.icon then
+				tile.icon:Destroy()
+				tile.icon = nil
+			end
+			if want then
+				tile.icon = Icons.draw(tile.tile, want, s.color)
+			end
+		end
+
 		if s and s.name then
 			-- A slot holding a picked-up debuff carries that effect's colour.
 			tile.border.Color = s.color
@@ -656,6 +678,10 @@ local function setAerial(on: boolean)
 		end
 		aerial = true
 		aerialView = view
+		-- Whoever is up here IS the dragon. The server takes their body away and stops counting
+		-- them as a survivor; without telling it, the dragon stays a player and a round where it
+		-- kills everyone never ends.
+		Remotes.SetOperator:FireServer(true)
 		hint.Text = "V — PLAYER VIEW"
 		bar.Visible = false              -- the ability bar is the players' tool
 		opText.Visible = true
@@ -691,6 +717,7 @@ local function setAerial(on: boolean)
 	else
 		aerial = false
 		aerialView = nil
+		Remotes.SetOperator:FireServer(false)
 		hint.Text = "V — AERIAL VIEW"
 		bar.Visible = true
 		opText.Visible = false

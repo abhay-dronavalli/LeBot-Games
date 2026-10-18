@@ -107,6 +107,12 @@ Use the key, not the name, when you are setting up screens in a hurry: in Play S
 named after your Roblox account rather than `Player1`, so a name match is exactly the thing that
 fails right when you are trying to get a second display up.
 
+Whoever is on the aerial view **is the dragon**, server-side as well as on screen: they leave the
+round, their character is destroyed, they stop counting as a survivor, and they are not outlined on
+anyone's view. So a round where the dragon kills everyone ends with `THE DRAGON WINS` rather than
+sitting on one last "survivor" who is the dragon. Pressing `V` again puts them back in, from the
+next round.
+
 ### Aiming aids
 
 The operator flies a real 3D arm from a flat overhead view, where "directly above that player" and
@@ -245,15 +251,24 @@ where the *player* is the one being messed with. Here the player is the one doin
 every effect lands on the dragon and on the operator's screen. The one thing that does shake a
 player's camera is a slam, which is the dragon's doing.
 
+## Icons
+
+`Icons.lua` draws each power-up from plain Frames — rotated bars and rounded squares — rather than
+loading an image. An icon asset has to be uploaded and moderated, and an id that is wrong or not
+yet approved renders as nothing, which looks exactly like a bug; a made-up `rbxassetid` is worse,
+because it shows whatever that number happens to point at. Frames always render, cost nothing, and
+take the effect's colour, so the warm/cool rule holds for free.
+
+The same icon appears on the crystal in the world and in the slot it fills, which is what makes a
+pickup recognisable when it lands in your bar. An effect nobody has drawn yet gets a generic
+diamond rather than a blank.
+
 ## Known gaps
 
 - **Sound asset ids are empty.** `Sound.lua` has the full list of cues with ids set to `0`, which
   no-ops. Picking them means browsing the Roblox audio library and listening; an invented
   `rbxassetid` either fails silently or plays something nobody chose. Fill them in and check the
   licence — no copyrighted music.
-- **Effect icons are empty.** `Theme.Effect[*].icon` is `rbxassetid://0`. The HUD falls back to the
-  effect's text label, which is readable but not the icon the style guide asks for on the pickup
-  and the matching slot.
 - **The arena outline is the sheet, not measured reach** (above).
 - **`GRIP_CLOSED_PCT` / `GRIP_EMPTY_PCT` in `bridge/world.py` are inferred, not measured**
   (`HANDOFF.md`). The learned-span fallback here means the dragon degrades gracefully rather than

@@ -31,7 +31,7 @@ local Theme = require(ReplicatedStorage.Arena.Theme)
 -- the RemoteEvent instances. Doing it here, at the top of the one script that starts the mode,
 -- means they exist before any player's LocalScript can WaitForChild them. The modules below also
 -- require it, so this is belt and braces - but the ordering is load-bearing and worth stating.
-require(ReplicatedStorage.Arena.Remotes)
+local Remotes = require(ReplicatedStorage.Arena.Remotes)
 
 local modules = script.Parent.Arena
 local Arena = require(modules.Arena)
@@ -194,6 +194,12 @@ end)
 
 Players.PlayerRemoving:Connect(function(player)
 	rounds:playerRemoving(player)
+end)
+
+-- The V key on any client. The camera change is the client's business, but who is the dragon is
+-- the server's: they leave the round, lose their character, and stop counting as a survivor.
+Remotes.SetOperator.OnServerEvent:Connect(function(player, on)
+	rounds:setOperator(player, on == true)
 end)
 
 RunService.Heartbeat:Connect(function(dt)

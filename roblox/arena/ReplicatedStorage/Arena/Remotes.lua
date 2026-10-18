@@ -25,7 +25,8 @@ local NAMES = {
 	"Banner",     -- one-off centre text: countdown, round end, debuff toast
 	"Shake",      -- camera shake for a slam: (strength 0..1, seconds)
 	-- Client -> server
-	"SlotFire",   -- "spend ability slot n"
+	"SlotFire",     -- "spend ability slot n"
+	"SetOperator",  -- "I am the dragon now" / "I am a player again" (the V key)
 }
 
 local Remotes = {}
