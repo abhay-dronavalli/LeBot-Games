@@ -105,8 +105,21 @@ Every cell is labelled with its `col,row` painted flat on the floor, and the cel
 wants a block in are **green** (`solveCells`, carried in the status payload). A called-out
 "(1,0)" is then somewhere you can see rather than count out.
 
+**The runner is outlined**, with a `Highlight` set to `AlwaysOnTop`, so they are findable in
+a dark room or behind an obstacle rather than being a shape you have to hunt for.
+
+**A mini 4×3 grid** sits on the right, laid out the same way round as the printed mat and the
+debug grid — far row at the top, col 0 on the right — so what is on screen and what the
+operator reaches for line up without translating. Green is a cell the bay wants, blue is a cell
+holding a block, amber rings the cell the runner is standing in. The occupied state comes from
+a `BayCells` remote rather than from looking at the world, because bays 3 and 4 set
+`VirtualCrates` and have no crate to see.
+
 **Walls go transparent client-side.** The warehouse shell sits between this camera and the
-bay, so the shell's `LocalTransparencyModifier` is raised while the view is on. Doing it on
+bay, so three layers are raised while the view is on: the warehouse shell, the **roof trusses** at
+y = 46, and the **active bay's own walls and ceiling**. Bay 4 is the acute case — the dark room
+is roofed at y = 14, so without it the overseer is looking at the top of a closed box; the
+trusses laid two black bars across the bay once the camera went above them. Doing it on
 the client matters: it is this viewer's x-ray, not a change to the world, so player 1 still
 sees solid walls around them. It is restored on the way out, along with the camera subject and
 the markers.

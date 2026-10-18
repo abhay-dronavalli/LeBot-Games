@@ -1,25 +1,21 @@
 -- OverseerCam (client) -- player 2's view of the bay.
 --
 -- The overseer's job is to put real cubes on a real mat and have them land in the right cells.
--- That needs a view where the 4x3 grid is legible and the obstacle is visible at the same
--- time, which the runner's over-the-shoulder camera is not.
+-- That needs a view where the 4x3 grid is legible, the runner is findable, and the obstacle is
+-- visible at the same time. The runner's over-the-shoulder camera is none of those.
 --
--- **V** toggles it. In solo mode one person flips between the two views to check what the
--- other half of the game looks like; with two players, player 2 simply leaves it on.
+-- **V** toggles it. In solo one person flips between the two halves of the game; with two
+-- players, player 2 simply leaves it on.
 --
--- WHY THIS ANGLE. Elevated, from the entrance end, looking down the bay:
+-- WHY NEARLY TOP-DOWN. Steep enough that the grid reads as a grid -- at a shallower angle the
+-- far row foreshortens and "col 2, row 2" becomes a guess -- but tilted a few degrees toward
+-- the entrance so the room keeps its walls and some sense of depth.
 --
---   * Columns (X) spread left-to-right and rows (Z) recede, which is exactly how the 4x3
---     debug grid and the printed mat are laid out. A side-on view would foreshorten the
---     columns and make "col 2, row 1" guesswork.
---   * It is where the Sky Arm stands, so what the overseer sees and what the arm reaches
---     share a mental model.
---   * High enough (y ~ 38) to clear a bay's own furniture -- bay 1's 16-stud saw wall and side
---     walls -- while staying under the roof trusses at 46.
---
--- WALLS. The warehouse shell sits between this camera and the bay, so the shell goes
--- transparent while the view is on. Crucially that is done CLIENT-SIDE: it is this viewer's
--- problem, not a change to the world, so player 1 still sees solid walls around them.
+-- WALLS. Two layers are in the way and both are handled CLIENT-SIDE, so this is one viewer's
+-- x-ray and not a change to the world -- the runner still sees solid walls around them:
+--   * the warehouse shell, which surrounds every bay
+--   * the bay's OWN walls and ceiling. Bay 4 is the acute case: the dark room is roofed at
+--     y = 14, so without this the overseer is looking at the top of a closed box.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,29 +28,34 @@ local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local DebugStatus = Remotes:WaitForChild("DebugStatus")
 local DebugCommand = Remotes:WaitForChild("DebugCommand")
+local BayCells = Remotes:WaitForChild("BayCells")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local CELL = Config.CellSize
-local HEIGHT = 38          -- above a bay's tallest furniture, below the roof trusses
-local SETBACK = 13         -- studs behind the entrance edge
+local HEIGHT = 62          -- steep: the grid has to read as a grid
+local SETBACK = 9          -- a few degrees of tilt so the room keeps its walls
 
--- Client-created instances never replicate, so a folder in Workspace is private to this
--- viewer -- and unlike parenting under CurrentCamera, a BillboardGui adorned to a part in here
--- actually renders. The cell numbers were invisible until this moved.
-local overlay = Instance.new("Folder")
-overlay.Name = "OverseerOverlay"
-overlay.Parent = Workspace
+local INK = Color3.fromRGB(232, 236, 244)
+local WANT = Color3.fromRGB(90, 230, 130)
+local HELD = Color3.fromRGB(96, 170, 255)
+local DIMMED = Color3.fromRGB(96, 104, 122)
 
 local active = false
 local activeBay = Config.LiveBay or 1
 local solveCells, bayName = nil, "?"
+local occupied = {}
 local markers = {}
-local hidden = {}          -- part -> its real transparency, so it can be put back
+local hidden = {}          -- part -> its real LocalTransparencyModifier
+local highlight = nil
+
+local overlay = Instance.new("Folder")
+overlay.Name = "OverseerOverlay"
+overlay.Parent = Workspace
 
 ----------------------------------------------------------------
--- HUD
+-- Panel
 ----------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name = "OverseerCam"
@@ -64,8 +65,10 @@ gui.Enabled = false
 gui.Parent = playerGui
 
 local banner = Instance.new("TextLabel")
-banner.AnchorPoint = Vector2.new(0.5, 0)
-banner.Position = UDim2.new(0.5, 0, 0, 10)
+-- Bottom of the screen. The objective panel owns the top centre -- it is the runner's task
+-- readout and the overseer needs it too -- so these were drawing straight over each other.
+banner.AnchorPoint = Vector2.new(0.5, 1)
+banner.Position = UDim2.new(0.5, 0, 1, -34)
 banner.Size = UDim2.new(0, 460, 0, 30)
 banner.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
 banner.BackgroundTransparency = 0.12
@@ -78,8 +81,8 @@ banner.Parent = gui
 Instance.new("UICorner", banner).CornerRadius = UDim.new(0, 6)
 
 local sub = Instance.new("TextLabel")
-sub.AnchorPoint = Vector2.new(0.5, 0)
-sub.Position = UDim2.new(0.5, 0, 0, 42)
+sub.AnchorPoint = Vector2.new(0.5, 1)
+sub.Position = UDim2.new(0.5, 0, 1, -12)
 sub.Size = UDim2.new(0, 460, 0, 18)
 sub.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
 sub.BackgroundTransparency = 0.25
@@ -92,7 +95,70 @@ sub.Parent = gui
 Instance.new("UICorner", sub).CornerRadius = UDim.new(0, 5)
 
 ----------------------------------------------------------------
--- Cell markers: a label per cell, so a called-out "(1,0)" is a place you can see
+-- Mini grid. The same 4x3 the operator has in front of them on the table, in the same
+-- orientation, so what is on screen and what they reach for line up without translating.
+----------------------------------------------------------------
+local gridFrame = Instance.new("Frame")
+gridFrame.AnchorPoint = Vector2.new(1, 0.5)
+gridFrame.Position = UDim2.new(1, -18, 0.5, 0)
+gridFrame.Size = UDim2.new(0, 214, 0, 190)
+gridFrame.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
+gridFrame.BackgroundTransparency = 0.12
+gridFrame.BorderSizePixel = 0
+gridFrame.Parent = gui
+Instance.new("UICorner", gridFrame).CornerRadius = UDim.new(0, 8)
+
+local gridTitle = Instance.new("TextLabel")
+gridTitle.Position = UDim2.new(0, 10, 0, 7)
+gridTitle.Size = UDim2.new(1, -20, 0, 16)
+gridTitle.BackgroundTransparency = 1
+gridTitle.Font = Enum.Font.GothamBold
+gridTitle.TextSize = 11
+gridTitle.TextXAlignment = Enum.TextXAlignment.Left
+gridTitle.TextColor3 = Color3.fromRGB(150, 158, 172)
+gridTitle.Text = "THE MAT   -   far end at the top"
+gridTitle.Parent = gridFrame
+
+local cellBtns = {}
+for col = 0, Config.BayCols - 1 do
+	for row = 0, Config.BayRows - 1 do
+		local f = Instance.new("Frame")
+		-- row 2 (far) at the top, col 0 on the right: the same way round as the debug grid
+		f.Position = UDim2.new(0, 10 + (Config.BayCols - 1 - col) * 49,
+			0, 28 + (Config.BayRows - 1 - row) * 49)
+		f.Size = UDim2.new(0, 45, 0, 45)
+		f.BackgroundColor3 = Color3.fromRGB(30, 34, 44)
+		f.BorderSizePixel = 0
+		f.Parent = gridFrame
+		Instance.new("UICorner", f).CornerRadius = UDim.new(0, 5)
+		local st = Instance.new("UIStroke", f)
+		st.Color = Color3.fromRGB(52, 58, 72)
+		st.Thickness = 1
+		local t = Instance.new("TextLabel")
+		t.Size = UDim2.new(1, 0, 1, 0)
+		t.BackgroundTransparency = 1
+		t.Font = Enum.Font.GothamBold
+		t.TextSize = 12
+		t.TextColor3 = DIMMED
+		t.Text = ("%d,%d"):format(col, row)
+		t.Parent = f
+		cellBtns[col .. "," .. row] = {frame = f, stroke = st, label = t}
+	end
+end
+
+local legend = Instance.new("TextLabel")
+legend.Position = UDim2.new(0, 10, 1, -18)
+legend.Size = UDim2.new(1, -20, 0, 14)
+legend.BackgroundTransparency = 1
+legend.Font = Enum.Font.Gotham
+legend.TextSize = 10
+legend.TextXAlignment = Enum.TextXAlignment.Left
+legend.TextColor3 = Color3.fromRGB(130, 138, 152)
+legend.Text = "green wanted   blue placed   amber runner"
+legend.Parent = gridFrame
+
+----------------------------------------------------------------
+-- In-world cell markers
 ----------------------------------------------------------------
 local function clearMarkers()
 	for _, m in ipairs(markers) do
@@ -119,14 +185,12 @@ local function buildMarkers()
 		return
 	end
 	local want = wantedSet()
-
 	for col = 0, Config.BayCols - 1 do
 		for row = 0, Config.BayRows - 1 do
 			local a = anchors:FindFirstChild(("Cell_%d_%d"):format(col, row))
 			if a then
 				local key = col .. "," .. row
 				local isWanted = want[key]
-
 				local pad = Instance.new("Part")
 				pad.Name = "OverseerCell_" .. key
 				pad.Anchored = true
@@ -137,27 +201,16 @@ local function buildMarkers()
 				pad.CFrame = CFrame.new(a.Position + Vector3.new(0, 0.1, 0))
 				pad.Material = Enum.Material.Neon
 				pad.Transparency = isWanted and 0.35 or 0.86
-				pad.Color = isWanted and Color3.fromRGB(90, 230, 130)
-					or Color3.fromRGB(90, 130, 190)
-				-- client-side only: the runner must not see the operator's overlay
+				pad.Color = isWanted and WANT or Color3.fromRGB(90, 130, 190)
 				pad.Parent = overlay
 				table.insert(markers, pad)
 
-				-- Painted flat on the cell, not floating above it.
-				--
-				-- This was a BillboardGui first and it simply did not render -- the label
-				-- existed with the right text and a laid-out AbsoluteSize, but nothing
-				-- appeared. A SurfaceGui on the top face is part of the world, so it is
-				-- certain to draw, and for a view looking straight down a number lying flat
-				-- on the floor reads more like a painted bay marking anyway.
 				local sg = Instance.new("SurfaceGui")
 				sg.Face = Enum.NormalId.Top
-				sg.AlwaysOnTop = false
 				sg.LightInfluence = 0
 				sg.PixelsPerStud = 36
 				sg.Adornee = pad
 				sg.Parent = pad
-
 				local t = Instance.new("TextLabel")
 				t.AnchorPoint = Vector2.new(0.5, 0.5)
 				t.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -166,13 +219,9 @@ local function buildMarkers()
 				t.BackgroundTransparency = isWanted and 0.1 or 0.32
 				t.BorderSizePixel = 0
 				t.Font = Enum.Font.GothamBold
-				-- A Top-face SurfaceGui's own axes run across the bay, so the number comes
-				-- out reading bottom-to-top. Turn it to face the overseer camera, which
-				-- always looks down the bay from the entrance end.
 				t.Rotation = -90
 				t.TextScaled = true
-				t.TextColor3 = isWanted and Color3.fromRGB(130, 255, 170)
-					or Color3.fromRGB(220, 228, 240)
+				t.TextColor3 = isWanted and Color3.fromRGB(130, 255, 170) or INK
 				t.Text = ("%d,%d"):format(col, row)
 				t.Parent = sg
 				Instance.new("UICorner", t).CornerRadius = UDim.new(0.18, 0)
@@ -186,29 +235,98 @@ local function buildMarkers()
 end
 
 ----------------------------------------------------------------
--- Walls. Client-side only, so this is one viewer's x-ray and not a change to the world.
+-- X-ray: the shell, plus the active bay's own walls and ceiling.
 ----------------------------------------------------------------
+local function ghost(part, amount)
+	if part:IsA("BasePart") and hidden[part] == nil then
+		hidden[part] = part.LocalTransparencyModifier
+		part.LocalTransparencyModifier = amount
+	end
+end
+
 local function ghostWalls(on)
-	if on then
-		local shell = Workspace.Warehouse:FindFirstChild("Shell")
-		for _, p in ipairs(shell and shell:GetChildren() or {}) do
-			if p:IsA("BasePart") and hidden[p] == nil then
-				hidden[p] = p.LocalTransparencyModifier
-				p.LocalTransparencyModifier = 0.92
-			end
-		end
-	else
+	if not on then
 		for p, v in pairs(hidden) do
 			if p and p.Parent then
 				p.LocalTransparencyModifier = v
 			end
 		end
 		table.clear(hidden)
+		return
+	end
+
+	local shell = Workspace.Warehouse:FindFirstChild("Shell")
+	for _, p in ipairs(shell and shell:GetChildren() or {}) do
+		ghost(p, 0.92)
+	end
+
+	-- The roof trusses sit at y = 46, between a 62-stud camera and the floor, and laid two
+	-- black bars straight across the bay. The rail beams are left alone: they are thin, they
+	-- are where the crane actually rides, and seeing the crane is useful.
+	local rails = Workspace.Warehouse:FindFirstChild("SkyRails")
+	for _, p in ipairs(rails and rails:GetChildren() or {}) do
+		if p.Name:match("^Truss") then
+			ghost(p, 1)
+		end
+	end
+
+	-- The bay's own box. Matched by NAME rather than by size or position, because a bay builds
+	-- whatever it needs and only its walls and roof should disappear -- the obstacle itself has
+	-- to stay visible, which is the entire point of looking.
+	local bay = Workspace.Warehouse:FindFirstChild(("Bay%02d"):format(activeBay))
+	local obst = bay and bay:FindFirstChild("Obstacle")
+	for _, p in ipairs(obst and obst:GetChildren() or {}) do
+		local n = p.Name
+		if n:match("Ceiling") then
+			ghost(p, 1)            -- a roof between camera and floor has to go entirely
+		elseif n:match("Wall") or n:match("SideRail") then
+			ghost(p, 0.82)         -- walls stay faintly, so the room keeps its shape
+		end
 	end
 end
 
 ----------------------------------------------------------------
--- The view itself
+-- The runner. Outlined, so they are findable in a dark room or behind an obstacle.
+----------------------------------------------------------------
+local function setHighlight(on)
+	if highlight then
+		highlight:Destroy()
+		highlight = nil
+	end
+	if not on then
+		return
+	end
+	local ch = player.Character
+	if not ch then
+		return
+	end
+	highlight = Instance.new("Highlight")
+	highlight.FillColor = Color3.fromRGB(120, 210, 255)
+	highlight.FillTransparency = 0.5
+	highlight.OutlineColor = Color3.fromRGB(200, 240, 255)
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = ch
+	highlight.Parent = ch
+end
+
+local function runnerCell()
+	local ch = player.Character
+	local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return nil
+	end
+	local zStart = (activeBay - 1) * Config.BayPitch
+	local col = math.floor(hrp.Position.X / CELL)
+	local row = math.floor((hrp.Position.Z - zStart) / CELL)
+	if col < 0 or col >= Config.BayCols or row < 0 or row >= Config.BayRows then
+		return nil
+	end
+	return col .. "," .. row
+end
+
+----------------------------------------------------------------
+-- The view
 ----------------------------------------------------------------
 local function aimCamera()
 	local cam = Workspace.CurrentCamera
@@ -217,9 +335,28 @@ local function aimCamera()
 	end
 	local zStart = (activeBay - 1) * Config.BayPitch
 	local midX = Config.BayWidth / 2
-	local eye = Vector3.new(midX, HEIGHT, zStart - SETBACK)
-	local look = Vector3.new(midX, 1, zStart + Config.BayDepth * 0.55)
-	cam.CFrame = CFrame.lookAt(eye, look)
+	local midZ = zStart + Config.BayDepth / 2
+	-- Aimed past the middle of the bay, which pushes the whole grid DOWN the screen and out
+	-- from under the objective panel. Aiming at the centre put the far row behind it.
+	cam.CFrame = CFrame.lookAt(
+		Vector3.new(midX, HEIGHT, midZ - SETBACK),
+		Vector3.new(midX, 0, midZ + 10))
+end
+
+local function paintGrid()
+	local want = wantedSet()
+	local here = runnerCell()
+	for key, c in pairs(cellBtns) do
+		local isWanted = want[key]
+		local isHeld = occupied[key]
+		local isHere = (key == here)
+		c.frame.BackgroundColor3 = isHeld and Color3.fromRGB(26, 52, 86)
+			or (isWanted and Color3.fromRGB(22, 54, 36) or Color3.fromRGB(30, 34, 44))
+		c.stroke.Color = isHere and Color3.fromRGB(255, 210, 110)
+			or (isHeld and HELD or (isWanted and WANT or Color3.fromRGB(52, 58, 72)))
+		c.stroke.Thickness = isHere and 3 or (isHeld and 2 or 1)
+		c.label.TextColor3 = isHeld and HELD or (isWanted and WANT or DIMMED)
+	end
 end
 
 local function setActive(on)
@@ -232,14 +369,16 @@ local function setActive(on)
 	if on then
 		cam.CameraType = Enum.CameraType.Scriptable
 		ghostWalls(true)
+		setHighlight(true)
 		buildMarkers()
 		aimCamera()
+		paintGrid()
 	else
 		clearMarkers()
 		ghostWalls(false)
+		setHighlight(false)
 		cam.CameraType = Enum.CameraType.Custom
-		local ch = player.Character
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		if hum then
 			cam.CameraSubject = hum
 		end
@@ -255,18 +394,39 @@ local function refreshBanner()
 end
 
 DebugStatus.OnClientEvent:Connect(function(status)
-	local changed = status.activeBay ~= activeBay
+	local moved = status.activeBay ~= activeBay
 	activeBay = status.activeBay or activeBay
 	local info = status.bays and status.bays[activeBay]
 	solveCells = info and info.solveCells or nil
 	bayName = info and info.obstacle or "?"
+	if moved then
+		occupied = {}
+	end
 	refreshBanner()
 	if active then
-		-- the bay moved under us, or a solve changed which cells matter
+		-- the bay moved under us, or a solve changed which cells matter, and the x-ray has to
+		-- follow: the walls being ghosted belong to the bay we were looking at
+		ghostWalls(false)
+		ghostWalls(true)
 		buildMarkers()
-		if changed then
+		paintGrid()
+		if moved then
 			aimCamera()
 		end
+	end
+end)
+
+BayCells.OnClientEvent:Connect(function(bayIndex, cellsList)
+	if bayIndex ~= activeBay then
+		return
+	end
+	local now = {}
+	for _, c in ipairs(cellsList or {}) do
+		now[c.col .. "," .. c.row] = true
+	end
+	occupied = now
+	if active then
+		paintGrid()
 	end
 end)
 
@@ -277,8 +437,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	setActive(not active)
 end)
 
--- The camera is re-created on respawn, which silently drops Scriptable and the overlay with
--- it; re-assert rather than leaving the overseer staring through their own character.
+-- The camera and the highlight are both lost on respawn; re-assert rather than leaving the
+-- overseer staring through their own character.
 player.CharacterAdded:Connect(function()
 	task.wait(0.4)
 	if active then
@@ -289,6 +449,16 @@ end)
 RunService.RenderStepped:Connect(function()
 	if active then
 		aimCamera()
+	end
+end)
+
+-- The runner's cell changes as they move, which no event reports.
+task.spawn(function()
+	while true do
+		if active then
+			paintGrid()
+		end
+		task.wait(0.25)
 	end
 end)
 

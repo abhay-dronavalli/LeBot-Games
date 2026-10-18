@@ -44,6 +44,20 @@ end
 
 local DebugCommand = remote("DebugCommand")
 local DebugStatus = remote("DebugStatus")
+local BayCells = remote("BayCells")
+
+-- Which cells currently hold a block, pushed to clients.
+--
+-- The overseer's mini grid cannot work this out by looking: bays 3 and 4 set VirtualCrates, so
+-- there is no crate in the world to see. A separate channel from CellsUpdated, which is the
+-- debug editor's own echo and only fires in solo.
+local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
+BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
+	local idx = tonumber(tostring(bayModel.Name):match("Bay(%d+)"))
+	if idx then
+		BayCells:FireAllClients(idx, cellsList)
+	end
+end)
 
 if not RunControl.waitForReady(15) then
 	warn("[DebugMenu] HazardManager never published its rebuild hooks; menu will be inert")
