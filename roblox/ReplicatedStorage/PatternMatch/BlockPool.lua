@@ -1,17 +1,31 @@
 -- ReplicatedStorage.PatternMatch.BlockPool
--- One block Part per cell and stack level of a board (12 cells x Config.maxStackGlobal levels), made
+-- One block part per cell and stack level of a board (12 cells x Config.maxStackGlobal levels), made
 -- once and then shown, hidden or recolored through its properties, so nothing is created per tick.
--- LiveBoard and TargetBoard both use it, so their blocks look identical: a cube 60% of the tile's
--- width, sitting on the tile at level 0 and one cube higher per level, in a Blocks folder in the board.
--- The parts belong to the board Model, so they turn with spins and shake with tremors.
+-- LiveBoard and TargetBoard both use it, so their blocks look identical: a matte foam cube 84% of a cell
+-- wide (the real 48 mm block on the 57 mm cell), sitting on the tile at level 0 and one cube higher per
+-- level, in a Blocks folder in the board. Each part is a clone of the rounded-cube MeshPart
+-- ReplicatedStorage.PatternMatch.BlockMesh (stored by tools/build_pattern_cabinet.lua), or a plain Part
+-- when that mesh is missing. The parts belong to the board Model, so they turn with spins and shake with
+-- tremors.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
 
-local BLOCK_FRACTION = 0.6 -- block width as a fraction of its cell tile
+local BLOCK_FRACTION = 0.84 -- block width as a fraction of the cell pitch (Config.boardCellStuds)
 
 local BlockPool = {}
 BlockPool.__index = BlockPool
+BlockPool.BLOCK_FRACTION = BLOCK_FRACTION
+
+local function newBlockPart()
+	local template = script.Parent:FindFirstChild("BlockMesh")
+	if template and template:IsA("MeshPart") then
+		local part = template:Clone()
+		part:ClearAllChildren()
+		return part
+	end
+	return Instance.new("Part")
+end
 
 -- Part name for a cell's block at a level: "B2" on the table, "B2_1" on top of it, ...
 function BlockPool.partName(cell, level)
@@ -29,13 +43,13 @@ function BlockPool.new(boardModel)
 	for _, cell in ipairs(Grid.allCells()) do
 		local tile = boardModel:FindFirstChild(cell)
 		assert(tile and tile:IsA("BasePart"), "BlockPool: board has no cell part " .. cell)
-		local width = math.min(tile.Size.X, tile.Size.Z) * BLOCK_FRACTION
+		local width = Config.boardCellStuds * BLOCK_FRACTION
 		self.parts[cell] = {}
 		for level = 0, self.levels - 1 do
 			local name = BlockPool.partName(cell, level)
 			local part = folder:FindFirstChild(name)
 			if not part then
-				part = Instance.new("Part")
+				part = newBlockPart()
 				part.Name = name
 				part.Size = Vector3.new(width, width, width)
 				part.CFrame = tile.CFrame * CFrame.new(0, (tile.Size.Y + width) / 2 + level * width, 0)

@@ -20,8 +20,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.PatternMatch.Config)
 
-local WHITE = Color3.fromRGB(245, 245, 245)
-local DARK = Color3.fromRGB(45, 45, 45)
+local WHITE = Color3.fromHex("e9e6df") -- links, jaws, base: Apprentice's off-white arm parts
+local DARK = Color3.fromHex("2a2d33")  -- joints, shoulder, hand: Apprentice's dark arm parts
 local JAW_OFFSET_CM = 1.2 -- each jaw sits this far to the side of the hand's center line
 
 local Rig = {}

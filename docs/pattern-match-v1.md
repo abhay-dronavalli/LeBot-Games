@@ -68,11 +68,17 @@ Each event shows a 2 s warning banner before it starts, so the player can call i
 
 ## 5. Boards
 
+Styled after the Apprentice 3D view (github.com/NSang22/apprentice, `ui/view3d.js`): warm wood, a printed paper sheet, matte foam blocks, warm key light with a cool fill.
+
+- One wooden table (`PatternCabinet.Table`: Top plus four Legs, `#7a5638`, Wood material) that both boards sit on. Each board is a thin wooden slab (`Slab`, a shade darker, `#5f4129`) with a paper sheet on top (`Paper`, off-white `#f7f6f2`, SmoothPlastic) that runs 0.8 studs past the grid on every side. On the paper sits the black ink layer (`Base`, `#111`, exactly the grid's size) and on that the 12 paper-colored cell tiles with 0.2 stud gaps, so the gaps draw the thick grid lines. `Base` stays the part `Grid.worldPositionOf` lays the cells out from. Cell labels (A1..C4) are small gray (`#555`) text in each cell's top-left corner, upright for someone standing on the row C side; "ARM SIDE" in light gray sits in the row A margin. Four black-and-white AprilTag-style squares (`Tag`) sit at the paper's corners, decorative. "TARGET" / "LIVE" are dark text on the slab's row A edge. The LiveBoard's slab runs on toward the player as an apron, and the arm twin stands on it.
+- Blocks are rounded foam cubes 84% of a cell wide (the real 48 mm block on the 57 mm cell), very matte (SmoothPlastic): clones of the rounded-cube MeshPart `ReplicatedStorage.PatternMatch.BlockMesh` (Creator Store asset 6416975593, stored by the build tool; plain Parts if it is missing). Block colors are Apprentice's palette (section 8).
+- Arm twin colors: off-white links `#e9e6df`, dark joints `#2a2d33`, SmoothPlastic.
+- Lighting (set by the build tool): mid-afternoon sun from the player's front-left as the warm key (`ColorShift_Top` warm), slightly cool `Ambient` / `OutdoorAmbient`, `ShadowSoftness` 0.6. `Lighting.Technology = Future` must be set by hand in the Properties panel (scripts can't), so blocks cast soft shadows on the paper.
 - Two boards in the world, side by side, 3D parts, not GUI: TargetBoard and LiveBoard. Player walks around them freely.
 - Click anywhere on a board to spin it 90 degrees around its vertical center axis, 0.3 s. The ClickDetector (`SpinClick`) sits on the whole board Model, not just the base, because the tiles cover the base's top. Spins run on the server so everyone sees the same orientation, queue up, and wait while a tremor is on.
 - Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell and level (12 cells x `maxStackGlobal` levels, named `B2` and `B2_1`), made once, each sitting one block height above the one below, recolored or hidden, never created per tick.
-- LiveBoard: 12 cell parts plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
-- TargetBoard: 12 neutral cell parts plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns neutral gray (same blocks, recolored). Intermission and Results show full colors.
+- LiveBoard: 12 cell tiles plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`, which shows the ink layer as a black hole in the paper. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
+- TargetBoard: 12 paper-colored cell tiles plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns light gray (`#b0b0b0`, same blocks, recolored). Intermission and Results show full colors.
 
 ## 6. Robot twin (v1, parts-built)
 
@@ -128,8 +134,9 @@ return {
   twinLinksCm = { baseHeight = 6.2, shoulderHeight = 5.4, upperArm = 11.6, forearm = 13.5, wrist = 6.4,
                   jawHinge = 3.6, gripper = 9.8 },
   -- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
-  colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
-             orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
+  -- Values are the Apprentice 3D view's block palette.
+  colors = { red = Color3.fromHex("e2383f"), orange = Color3.fromHex("f5862a"), yellow = Color3.fromHex("f6c933"),
+             teal = Color3.fromHex("16a59b"), skyblue = Color3.fromHex("62bdea"), purple = Color3.fromHex("8a5cc7") },
   blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
   maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
   stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block

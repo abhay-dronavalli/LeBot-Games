@@ -271,6 +271,48 @@ if cab then
 	check("TargetBoard tiles", names, cells)
 	local liveA1 = Grid.worldPositionOf("A1", cab.LiveBoard)
 	check("LiveBoard tile A1 sits on Grid.worldPositionOf(A1)", (cab.LiveBoard.A1.Position - liveA1).Magnitude < 0.11, true)
+
+	section("14b. Apprentice styling: wooden table and slabs, paper sheet, ink grid, tags, arm colors")
+	local tbl = cab:FindFirstChild("Table")
+	check("one Table model: wooden Top plus 4 Legs", tbl ~= nil and tbl.Top.Material == Enum.Material.Wood and tbl.Top.Color == Color3.fromHex("7a5638")
+		and #tbl:GetChildren() == 5, true)
+	local lb = cab.LiveBoard
+	check("boards sit on the table top", tbl ~= nil and math.abs((lb.Slab.Position.Y - lb.Slab.Size.Y / 2) - (tbl.Top.Position.Y + tbl.Top.Size.Y / 2)) < 0.001, true)
+	check("Slab: wood, darker than the table", lb.Slab.Material == Enum.Material.Wood and lb.Slab.Color ~= tbl.Top.Color
+		and lb.Slab.Color.R < tbl.Top.Color.R, true)
+	check("Paper: off-white SmoothPlastic, wider than the grid on every side", lb.Paper.Color == Color3.fromHex("f7f6f2")
+		and lb.Paper.Material == Enum.Material.SmoothPlastic
+		and lb.Paper.Size.Z > lb.Base.Size.X and lb.Paper.Size.X > lb.Base.Size.Z, true)
+	check("Base is the black ink layer, exactly the grid's size, on the paper", lb.Base.Color == Color3.fromHex("111111")
+		and lb.Base.Size.X == Config.gridCols * Config.boardCellStuds and lb.Base.Size.Z == Config.gridRows * Config.boardCellStuds
+		and math.abs((lb.Base.Position.Y - lb.Base.Size.Y / 2) - (lb.Paper.Position.Y + lb.Paper.Size.Y / 2)) < 0.001, true)
+	check("cell tiles: paper colored, 0.2 stud ink gaps, gray label top-left", lb.B2.Color == Color3.fromHex("f7f6f2")
+		and math.abs(lb.B2.Size.X - (Config.boardCellStuds - 0.2)) < 0.001
+		and lb.B2.SurfaceGui.TextLabel.TextColor3 == Color3.fromHex("555555")
+		and lb.B2.SurfaceGui.TextLabel.Position.X.Scale < 0.1 and lb.B2.SurfaceGui.TextLabel.Position.Y.Scale < 0.1, true)
+	check("tiles turned +90 so labels read upright from the row C side", math.abs(lb.B2.Orientation.Y - 90) < 0.001, true)
+	local tags = 0
+	for _, c in ipairs(lb:GetChildren()) do
+		if c.Name == "Tag" and c.Color == Color3.fromHex("111111") then tags += 1 end
+	end
+	check("four corner tags on each paper sheet", tags .. "/" .. (function()
+		local n = 0
+		for _, c in ipairs(cab.TargetBoard:GetChildren()) do if c.Name == "Tag" then n += 1 end end
+		return n
+	end)(), "4/4")
+	check("TARGET / LIVE labels on the slabs' row A edge, dark text", cab.TargetBoard.Slab.SurfaceGui.TextLabel.Text == "TARGET"
+		and lb.Slab.SurfaceGui.TextLabel.Text == "LIVE" and lb.Slab.SurfaceGui.Face == Enum.NormalId.Back
+		and lb.Slab.SurfaceGui.TextLabel.TextColor3.R < 0.2, true)
+	check("no Stand under the boards any more", lb:FindFirstChild("Stand") == nil and cab.TargetBoard:FindFirstChild("Stand") == nil, true)
+	local twin = lb:FindFirstChild("ArmTwin")
+	check("arm twin: off-white links, dark joints", twin ~= nil and twin.UpperArm.Color == Color3.fromHex("e9e6df")
+		and twin.ElbowHub.Color == Color3.fromHex("2a2d33") and twin.Base.Material == Enum.Material.SmoothPlastic, true)
+	check("arm twin stands on the LiveBoard's apron (slab top)", twin ~= nil
+		and math.abs((twin.Base.Position.Y - twin.Base.Size.Y / 2) - (lb.Slab.Position.Y + lb.Slab.Size.Y / 2)) < 0.001, true)
+	check("Config colors are the Apprentice palette", Config.colors.red == Color3.fromHex("e2383f") and Config.colors.teal == Color3.fromHex("16a59b")
+		and Config.colors.purple == Color3.fromHex("8a5cc7") and Config.colors.skyblue == Color3.fromHex("62bdea"), true)
+	local blockMesh = RS.PatternMatch:FindFirstChild("BlockMesh")
+	table.insert(lines, "     (BlockMesh template: " .. (blockMesh and blockMesh.MeshId or "missing, plain Parts") .. ")")
 else
 	check("Workspace.PatternCabinet exists", false, true)
 end
@@ -330,6 +372,11 @@ if cab then
 	local tblock = board.TargetBoard.Blocks[tcell]
 	check("BlockPool: 12 cells x 2 levels of block parts, level 1 one block higher", #board.TargetBoard.Blocks:GetChildren() == 24
 		and math.abs((board.TargetBoard.Blocks[tcell .. "_1"].Position - tblock.Position).Y - tblock.Size.Y) < 0.001, true)
+	local BlockPool = require(pm.BlockPool)
+	check("block is 84% of a cell wide and sits on its tile", math.abs(tblock.Size.X - Config.boardCellStuds * BlockPool.BLOCK_FRACTION) < 0.001
+		and math.abs((tblock.Position.Y - tblock.Size.Y / 2) - (board.TargetBoard[tcell].Position.Y + board.TargetBoard[tcell].Size.Y / 2)) < 0.001, true)
+	check("block is a rounded-cube MeshPart clone when PatternMatch.BlockMesh exists, else a Part",
+		(RS.PatternMatch:FindFirstChild("BlockMesh") ~= nil) == tblock:IsA("MeshPart") and tblock.Material == Enum.Material.SmoothPlastic, true)
 	local other
 	for _, c in ipairs(cells) do
 		if not g.target[c] then other = board.TargetBoard.Blocks[c] break end

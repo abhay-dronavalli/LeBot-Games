@@ -9,9 +9,9 @@ local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
 local BlockPool = require(script.Parent.BlockPool)
 
-local NEUTRAL = Color3.fromRGB(200, 200, 200) -- tile color
-local HIDDEN = Color3.fromRGB(180, 180, 180)  -- Hard mode's hidden phase: just under the tile gray, so the
-                                              -- shaded block still reads as gray against its outline
+local NEUTRAL = Color3.fromHex("f7f6f2")      -- tile color: the paper sheet
+local HIDDEN = Color3.fromRGB(176, 176, 176)  -- Hard mode's hidden phase: clearly gray on the paper, light
+                                              -- enough to read as gray rather than black
 local OUTLINE = Color3.fromRGB(15, 15, 15)
 
 local TargetBoard = {}

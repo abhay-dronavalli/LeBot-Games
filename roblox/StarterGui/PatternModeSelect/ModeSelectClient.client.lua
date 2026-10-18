@@ -21,8 +21,9 @@ local cabinet = workspace:WaitForChild("PatternCabinet")
 local localPlayer = Players.LocalPlayer
 
 local VISTA_HIDE = { "Baseplate", "SpawnLocation" } -- hidden on this client during the shot
-local SHOT_FROM = Vector3.new(-30, 17, 28)            -- camera, relative to the cabinet floor's center
-local SHOT_AT = Vector3.new(2, -4, 0)                 -- look-at point, same frame
+local SHOT_FROM = Vector3.new(-37, 21, 35)            -- camera, relative to the cabinet floor's center: far
+                                                      -- enough back that the whole table shows on its island
+local SHOT_AT = Vector3.new(2, -4, -3)                -- look-at point, same frame
 local FLY = TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local RETURN = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 local HOVER = TweenInfo.new(0.12)

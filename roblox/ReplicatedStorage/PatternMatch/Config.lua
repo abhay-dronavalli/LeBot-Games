@@ -17,8 +17,9 @@ return {
 	twinLinksCm = { baseHeight = 6.2, shoulderHeight = 5.4, upperArm = 11.6, forearm = 13.5, wrist = 6.4,
 	                jawHinge = 3.6, gripper = 9.8 },
 	-- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
-	colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
-	           orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
+	-- Values are the Apprentice 3D view's block palette.
+	colors = { red = Color3.fromHex("e2383f"), orange = Color3.fromHex("f5862a"), yellow = Color3.fromHex("f6c933"),
+	           teal = Color3.fromHex("16a59b"), skyblue = Color3.fromHex("62bdea"), purple = Color3.fromHex("8a5cc7") },
 	blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
 	maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
 	stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block
