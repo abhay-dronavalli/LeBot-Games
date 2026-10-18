@@ -118,3 +118,43 @@ end
 ----------------------------------------------------------------
 local BUILDERS = {}
 
+-- SAW: blade slot across row 1. A block dropped on the blade jams it, and that block is then
+-- a safe step across the slot.
+BUILDERS.Saw = function(i, folder, info, state)
+	local c = cellCenter(i, 0, 1)
+	local slotZ = c.Z
+
+	newPart("SawSlot", Vector3.new(Config.BayWidth, 0.6, CELL - 1.5),
+		Vector3.new(Config.BayWidth / 2, 0.05, slotZ), Color3.fromRGB(12, 12, 14),
+		Enum.Material.Metal, folder)
+
+	local blades = {}
+	for k = 0, 3 do
+		local blade = newPart("SawBlade" .. k, Vector3.new(0.4, 5, 5),
+			Vector3.new(k * CELL + CELL / 2, 1.4, slotZ), Color3.fromRGB(205, 208, 214),
+			Enum.Material.Metal, folder, {Shape = Enum.PartType.Cylinder})
+		makeLethal(blade, state)
+		table.insert(blades, blade)
+	end
+
+	task.spawn(function()
+		while folder.Parent do
+			if not state.solved then
+				for _, b in ipairs(blades) do
+					b.CFrame = b.CFrame * CFrame.Angles(0, 0, math.rad(22))
+				end
+			end
+			task.wait(0.03)
+		end
+	end)
+
+	function state.onSolved()
+		-- jam: blades tilt crooked and sink into the slot
+		for idx, b in ipairs(blades) do
+			TweenService:Create(b, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+				CFrame = CFrame.new(b.Position - Vector3.new(0, 1.6, 0)) * CFrame.Angles(math.rad(12 * idx), 0, math.rad(70)),
+			}):Play()
+		end
+	end
+end
+
