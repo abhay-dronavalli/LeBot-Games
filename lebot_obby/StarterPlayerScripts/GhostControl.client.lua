@@ -22,7 +22,8 @@ gui.Parent = playerGui
 
 local badge = Instance.new("TextLabel")
 badge.Size = UDim2.new(0, 330, 0, 26)
-badge.Position = UDim2.new(0, 20, 0, 262)
+-- Below the debug scenario panel, which occupies the top-left corner.
+badge.Position = UDim2.new(0, 16, 0, 428)
 badge.BackgroundTransparency = 0.25
 badge.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
 badge.Font = Enum.Font.SourceSansBold

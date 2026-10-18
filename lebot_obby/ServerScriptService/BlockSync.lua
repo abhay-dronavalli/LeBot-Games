@@ -1,13 +1,23 @@
 -- BlockSync (Section 7, 10.2 steps 1, 3 & 8) -- nothing else hard-codes world positions;
--- cellToWorld reads the Cell_c_r anchor parts baked into each bay prefab. Also diffs `cells`
--- snapshots per bay and hands the actual crate delivery/removal off to SkyArm, which physically
--- carries each crate into (or out of) its cell (Section 3.2, 5.2).
+-- cellToWorld reads the Cell_c_r anchor parts baked into each bay prefab.
+--
+-- TWO INPUT PATHS, never both at once:
+--
+--   applyCells(bay, cells)   the solo/DebugMode path. Diffs `cells` snapshots and hands crate
+--                            delivery to SkyArm, which animates a reach into the cell.
+--   applyBlocks(bay, blocks) the LIVE path (robot-link.md). One crate per real cube, tracked
+--                            by block id and positioned every frame. No delivery animation:
+--                            player 2's real carry motion already is one.
+--
+-- Both end at the same cellsChangedEvent, so HazardManager cannot tell them apart and the
+-- placement guards work for either.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
+local Mapping = require(ReplicatedStorage:WaitForChild("Mapping"))
 local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
 
 local BlockSync = {}
@@ -295,6 +305,345 @@ function BlockSync.applyCells(bayModel, newCellsList)
 
 	lastAppliedByBay[bayModel] = newByKey
 	cellsChangedEvent:Fire(bayModel, newCellsList)
+end
+
+----------------------------------------------------------------
+-- The live path: one crate per real cube (robot-link.md)
+--
+-- The wire carries `blocks`, not `cells`: one entry per physical cube, with a stable id, a
+-- stack `level` that is 0 on the paper, and `held` while it is in the jaw. Cells are a derived
+-- view, computed here so HazardManager's solve logic is untouched.
+--
+-- Nothing here animates a delivery. The obby's SkyArm exists to *simulate* an operator; there
+-- is a real one now, and re-enacting a reach they already made with their hands is the one
+-- thing that must never happen. The carry animation comes free instead: a held cube follows
+-- the jaw, so the operator's real motion is the crate's flight path.
+----------------------------------------------------------------
+
+-- The perception palette has nine names against the obby's seven, and identity comes from
+-- `id`, not colour -- PROTOCOL.md is explicit that a wrong colour is cosmetic. Collapse the
+-- two strays onto their nearest obby colour rather than dropping the cube: a crate of the
+-- wrong colour is still footing, which is what Bay 1 actually needs.
+local COLOR_ALIAS = {
+	["light blue"] = "blue",   -- hue 250 vs blue's 268; the kit's own near-miss
+	pink = "red",
+	grey = "grey",             -- what a held cube reports; see PROTOCOL.md
+}
+
+local GREY = Color3.fromRGB(154, 164, 178)
+local LOST_TRANSPARENCY = 0.6     -- the camera cannot see this cube right now
+
+local function obbyColor(name)
+	name = tostring(name or "grey")
+	return COLOR_ALIAS[name] or name
+end
+
+-- One cube, as one welded assembly so a constraint can carry it with a player aboard.
+--
+-- Named Base because HazardManager's reach gating raycasts for a part called Base or Topper;
+-- it also carries an IsCrate attribute so that check can stop depending on names. Every live
+-- cube is identical, so there is no Topper here -- a stack is two cubes, which is what the
+-- real table has, and lifting the top one drops the stack to L1 with no special case.
+local function buildCube(colorName)
+	local w = Mapping.cubeStuds()
+	local model = Instance.new("Model")
+	model.Name = "Crate"
+
+	local base = Instance.new("Part")
+	base.Name = "Base"
+	base.Anchored = true
+	base.CanCollide = true
+	base.Material = Enum.Material.CorrodedMetal
+	base.Color = COLOR_RGB[obbyColor(colorName)] or GREY
+	base.Size = Vector3.new(w, w, w)
+	base.CustomPhysicalProperties = PhysicalProperties.new(0.7, 1.0, 0, 100, 100) -- grippy underfoot
+	base.Parent = model
+	base:SetAttribute("IsCrate", true)
+	model.PrimaryPart = base
+
+	-- The stripe must NOT be anchored in its own right. A WeldConstraint makes these two parts
+	-- one assembly, and an assembly containing any anchored part has infinite mass -- so
+	-- unanchoring the base for a carry still left the cube immovable and AlignPosition drove it
+	-- nowhere, with the goal sitting correctly at the jaw the whole time. Anchoring the base
+	-- alone is what holds the pair still while it rests.
+	local stripe = Instance.new("Part")
+	stripe.Name = "Stripe"
+	stripe.Anchored = false
+	stripe.CanCollide = false
+	stripe.CanQuery = false
+	stripe.Massless = true           -- decoration; it must not change how the cube carries
+	stripe.Material = Enum.Material.Neon
+	stripe.Color = base.Color
+	stripe.Size = Vector3.new(w * 1.01, w * 0.09, w * 1.01)
+	stripe.CFrame = base.CFrame      -- a band round the cube's equator; set before the weld,
+	stripe.Parent = model            -- because the weld freezes whatever offset it finds
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = base
+	weld.Part1 = stripe
+	weld.Parent = base
+
+	local att = Instance.new("Attachment")
+	att.Name = "Drive"
+	att.Parent = base
+
+	local goal = Instance.new("Attachment")
+	goal.Name = "Goal"
+	goal.Parent = workspace.Terrain      -- world-anchored, so there is something to drive toward
+
+	-- AlignPosition.MaxForce defaults to 10000. A 6.7 stud cube at density 0.7 weighs far more
+	-- than that under default gravity, and an under-powered constraint cannot hold the part up
+	-- at all: it sags, and a carried one sinks through the world until the engine destroys it
+	-- at FallenPartsDestroyHeight, losing the cube for the session. The rider speed cap lives
+	-- in MaxVelocity, where it belongs, so raising these costs nothing in safety.
+	local pos = Instance.new("AlignPosition")
+	pos.Attachment0, pos.Attachment1 = att, goal
+	pos.MaxForce, pos.MaxVelocity, pos.Responsiveness = 1e8, 60, 40
+	pos.ApplyAtCenterOfMass = true
+	pos.Parent = base
+
+	local rot = Instance.new("AlignOrientation")
+	rot.Attachment0, rot.Attachment1 = att, goal
+	rot.MaxTorque, rot.Responsiveness = 1e8, 40
+	rot.Parent = base
+
+	return {model = model, base = base, stripe = stripe, goal = goal}
+end
+
+local liveBlocksByBay = setmetatable({}, {__mode = "k"})
+local refusedByBay = setmetatable({}, {__mode = "k"})
+local lastLiveSignature = setmetatable({}, {__mode = "k"})
+
+local function destroyCube(entry)
+	entry.goal:Destroy()
+	entry.model:Destroy()
+end
+
+-- Group cubes into the one-colour-per-cell view the solve logic wants. A cell's colour is the
+-- BOTTOM cube's: the obby's model is one colour per cell and the wire's is one entry per cube,
+-- so a mixed-colour stack is simply not representable. Level is the tallest cube in the cell,
+-- +1 because the wire counts from 0 and the obby counts from 1, clamped at 2 because the real
+-- table only has two cubes of a colour and three-high does not exist.
+local function cellsFromBlocks(placed)
+	local byCell = {}
+	for _, p in ipairs(placed) do
+		local key = p.col .. "," .. p.row
+		local cell = byCell[key]
+		if not cell then
+			byCell[key] = {col = p.col, row = p.row, color = p.color, level = p.level + 1,
+				bottom = p.level}
+		else
+			if p.level < cell.bottom then
+				cell.bottom, cell.color = p.level, p.color
+			end
+			cell.level = math.max(cell.level, p.level + 1)
+		end
+	end
+	local list = {}
+	for _, cell in pairs(byCell) do
+		cell.level = math.min(cell.level, 2)
+		cell.bottom = nil
+		table.insert(list, cell)
+	end
+	table.sort(list, function(a, b)
+		if a.col == b.col then return a.row < b.row end
+		return a.col < b.col
+	end)
+	return list
+end
+
+-- Wipe every crate out of a bay and forget all per-bay bookkeeping, so the next snapshot from
+-- either path starts from nothing. This is what "fresh state" means for crates: without it a
+-- rebuilt bay keeps the crates of the run before it, and the diff state still believes they
+-- are there, so re-placing the same cube is a no-op and the bay looks broken.
+function BlockSync.clearBay(bayModel)
+	local live = liveBlocksByBay[bayModel]
+	if live then
+		for id, entry in pairs(live) do
+			destroyCube(entry)
+			live[id] = nil
+		end
+	end
+	local crates = liveCratesByBay[bayModel]
+	if crates then
+		for key, model in pairs(crates) do
+			if model and model.Parent then
+				model:Destroy()
+			end
+			crates[key] = nil
+		end
+	end
+	-- Anything the arm is still carrying belongs to the run that just ended.
+	for _, child in ipairs(bayModel:GetChildren()) do
+		if child:IsA("Model") and child.Name == "Crate" then
+			child:Destroy()
+		end
+	end
+	lastAppliedByBay[bayModel] = nil
+	lastLiveSignature[bayModel] = nil
+	rejectedByBay[bayModel] = nil
+	refusedByBay[bayModel] = nil
+	cellsChangedEvent:Fire(bayModel, {})
+end
+
+-- Apply one `blocks` frame to a bay. Safe to call at the wire's 30 Hz: everything is a
+-- position update after the first frame.
+function BlockSync.applyBlocks(bayModel, blocks)
+	if type(blocks) ~= "table" then
+		return
+	end
+	local live = liveBlocksByBay[bayModel]
+	if not live then
+		live = {}
+		liveBlocksByBay[bayModel] = live
+	end
+	local refused = refusedByBay[bayModel]
+	if not refused then
+		refused = {}
+		refusedByBay[bayModel] = refused
+	end
+
+	local w = Mapping.cubeStuds()
+	local seen, placed = {}, {}
+
+	for _, b in ipairs(blocks) do
+		local col, row = Mapping.cellOf(b.x, b.y)
+		local level = b.level or 0
+
+		-- A cube in the tray, or on the bare mat, is not in the bay. A held one is, wherever
+		-- the jaw has got to.
+		local wanted = b.held or (col ~= nil)
+
+		-- Guards refuse a *placement*, never a carry: the saw wall turns away a crate dropped
+		-- in front of live blades, but the operator may still fly one over. Re-checked every
+		-- frame, so a parked cube materialises the instant the guard relents -- the live path
+		-- needs no retryRejected, it self-heals at 30 Hz.
+		local refusalReason = nil
+		if wanted and not b.held then
+			local ok, reason = allowed(bayModel, {col = col, row = row,
+				color = obbyColor(b.color), level = math.min(level + 1, 2)})
+			if not ok then
+				wanted, refusalReason = false, reason
+			end
+		end
+
+		-- Edge-triggered, or the HUD would flash the refusal 30 times a second.
+		if refusalReason and not refused[b.id] then
+			rejectedEvent:Fire(bayModel, {col = col, row = row,
+				color = obbyColor(b.color), level = level + 1}, refusalReason)
+		end
+		refused[b.id] = refusalReason ~= nil or nil
+
+		if not wanted then
+			if live[b.id] then
+				destroyCube(live[b.id])
+				live[b.id] = nil
+			end
+		else
+			seen[b.id] = true
+			local entry, fresh = live[b.id], false
+			-- Rebuild a cube whose part has left the tree, or one lost cube is permanent:
+			-- `seen` keeps the cleanup below from clearing it and it is never recreated.
+			if entry == nil or entry.base.Parent == nil then
+				if entry then
+					destroyCube(entry)
+				end
+				entry = buildCube(b.color)
+				entry.model.Parent = bayModel
+				live[b.id] = entry
+				fresh = true
+			end
+
+			local target
+			if b.held then
+				-- The real carry height is the whole point, so use the measured pose.
+				target = CFrame.new(Mapping.blockPosition(b)) * Mapping.blockOrientation(b)
+			else
+				-- Resting cubes come off the BAKED anchor, not a scaled millimetre position:
+				-- the anchors are the single source of truth for where a cell is, and the
+				-- robot has already snapped the cube to its cell centre.
+				target = BlockSync.cellToWorld(bayModel, col, row)
+					* CFrame.new(0, level * w + w / 2, 0)
+			end
+			entry.goal.CFrame = target
+			if fresh then
+				-- A cube built mid-carry would otherwise start at the origin and be hauled
+				-- across the map by the constraint. Place it where it already is first.
+				entry.base.CFrame = target
+			end
+
+			-- Anchored while resting, unanchored while carried.
+			--
+			-- A resting cube should be exactly where the robot says it is, full stop. Left
+			-- unanchored, two stacked cubes are two constraint-driven rigid bodies pressing on
+			-- each other and the smallest overlap topples the top one -- a stack that is
+			-- perfectly stable on the real table falls over here.
+			--
+			-- A carried cube is why the part is unanchored at all: an anchored part moved by
+			-- CFrame does not carry a player standing on it, and being carried IS the lift.
+			-- The goal is kept in sync either way, so the hand-off never jumps.
+			if b.held then
+				if entry.base.Anchored then
+					-- Start the carry from where the cube already is, so the constraint eases
+					-- it off the table instead of dragging it across the map from wherever the
+					-- part happened to be built.
+					entry.base.Anchored = false
+					-- The server must own a carried cube or the rider's own client fights the
+					-- server over where it is. Errors on an anchored part, hence the ordering.
+					pcall(function()
+						entry.base:SetNetworkOwner(nil)
+					end)
+				end
+			else
+				entry.base.Anchored = true
+				entry.base.CFrame = target
+			end
+
+			-- A held cube stays solid: riding it is the whole feature, and the speed cap in
+			-- MaxVelocity is what keeps the rider safe, not loss of collision.
+			entry.base.CanCollide = true
+			entry.base.Transparency = (b.visible or b.held) and 0 or LOST_TRANSPARENCY
+			entry.stripe.Transparency = entry.base.Transparency
+
+			-- Colour is refreshed every frame, not just at create: a cube reports grey while in
+			-- the jaw and its own colour again on release, so a part coloured once would keep
+			-- whatever it was when it first appeared.
+			local c = COLOR_RGB[obbyColor(b.color)] or GREY
+			entry.base.Color, entry.stripe.Color = c, c
+
+			if not b.held then
+				table.insert(placed, {col = col, row = row,
+					color = obbyColor(b.color), level = level})
+			end
+		end
+	end
+
+	-- A cube taken off the table stops being a crate. The tracker only drops an id after it has
+	-- been gone for seconds, so this is never a dropped camera frame.
+	for id, entry in pairs(live) do
+		if not seen[id] then
+			destroyCube(entry)
+			live[id] = nil
+			refused[id] = nil
+		end
+	end
+
+	local cells = cellsFromBlocks(placed)
+
+	-- Positions update at the wire's 30 Hz, but the *cell* view changes only when a cube is
+	-- set down or lifted. Firing every frame would re-run every bay's solve check thirty times
+	-- a second and strobe the labels HazardManager drives off it, so fire on change only.
+	local sig = {}
+	for _, c in ipairs(cells) do
+		table.insert(sig, ("%d,%d,%s,%d"):format(c.col, c.row, c.color, c.level))
+	end
+	sig = table.concat(sig, ";")
+	if sig ~= lastLiveSignature[bayModel] then
+		lastLiveSignature[bayModel] = sig
+		lastAppliedByBay[bayModel] = nil     -- the two paths must not share diff state
+		cellsChangedEvent:Fire(bayModel, cells)
+	end
+	return cells
 end
 
 return BlockSync

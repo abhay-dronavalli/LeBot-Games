@@ -14,6 +14,8 @@ local TweenService = game:GetService("TweenService")
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local BayData = require(ReplicatedStorage:WaitForChild("BayData"))
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
+local Mapping = require(ReplicatedStorage:WaitForChild("Mapping"))
+local RunControl = require(ServerScriptService:WaitForChild("RunControl"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local ObjectiveEvent = Remotes:WaitForChild("Objective")
@@ -148,7 +150,18 @@ BUILDERS.Saw = function(i, folder, info, state)
 	-- from entering the bay at all.
 	local WALL_START = zEnd - 2
 	local WALL_END = z0 + 2.5
-	local WALL_Y = 3.8
+	-- Tall enough that it cannot be jumped. A default jump clears about 12.8 studs of head
+	-- height, so a 7.4 stud wall was a hurdle, not a wall -- the only way past is to sink it.
+	local WALL_H = 16
+	local WALL_Y = WALL_H / 2
+
+	-- The wall runs in side channels rather than spanning the bay edge to edge, which is what
+	-- keeps it clear of the wall-mounted levers: it sweeps PAST them instead of through them.
+	local SIDE_T = 1.0                       -- side wall thickness
+	local SIDE_FACE = SIDE_T / 2             -- inner face of the left side wall
+	local WALL_X0 = SIDE_FACE + 0.6
+	local WALL_X1 = Config.BayWidth - SIDE_FACE - 0.6
+	local WALL_W = WALL_X1 - WALL_X0
 	local TICK = 0.05
 	-- Advance off measured elapsed time, not tick count: task.wait(0.05) actually sleeps a bit
 	-- longer, which made a nominal 30s traverse take about 34s. The wall is this bay's clock,
@@ -178,20 +191,39 @@ BUILDERS.Saw = function(i, folder, info, state)
 	----------------------------------------------------------------
 	-- the wall
 	----------------------------------------------------------------
-	local frame = newPart("WallFrame", Vector3.new(Config.BayWidth, 7.4, 1.2),
-		Vector3.new(midX, WALL_Y, WALL_START), Color3.fromRGB(58, 54, 50),
+	-- Side channels. The bay had no side walls at all -- Border.Left/Right are 0.25 stud floor
+	-- stripes you can walk straight over -- which is why the levers used to need a mount block
+	-- jutting into the bay: there was nothing to bolt them to.
+	for _, side in ipairs({{"Left", 0}, {"Right", Config.BayWidth}}) do
+		newPart("SideWall" .. side[1], Vector3.new(SIDE_T, WALL_H, Config.BayDepth),
+			Vector3.new(side[2], WALL_H / 2, z0 + Config.BayDepth / 2),
+			Color3.fromRGB(64, 62, 60), Enum.Material.DiamondPlate, folder,
+			{CanCollide = true})
+		newPart("SideRail" .. side[1], Vector3.new(SIDE_T + 0.3, 0.5, Config.BayDepth),
+			Vector3.new(side[2], WALL_H - 0.5, z0 + Config.BayDepth / 2),
+			Color3.fromRGB(230, 170, 40), Enum.Material.Neon, folder, {CanQuery = false})
+	end
+
+	local frame = newPart("WallFrame", Vector3.new(WALL_W, WALL_H, 1.2),
+		Vector3.new((WALL_X0 + WALL_X1) / 2, WALL_Y, WALL_START), Color3.fromRGB(58, 54, 50),
 		Enum.Material.DiamondPlate, folder, {CanCollide = true})
 
+	-- Two rows of blades now that there is a wall's worth of height to fill. The lower row is
+	-- what you meet standing on the floor; the upper row is what you meet standing on a stack,
+	-- so climbing never takes you above the danger.
 	local blades = {}
 	for col = 0, Config.BayCols - 1 do
 		local bx = col * CELL + CELL / 2
-		-- a Cylinder's flat faces point along X, so this is a vertical disc facing sideways
-		-- and it spins about its own axis rather than tumbling
-		local blade = newPart("WallBlade" .. col, Vector3.new(0.4, 5.6, 5.6),
-			Vector3.new(bx, WALL_Y - 0.4, WALL_START), Color3.fromRGB(208, 210, 216),
-			Enum.Material.Metal, folder, {Shape = Enum.PartType.Cylinder})
-		makeLethalPart(blade)
-		table.insert(blades, {part = blade, x = bx})
+		for row, by in ipairs({WALL_H * 0.28, WALL_H * 0.72}) do
+			-- a Cylinder's flat faces point along X, so this is a vertical disc facing
+			-- sideways and it spins about its own axis rather than tumbling
+			local blade = newPart(("WallBlade%d_%d"):format(col, row),
+				Vector3.new(0.4, 6.4, 6.4), Vector3.new(bx, by, WALL_START),
+				Color3.fromRGB(208, 210, 216), Enum.Material.Metal, folder,
+				{Shape = Enum.PartType.Cylinder})
+			makeLethalPart(blade)
+			table.insert(blades, {part = blade, x = bx, y = by})
+		end
 	end
 
 	local sparks = newPart("Sparks", Vector3.new(Config.BayWidth - 2, 0.5, 0.5),
@@ -232,7 +264,8 @@ BUILDERS.Saw = function(i, folder, info, state)
 	-- is cleared once it is low enough to step across.
 	local function sinkWall()
 		sunk = true
-		local downY = -5
+		-- deep enough that a WALL_H wall's top ends below the floor, not just its middle
+		local downY = -(WALL_H / 2) - 1.5
 		local info = TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 		TweenService:Create(frame, info, {CFrame = CFrame.new(midX, downY, wallZ)}):Play()
 		for _, b in ipairs(blades) do
@@ -300,28 +333,60 @@ BUILDERS.Saw = function(i, folder, info, state)
 		params.FilterType = Enum.RaycastFilterType.Exclude
 		params.FilterDescendantsInstances = {character}
 		local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -9, 0), params)
-		if not hit or (hit.Instance.Name ~= "Base" and hit.Instance.Name ~= "Topper") then
+		-- Live cubes carry an IsCrate attribute; the DebugMode path's crates are still matched
+		-- by name. Keying on the attribute means the live path does not have to name a cube
+		-- sitting on top of a stack "Topper" just to satisfy a string compare.
+		if not hit then
 			return 0
 		end
-		return hit.Instance.Position.Y + hit.Instance.Size.Y / 2
+		local inst = hit.Instance
+		if not inst:GetAttribute("IsCrate")
+			and inst.Name ~= "Base" and inst.Name ~= "Topper" then
+			return 0
+		end
+		return inst.Position.Y + inst.Size.Y / 2
+	end
+
+	-- A lever belongs to ONE stack height, not to a minimum.
+	--
+	-- `standLevel` is how many crates you stand on to work it: 1 for A, 2 for B. The height and
+	-- the gate are both derived from that, so they cannot drift apart, and they follow the real
+	-- cube size automatically. Standing higher than the lever no longer works -- a 2-stack
+	-- cannot reach down and flip A -- which is what makes each lever cost its own cubes.
+	local CUBE = Mapping.cubeStuds()
+	local LEVEL_TOLERANCE = CUBE * 0.45       -- comfortably inside one cube either way
+
+	local function standTopFor(level)
+		return level * CUBE
 	end
 
 	local function buildLever(spec)
 		local inward = (spec.side == "left") and 1 or -1
-		local x = (spec.side == "left") and 1.75 or Config.BayWidth - 1.75
+		local level = spec.standLevel or 1
+		local standTop = standTopFor(level)
+		-- chest height above the crate you are standing on
+		local y = standTop + 2.4
+		-- flush against the side wall's inner face, not on a block jutting into the bay
+		local face = (spec.side == "left") and SIDE_FACE or (Config.BayWidth - SIDE_FACE)
+		local x = face + inward * 0.18
 		local z = cellCenter(i, spec.cell[1], spec.cell[2]).Z
-		local y = spec.height
 
-		local lv = {id = spec.id, phase = DORMANT, minStand = spec.minStand or 0}
-		-- the housing juts into the bay so it abuts the crate in that column; mounted flush
-		-- with the wall it sits a couple of studs short of the crate's edge
-		lv.mount = newPart("Lever" .. spec.id .. "Mount", Vector3.new(3.5, 3.4, 3.4),
+		local lv = {id = spec.id, phase = DORMANT, level = level, standTop = standTop}
+
+		-- A backplate bolted to the wall, 0.36 studs proud of it -- the wall is the housing now.
+		lv.mount = newPart("Lever" .. spec.id .. "Plate", Vector3.new(0.36, 3.2, 3.2),
 			Vector3.new(x, y, z), Color3.fromRGB(40, 40, 46), Enum.Material.DiamondPlate, folder)
-		lv.beacon = newPart("Lever" .. spec.id .. "Beacon", Vector3.new(0.6, 0.6, 3.2),
-			Vector3.new(x, y + 2.2, z), Color3.fromRGB(34, 34, 38),
+		lv.beacon = newPart("Lever" .. spec.id .. "Beacon", Vector3.new(0.5, 0.5, 2.8),
+			Vector3.new(x + inward * 0.2, y + 2.1, z), Color3.fromRGB(34, 34, 38),
 			Enum.Material.Neon, folder, {CanQuery = false})
 
-		lv.pivot = Vector3.new(x + inward * 1.4, y - 1.0, z)
+		-- A painted band on the wall at the height you have to be standing at, so the level a
+		-- lever wants is readable from across the bay instead of guessed at.
+		lv.stripe = newPart("Lever" .. spec.id .. "Level", Vector3.new(0.14, 0.35, 5.5),
+			Vector3.new(face + inward * 0.1, standTop + 0.2, z),
+			Color3.fromRGB(120, 120, 130), Enum.Material.Neon, folder, {CanQuery = false})
+
+		lv.pivot = Vector3.new(x + inward * 0.45, y - 1.0, z)
 		lv.handle = newPart("Lever" .. spec.id .. "Handle", Vector3.new(0.45, HANDLE_LEN, 0.45),
 			lv.pivot, Color3.fromRGB(190, 58, 52), Enum.Material.Metal, folder)
 		lv.knob = newPart("Lever" .. spec.id .. "Knob", Vector3.new(0.85, 0.85, 0.85),
@@ -345,8 +410,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 		lv.light.Color = Color3.fromRGB(90, 255, 130)
 		lv.light.Parent = lv.mount
 
-		lv.label = addLabel(folder, "LEVER " .. spec.id,
-			Vector3.new(x + inward * 1.0, y + 3.6, z), Color3.fromRGB(130, 130, 140))
+		lv.levelText = ("LEVEL %d  (%s)"):format(level,
+			level == 1 and "1 crate" or (level .. " crates stacked"))
+		lv.label = addLabel(folder, ("LEVER %s  -  %s"):format(spec.id, lv.levelText),
+			Vector3.new(x + inward * 1.2, y + 3.6, z), Color3.fromRGB(130, 130, 140))
 
 		-- A real wall lever: climb to it and hold E. ProximityPrompt gives the hold-to-act UI
 		-- and the key binding for free, and brushing past no longer throws anything -- the old
@@ -368,8 +435,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 			if not hum or hum.Health <= 0 or isGhost(ch) or lv.phase ~= ARMED then
 				return
 			end
-			-- the run loop's proximity hint already explains a stack that is too short
-			if supportHeight(ch) < lv.minStand then
+			-- Same level, not "at least this high". Standing on a taller stack is as wrong as
+			-- standing on the floor: each lever costs its own crates, and that is the whole
+			-- cube budget argument this bay is built on.
+			if math.abs(supportHeight(ch) - lv.standTop) > LEVEL_TOLERANCE then
 				return
 			end
 			if lv.onThrow then
@@ -435,19 +504,42 @@ BUILDERS.Saw = function(i, folder, info, state)
 		end
 
 		local p = {title = "BAY 1  -  SAW WALL"}
+
+		-- A checklist, not a single line. Both levers are always shown with their state and
+		-- the level each one wants, so the plan is readable at a glance instead of being
+		-- revealed one step at a time.
+		local function leverLine(lv, label)
+			if not lv then
+				return nil
+			end
+			local mark = (lv.phase == THROWN) and "[x]"
+				or (lv.phase == ARMED) and "[ ]" or "[-]"
+			local statusText = (lv.phase == THROWN) and "done"
+				or (lv.phase == ARMED) and "ready" or "locked"
+			return ("%s  LEVER %s  -  %s  -  %s"):format(mark, lv.id, label, statusText)
+		end
+		p.steps = {
+			leverLine(leverA, "stand on 1 crate, kill the blades"),
+			leverLine(leverB, "stand on 2 stacked, drop the wall"),
+		}
+
 		if state.solved then
 			p.task = "CLEARED"
-			p.hint = "The wall is down -- head through."
+			p.hint = "The wall is down -- walk out over it."
 			p.tone = "ok"
 		elseif bladesLive then
 			p.task = "LEVER A  -  KILL THE BLADES"
-			p.hint = "Left wall, middle row. Stand on a crate and hold E."
+			p.hint = "Left wall, middle row. Stand on ONE crate -- not two -- and hold E."
 			p.tone = "danger"
 		else
 			p.task = "LEVER B  -  STOP THE WALL"
-			p.hint = "Right wall by the entrance. Needs a stacked pair to reach."
+			p.hint = "Right wall by the entrance. Stand on the stacked PAIR and hold E."
 			p.tone = "warn"
 		end
+		p.note = bladesLive
+			and "Blades live: crates cannot be dropped in front of them, and the wall cuts straight through."
+			or "Blades dead: the next crate in the lane jams the wall, once, for "
+				.. Config.SawWallStallSeconds .. "s."
 
 		if running and not state.solved then
 			if stallCrate then
@@ -627,18 +719,28 @@ BUILDERS.Saw = function(i, folder, info, state)
 					lv.light.Brightness = 1.2 + k * 2.2
 					lv.beacon.Color = Color3.fromRGB(40 + 90 * k, 150 + 105 * k, 60 + 70 * k)
 
-					local tooLow = false
+					-- Say WHICH WAY you are wrong. "Stack higher" was a lie half the time:
+					-- standing on a 2-stack at lever A now fails, and being told to stack
+					-- higher would send you the wrong direction entirely.
+					local verdict = nil
 					for _, o in ipairs(occupants) do
-						if (o.position - lv.mount.Position).Magnitude < 8
-							and supportHeight(o.character) < lv.minStand then
-							tooLow = true
+						if (o.position - lv.mount.Position).Magnitude < 8 then
+							local h = supportHeight(o.character)
+							local d = h - lv.standTop
+							if d < -LEVEL_TOLERANCE then
+								verdict = (h < 0.5) and "NEED " .. lv.level
+									.. (lv.level == 1 and " CRATE" or " CRATES")
+									or "STACK HIGHER"
+							elseif d > LEVEL_TOLERANCE then
+								verdict = "TOO HIGH  -  STAND ONE LOWER"
+							end
 						end
 					end
-					if tooLow then
-						lv.label.Text = "LEVER " .. lv.id .. "  -  STACK HIGHER"
+					if verdict then
+						lv.label.Text = "LEVER " .. lv.id .. "  -  " .. verdict
 						lv.label.TextColor3 = Color3.fromRGB(255, 150, 90)
 					else
-						lv.label.Text = "LEVER " .. lv.id .. "  -  LIVE"
+						lv.label.Text = "LEVER " .. lv.id .. "  -  LIVE  (HOLD E)"
 						lv.label.TextColor3 = Color3.fromRGB(120, 255, 150)
 					end
 				end
@@ -1400,25 +1502,62 @@ BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
 		return
 	end
 
+	-- A solved placement bay LATCHES. With the real rig, advancing requires player 2 to sweep
+	-- the physical mat clear and re-place for the next bay -- there are only two cubes of each
+	-- colour, so the cubes holding one bay open are the same ones the next bay needs. Without
+	-- this latch that sweep re-arms every bay behind player 1: the void opens back up under
+	-- someone walking out of a bay they already cleared.
+	--
+	-- Measured before the latch went in: 2 crates -> "VOID - CLEARED", then the mat sweep ->
+	-- 0 crates -> "VOID - RED x1" again, 5.5 s later.
+	--
+	-- Switch-mode bays were already immune, which is why only this branch needs it. The R
+	-- hotkey below is still the way to genuinely un-solve a bay.
+	if state.solved then
+		return
+	end
+
 	state.setSolved(checkSolved(state.info, cellsList))
 end)
 
--- Debug reset (R) returns every bay to unsolved and re-arms the ones that own their own state.
--- Caveat: obstacles that present "solved" as a one-shot tween (the laser grid fading out, for
--- instance) do not animate back -- their run loops resume, but the visual stays cleared. Only
--- the saw bay rebuilds itself properly, via state.reset.
+-- A bay is reset by REBUILDING it, not by asking it to tidy up after itself.
+--
+-- The old reset called setSolved(false) plus an optional per-obstacle state.reset(), and
+-- carried a standing caveat: obstacles that present "solved" as a one-shot tween (the laser
+-- grid fading out) never animated back, so their loops resumed while the visual stayed
+-- cleared. Only the saw bay rebuilt properly. buildBay already destroys the Obstacle folder
+-- and runs the builder from scratch, and every run loop in this file is `while folder.Parent
+-- do`, so destroying the folder terminates all of them cleanly. Rebuilding is therefore a
+-- genuine fresh state for every bay, and the caveat is gone rather than documented.
+--
+-- Crates are a separate concern and belong to BlockSync: a rebuilt bay that kept the previous
+-- run's crates would also keep the diff state saying they are there, so re-placing the same
+-- cube would be a no-op.
+local function resetBay(i)
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	if bay then
+		BlockSync.clearBay(bay)
+	end
+	return buildBay(i)
+end
+
+RunControl.rebuildBay = resetBay
+RunControl.bayState = function(i)
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	return bay and states[bay]
+end
+RunControl.markReady()
+
 local DebugHotkey = Remotes:WaitForChild("DebugHotkey")
 DebugHotkey.OnServerEvent:Connect(function(_, key)
 	if key ~= "R" then
 		return
 	end
-	for _, st in pairs(states) do
-		st.setSolved(false)
-		if st.reset then
-			st.reset()
-		end
+	for i = 1, Config.NumBays do
+		resetBay(i)
+		task.wait()
 	end
-	print("[HazardManager] all bays reset")
+	print("[HazardManager] all bays rebuilt from scratch")
 end)
 
 print("[HazardManager] one obstacle per bay built for all " .. Config.NumBays .. " bays")

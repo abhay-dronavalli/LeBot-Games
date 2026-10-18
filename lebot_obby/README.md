@@ -6,6 +6,29 @@ kept so the game logic is reviewable in git (and visible to judges reading the r
 
 One person owns the place file. When a script changes in Studio, mirror it here.
 
+## Mirroring without transcription drift
+
+Retyping a script between Studio and git drifts silently, which is why this file used to say
+"verify with a checksum". `tools/studio_sync.py` removes the transcription step instead of
+guarding it:
+
+```
+python tools/studio_sync.py 8767        # serves ./src, GET pulls into Studio, POST writes back
+```
+
+Then from Studio's command bar (or an `execute_luau` call), with HTTP requests enabled:
+
+```lua
+-- disk -> Studio
+script.Source = game:GetService("HttpService"):GetAsync("http://127.0.0.1:8767/Mapping.lua")
+-- Studio -> disk; the reply is "<length> <bytesum>" to compare against the file
+game:GetService("HttpService"):PostAsync("http://127.0.0.1:8767/Mapping.lua", script.Source,
+	Enum.HttpContentType.TextPlain)
+```
+
+The bytes that leave one side are the bytes that land on the other, and both ends report
+length and byte sum so the match is proven rather than assumed.
+
 ## Where each file lives in the place
 
 | Repo path | Studio location | Kind |
@@ -13,22 +36,45 @@ One person owns the place file. When a script changes in Studio, mirror it here.
 | `ReplicatedStorage/Config.lua` | `ReplicatedStorage.Config` | ModuleScript |
 | `ReplicatedStorage/CrateDefs.lua` | `ReplicatedStorage.CrateDefs` | ModuleScript |
 | `ReplicatedStorage/BayData.lua` | `ReplicatedStorage.BayData` | ModuleScript |
+| `ReplicatedStorage/Mapping.lua` | `ReplicatedStorage.Mapping` | ModuleScript |
+| `ServerScriptService/RunControl.lua` | `ServerScriptService.RunControl` | ModuleScript |
+| `ServerScriptService/DebugMenu.lua` | `ServerScriptService.DebugMenu` | Script |
 | `ServerScriptService/BlockSync.lua` | `ServerScriptService.BlockSync` | ModuleScript |
 | `ServerScriptService/SkyArm.lua` | `ServerScriptService.SkyArm` | ModuleScript |
+| `ServerScriptService/Bridge.lua` | `ServerScriptService.Bridge` | ModuleScript |
+| `ServerScriptService/ArmMirror.lua` | `ServerScriptService.ArmMirror` | ModuleScript |
+| `ServerScriptService/BridgeProbe.lua` | `ServerScriptService.BridgeProbe` | Script |
 | `ServerScriptService/HazardManager.lua` | `ServerScriptService.HazardManager` | Script |
 | `ServerScriptService/DebugMode.lua` | `ServerScriptService.DebugMode` | Script |
 | `ServerScriptService/GhostMode.lua` | `ServerScriptService.GhostMode` | Script |
+| `StarterPlayerScripts/DebugMenu.client.lua` | `StarterPlayer.StarterPlayerScripts.DebugMenu` | LocalScript |
 | `StarterPlayerScripts/DebugCellEditor.client.lua` | `StarterPlayer.StarterPlayerScripts.DebugCellEditor` | LocalScript |
 | `StarterPlayerScripts/GhostControl.client.lua` | `StarterPlayer.StarterPlayerScripts.GhostControl` | LocalScript |
 | `StarterPlayerScripts/ObjectiveHud.client.lua` | `StarterPlayer.StarterPlayerScripts.ObjectiveHud` | LocalScript |
 
 `ReplicatedStorage.Remotes` holds RemoteEvents (`CellEdit`, `CellsUpdated`, `DebugHotkey`,
-`GhostToggle`, `Objective`) and has no source of its own.
+`GhostToggle`, `Objective`, `DebugCommand`, `DebugStatus`) and has no source of its own.
 
 `Objective` is the on-screen task channel: an obstacle fires it with
 `{title, task, hint, tone, timer, timerLabel, timerTone, flash}` whenever its state changes,
 and with `nil` to clear the HUD. It's deliberately generic rather than saw-wall specific, so
 the other bays can drive the same HUD as they get built.
+
+## Rebuilding geometry from Config
+
+`build/fit_shell.lua` resizes the shell walls and roof trusses to match `Config.WallHeight`.
+Run it from the command bar in **Edit** mode (geometry changed during a playtest is discarded):
+
+```lua
+loadstring(game:GetService("HttpService")
+    :GetAsync("http://127.0.0.1:8767/fit_shell.lua"))()   -- or pass a height: (...)(60)
+```
+
+It **fits** rather than rebuilds -- resizing the parts that are already there, keeping their
+materials and names -- so it is idempotent and cannot lose detail that exists only in the
+place file. It deliberately does not move the rail beams: they sit at `Config.GantryHeight`,
+and SkyArm's reach is measured down from there, so raising the roof is free but raising the
+rails stops the arm touching the floor.
 
 ## World geometry
 

@@ -11,11 +11,30 @@ if not Config.DebugMode then
 	return
 end
 
+-- Exactly one source may own the crates, but WHICH one is a runtime choice now, not a startup
+-- constant: the debug menu flips it mid-session. So this script always loads and simply stays
+-- quiet unless it is the current source. An earlier version returned here whenever
+-- Config.LiveFeed was set, which also took the debug menu out with it.
+local RunControl = require(ServerScriptService:WaitForChild("RunControl"))
+
+local function isSource()
+	return RunControl.feedMode == "sim"
+end
+
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
 local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
--- Hardcoded to Bay 1 until ActiveBayTracker (Section 10.2 step 6) exists to pick the real active bay.
-local targetBay = Workspace:WaitForChild("Warehouse"):WaitForChild("Bay01")
-SkyArm.setActiveBay(targetBay)
+-- Follows whichever bay is live (RunControl), so jumping to a scenario in the debug menu
+-- points the cell editor at THAT bay. It used to pin Bay01, which meant every scenario after
+-- the first looked unsolvable: the clicks went to a bay nobody was standing in.
+local function targetBayModel()
+	return RunControl.activeBayModel()
+		or Workspace:WaitForChild("Warehouse"):WaitForChild("Bay01")
+end
+
+SkyArm.setActiveBay(targetBayModel())
+
+-- (the reset handler is registered further down, once cellState exists -- a closure only
+-- sees locals declared above it, and reading one declared below silently gets a nil global.)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local CellEdit = Remotes:WaitForChild("CellEdit")
@@ -83,6 +102,12 @@ local function diffCells(oldList, newList)
 	return added, removed, changed
 end
 
+RunControl.ActiveBayChanged:Connect(function()
+	cellState = {}
+	previousCellsList = {}
+	SkyArm.setActiveBay(targetBayModel())
+end)
+
 local function applyAndBroadcast()
 	local newList = buildCellsList()
 	local added, removed, changed = diffCells(previousCellsList, newList)
@@ -100,11 +125,14 @@ local function applyAndBroadcast()
 	end
 	previousCellsList = newList
 	CellsUpdated:FireAllClients(newList)
-	BlockSync.applyCells(targetBay, newList)
+	BlockSync.applyCells(targetBayModel(), newList)
 	return newList
 end
 
 CellEdit.OnServerEvent:Connect(function(player, col, row, action)
+	if not isSource() then
+		return
+	end
 	if type(col) ~= "number" or type(row) ~= "number" then
 		return
 	end

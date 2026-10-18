@@ -1,5 +1,23 @@
 local Config = {}
 
+-- Exactly one input path owns the crates (robot-link.md). LiveFeed takes the operator's real
+-- cubes over the WebSocket; DebugMode fakes them with the on-screen cell editor and animates a
+-- delivery with SkyArm. Both at once would fight over the same bay, so DebugMode stands down
+-- whenever LiveFeed is on.
+Config.LiveFeed = true
+Config.BridgeUrl = "ws://127.0.0.1:8765"   -- the robot laptop's LAN IP when it is not this one
+-- Which bay the mat currently maps to. Hardcoded until ActiveBayTracker picks it from where
+-- player 1 is standing -- that module is what makes one physical mat serve nine bays.
+Config.LiveBay = 1
+
+-- How the real arm is drawn. "gantry" is the Sky Arm proper: it hangs from the ceiling rails,
+-- slides along the roof between bays, and is sized to the room. The real arm drives it by the
+-- tip, so it reaches where the real arm reaches.
+-- "mirror" is the literal stick-figure mirror -- joint for joint, true SO-101 proportions. It
+-- is honest but it is a 43 stud tower that stands at the door and pokes through the roof,
+-- which needs WallHeight ~50 and BayGap >= 12 to house (robot-link.md section 4).
+Config.ArmStyle = "gantry"
+
 Config.DebugMode = true
 
 -- Grid / world layout (Section 7)
@@ -43,7 +61,9 @@ Config.CrateRemoveDelay = 0.4
 -- queue serializes them, so this bay's three placements cost ~17s before the player has climbed
 -- anything. 30 played too fast once the no-place band went in, since stalling is no longer
 -- available to buy that time back.
-Config.SawWallSeconds = 60
+-- 60 -> 75: the wall is no longer vaultable, so every crossing has to be earned by
+-- actually solving it, and the extra 15 s is the room that costs.
+Config.SawWallSeconds = 75
 Config.SawWallBrakeEnabled = true
 
 -- You cannot drop a crate in front of live blades to stall the wall: a cell within this many
@@ -62,7 +82,10 @@ Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
 Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area
-Config.WallHeight = 28   -- tall enough that the gantry doesn't feel cramped overhead
+-- Raised from 28. Purely the room: nothing reads WallHeight at runtime, it records what the
+-- baked geometry is -- so changing it means re-running build/fit_shell.lua, which is what
+-- makes the shell follow it again.
+Config.WallHeight = 48
 Config.GantryHeight = 18 -- where the SkyArm rails/trolley ride; kept well below the ceiling
 -- so there's open air above the arm. Deliberately separate from WallHeight: room height and
 -- gantry height are different concerns, and the arm's reach math depends only on this one.

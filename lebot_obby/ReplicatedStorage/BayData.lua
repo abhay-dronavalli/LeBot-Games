@@ -34,11 +34,20 @@ return {
 		-- A's crate buys a stall when the wall meets it, but only Config.SawWallStallSeconds
 		-- and only once, so the whole bay stays a race -- and standing on that crate stops
 		-- being safe the moment its stall is spent.
+		-- A lever belongs to ONE stand level, and the builder derives everything from it: the
+		-- mounting height, the painted level band on the wall, and the gate. `standLevel` is
+		-- how many crates you stand on -- 1 for A, 2 for B -- so a lever cannot be reached from
+		-- the wrong height in either direction. Standing on the stacked pair does NOT let you
+		-- reach down and flip A; each lever costs its own crates, which is the cube budget
+		-- argument this whole bay is built on.
+		--
+		-- Heights are no longer written here because they follow the real cube size
+		-- (Mapping.cubeStuds, 6.72 studs) and would only rot if duplicated.
 		levers = {
 			{id = "A", side = "left",  cell = {0, 1}, color = "orange", level = 1,
-				height = 8.6,  minStand = 3},
+				standLevel = 1},
 			{id = "B", side = "right", cell = {3, 0}, color = "red",    level = 2,
-				height = 11.8, minStand = 6},
+				standLevel = 2},
 		},
 		brakeColor = "orange",
 		note = "Bay seals behind you; a wall of chainsaws closes in from the exit end. Lever A"

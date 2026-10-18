@@ -19,8 +19,19 @@ Two levers are the way out, both mounted too high to reach from the floor:
 
 | Lever | Where | Needs | Does |
 |---|---|---|---|
-| **A** | left wall, row 1 (deeper in) | stand on **1 crate**, hold **E** | kills the spinning blades, arms Lever B |
-| **B** | right wall, row 0 (by the door) | stand on a **stacked pair**, hold **E** | halts the wall and **sinks it into the floor** |
+| **A** | left wall, row 1 (deeper in) | stand on **exactly 1 crate**, hold **E** | kills the spinning blades, arms Lever B |
+| **B** | right wall, row 0 (by the door) | stand on **exactly 2 stacked**, hold **E** | halts the wall and **sinks it into the floor** |
+
+**A lever belongs to one stand level, not a minimum.** `BayData` gives each lever a
+`standLevel` (1 or 2) and the builder derives everything from it — mounting height, the painted
+level band on the wall, and the gate. Standing *too high* fails just as standing too low does:
+the stacked pair cannot reach down and flip Lever A. That is what makes each lever cost its own
+crates, which is the cube-budget argument the whole bay rests on.
+
+The levers are bolted **flush to the bay's side walls**. They used to sit on a 3.5-stud block
+jutting into the bay — not for looks, but because the bay had no side walls at all
+(`Border.Left/Right` are 0.25-stud floor stripes you can walk over). The Saw builder now puts
+real side walls in, so the lever is a backplate on a wall like it should be.
 
 Each lever is a `ProximityPrompt` on the housing: climb to it and hold **E** for
 `Config.SawLeverHoldSeconds`. The prompt is only enabled while that lever is armed. An
@@ -46,10 +57,19 @@ The physical rig has **two cubes per colour**. A cell holds one colour at level 
 So a three-high stack is **not buildable**. Height difficulty comes from *what you
 stand on* instead:
 
-| Needs | Crate top | Lever height |
-|---|---|---|
-| 1 cube (L1) | 4 studs | ~8.6 |
-| 2 cubes (L2) | 7 studs | ~11.8 |
+| Needs | Crate top | Lever height | Gate |
+|---|---|---|---|
+| 1 cube (L1) | 6.72 studs | 9.12 | within ±3.02 of 6.72 |
+| 2 cubes (L2) | 13.44 studs | 15.84 | within ±3.02 of 13.44 |
+
+**These numbers come from the real cube, not from tuning.** A 48 mm cube at the pinned
+mat-to-bay scale is 6.72 studs (see [robot-link.md](robot-link.md) §2), so a pair is
+13.44 — and a default jump clears about 12.8 studs of head height, which falls *between*
+them. The cube cost is enforced by physical scale: one cube is climbable, a stacked pair
+is not. The earlier 4-stud crate needed `minStand` to carry that burden alone.
+
+Verified at the new scale: standing on the floor gates both levers off, one cube passes
+A and fails B, a stacked pair passes both.
 
 Lever A costs 1 cube, Lever B costs 2. All-orange would need 3 — over budget. **That
 is what forces the two levers onto different colours**, and it leaves exactly one
@@ -102,15 +122,16 @@ real way to die on top of your own block, which no other bay allows.
 
 A default Roblox jump from the floor reaches roughly **12.8 studs of head height**,
 which would clear both levers with no crates at all. Mounting them higher doesn't fix
-it cleanly (you'd need ~20 studs, which collides with the gantry at `GantryHeight = 18`).
+it cleanly, and the gantry rails sit at `GantryHeight = 18`.
 
 Instead, a lever only responds if a downward raycast from the player finds a crate
-part (`Base` or `Topper`) under them, and that crate's top is at or above the lever's
-`minStand`. That makes the cube cost **exact** rather than approximate.
+(tagged `IsCrate`, or the legacy `Base`/`Topper` names) under them, and that crate's
+top is **within half a cube of the lever's own stand level** — not merely at or above
+it. The cube cost is therefore exact in both directions: too high fails like too low.
 
-Lever B is mounted high enough that a single crate can't even make contact, so there'd
-be no touch event and therefore no feedback — it would just read as broken. A proximity
-check in the run loop covers that: stand near an armed lever on too short a stack and
+Lever B is mounted where a single crate cannot reach, so there'd be no feedback at all —
+it would just read as broken. A proximity check in the run loop covers that: stand near
+an armed lever at the wrong height and
 the label reads `STACK HIGHER`.
 
 ---
@@ -156,8 +177,8 @@ Bay 1 spans `z = 0..24`, `x = 0..32`. Entrance at `z = 0`.
 
 ```
   z=0   ENTRANCE (gate seals behind you)
-        row 0   Lever B (right wall, x=30.25, y=11.8)   crate cell (3,0) L2
-  z=8   row 1   Lever A (left wall,  x=1.75,  y=8.6)    crate cell (0,1) L1
+        row 0   Lever B (right wall, x=31.32, y=15.84)  crate cell (3,0) L2
+  z=8   row 1   Lever A (left wall,  x=0.68,  y=9.12)   crate cell (0,1) L1
   z=16  row 2
   z=22  <- WALL STARTS HERE, closes toward z=2.5
 ```
@@ -168,8 +189,13 @@ The wall travels **far end → entrance**. Two things follow from that:
 2. A's crate jams the wall at `z≈15.1`, but only for 10s — so the finish stays a race.
    Dropping the spare cube further down the lane buys another 10s.
 
-Lever housings are 3.5 studs wide and **jut into the bay**. Flush with the wall they'd
-sit a couple of studs short of the crate's edge and be unreachable.
+The wall is **16 studs tall and cannot be vaulted** — a default jump clears about 12.8 studs
+of head height, and the old 7.4-stud wall was therefore a hurdle rather than a wall. The only
+way past is to sink it.
+
+It runs in **side channels** rather than spanning the bay edge to edge: it covers x 1.1–30.9
+against a 32-wide bay, so it sweeps *past* the wall-mounted levers at x 0.68 and 31.32 instead
+of through them. The 0.4-stud gap at each side is far too narrow to walk through.
 
 The handle rotates about **Z**, so it swings out into the bay toward whoever is standing in
 front of it. An earlier version rotated about X, which tipped each lever down the lane and
@@ -181,7 +207,7 @@ unchanged.
 
 ## 8. Timing
 
-`Config.SawWallSeconds = 60` is the whole bay's difficulty in one number.
+`Config.SawWallSeconds = 75` is the whole bay's difficulty in one number. It was 60; the wall is no longer vaultable, so every crossing has to be earned by actually solving the bay, and the extra 15 s is the room that costs.
 
 The arithmetic that matters: one `SkyArm.reachAndPlace` is **~5.5s of animation**, and
 the job queue **serializes** them (no overlap). A level-2 cell is one arm trip, not two.
@@ -230,9 +256,9 @@ gets a *different instance* and proves nothing.
 | Lever A from one crate | threw; blades dead, B goes `LIVE` |
 | Wall after A | 21.3 → 18.8 → 17.5 → 16.2 → **15.1 → 15.1 → 15.1** (jammed) |
 | Player on that crate | survived |
-| Lever B from the pair | wall sank to y=−5, `CanCollide = false` |
+| Lever B from the pair | wall sinks below the floor, `CanCollide = false` |
 | Console | `Lever A thrown` → `Lever B thrown` → `Saw SOLVED` |
-| Wall speed at 60s | 0.328 studs/s vs 0.325 target |
+| Wall speed | 0.328 studs/s vs 0.325 target (measured at the old 60 s; 75 s not re-measured) |
 | Crate in front of live blades | **refused**, not delivered |
 | Crate clear of the wall | delivered normally |
 | Lever A via E-hold | threw; blades dead, B's prompt enabled |
@@ -241,6 +267,13 @@ gets a *different instance* and proves nothing.
 | Stall spent once | wall passed the same crate without re-jamming |
 | HUD outside bay | hidden |
 | HUD task switch | `LEVER A` → after throw → `LEVER B`, hints follow |
+| **Wall height** | 16 studs, top at 16 vs a ~12.8 stud jump — **not vaultable** |
+| **Wall clears the levers** | wall spans x 1.1–30.9; levers at x 0.68 / 31.32 |
+| **Side walls exist** | 2, 16 studs, collidable |
+| **Level bands** | painted at y 6.92 and 13.64 |
+| **Exact-level gate** | A: floor ✗, 1 crate ✓, 2 stacked ✗ · B: floor ✗, 1 ✗, 2 ✓ |
+| **Sink depth** | wall top ends at −1.5, below the floor |
+| **HUD checklist** | both levers listed with state; `1:15` counting down |
 | HUD countdown | `0:58` → `0:56` over 2s, and `STALLED 0:10` during a jam |
 | Refusal flash | `BLADES LIVE - CANNOT DROP THERE` |
 | Lever swing axis | knob moves in X, Z unchanged |
@@ -279,13 +312,18 @@ gets a *different instance* and proves nothing.
 
 ## 12. Open
 
-- **60s and the 10s stall are unvalidated.** Both need a real teleop run to tune.
-- **Lever heights (8.6 / 11.8) are unplaytested.** The `minStand` gate is what actually
-  enforces the cube cost, so the heights are cosmetic within a range — but they should
-  still feel right.
+- **75s and the 10s stall are unvalidated.** Both need a real teleop run to tune. The wall
+  speed was measured at the old 60 s and has not been re-measured since.
+- **Lever heights (9.12 / 15.84) are unplaytested.** They are derived from `standLevel` and
+  the real cube size rather than chosen, so they should be right by construction — but the
+  *feel* of reaching them is untested.
+- **The levers still have advisory `color` fields** in `BayData`. The gate is height-only,
+  which is what makes this bay immune to the vision system misnaming a cube. Do not be
+  tempted to gate on colour as well.
 - **No checkpoint.** Dying respawns at world spawn; you walk back through the bays.
   `GameState` doesn't exist yet.
-- **`ActiveBayTracker` doesn't exist**, so `DebugMode` hardcodes Bay 1 and only Bay 1 is
+- **`ActiveBayTracker` doesn't exist**; `RunControl.activeBay` stands in and the debug menu
+  drives it, so every bay is reachable — see [debug-menu.md](debug-menu.md). Previously only Bay 1 was
   wired to the arm.
 - **Two players** — not yet decided whether to fold into `ActiveBayTracker` or stay
   single-runner.
