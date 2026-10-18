@@ -97,3 +97,20 @@ CellsUpdated.OnClientEvent:Connect(function(cellsList)
 	end
 end)
 
+local HOTKEYS = {
+	[Enum.KeyCode.One] = "1", [Enum.KeyCode.Two] = "2", [Enum.KeyCode.Three] = "3",
+	[Enum.KeyCode.Four] = "4", [Enum.KeyCode.Five] = "5", [Enum.KeyCode.Six] = "6",
+	[Enum.KeyCode.Seven] = "7", [Enum.KeyCode.Eight] = "8", [Enum.KeyCode.Nine] = "9",
+	[Enum.KeyCode.N] = "N", [Enum.KeyCode.T] = "T", [Enum.KeyCode.K] = "K",
+	[Enum.KeyCode.H] = "H", [Enum.KeyCode.M] = "M", [Enum.KeyCode.R] = "R",
+}
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	local key = HOTKEYS[input.KeyCode]
+	if key then
+		DebugHotkey:FireServer(key)
+	end
+end)
