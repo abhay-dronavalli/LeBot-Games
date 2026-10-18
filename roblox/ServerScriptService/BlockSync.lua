@@ -133,15 +133,26 @@ local function buildCrateModel(color, level)
 end
 
 local function positionCrate(crateModel, worldCFrame, level)
-	local base = crateModel.Base
+	-- A rapid colour/level change destroys the old crate while an arm job may still hold a
+	-- reference to it, so every late callback has to tolerate a dead model.
+	local base = crateModel and crateModel.Parent and crateModel:FindFirstChild("Base")
+	if not base then
+		return
+	end
 	base.CFrame = worldCFrame * CFrame.new(0, base.Size.Y / 2, 0)
-	crateModel.Stripe.CFrame = base.CFrame * CFrame.new(0, base.Size.Y / 2 + 0.05, 0)
+	local stripe = crateModel:FindFirstChild("Stripe")
+	if stripe then
+		stripe.CFrame = base.CFrame * CFrame.new(0, base.Size.Y / 2 + 0.05, 0)
+	end
 
 	if level == 2 then
 		local topper = crateModel:FindFirstChild("Topper")
 		if topper then
 			topper.CFrame = base.CFrame * CFrame.new(0, base.Size.Y / 2 + topper.Size.Y / 2, 0)
-			crateModel.TopperStripe.CFrame = topper.CFrame * CFrame.new(0, topper.Size.Y / 2 + 0.05, 0)
+			local topperStripe = crateModel:FindFirstChild("TopperStripe")
+			if topperStripe then
+				topperStripe.CFrame = topper.CFrame * CFrame.new(0, topper.Size.Y / 2 + 0.05, 0)
+			end
 		end
 	end
 end
@@ -191,6 +202,9 @@ function BlockSync.applyCells(bayModel, newCellsList)
 				local crateModel = buildCrateModel(newCell.color, newCell.level)
 				live[key] = crateModel
 				SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, newCell.level, function()
+					if not crateModel.Parent then
+						return -- superseded by a newer edit while the arm was in flight
+					end
 					positionCrate(crateModel, worldCFrame, newCell.level)
 					spawnShockwave(bayModel, worldCFrame, newCell.level, newCell.color)
 				end)
