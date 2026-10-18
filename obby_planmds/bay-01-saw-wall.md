@@ -1,6 +1,8 @@
 # Bay 1 — Saw Wall
 
 **Status:** built and verified in Studio. Solvable end to end.
+**Shared systems used:** objective HUD, placement guards, reach gating — all described in
+[README.md](README.md) so other bays can reuse them.
 **Code:** `lebot_obby/ServerScriptService/HazardManager.lua` → `BUILDERS.Saw`
 **Data:** `lebot_obby/ReplicatedStorage/BayData.lua` → `[1]`
 **Tuning:** `lebot_obby/ReplicatedStorage/Config.lua` → `SawWall*`
@@ -113,7 +115,7 @@ the label reads `STACK HIGHER`.
 
 ---
 
-## 4b. On-screen objective
+## 5. On-screen objective
 
 The bay drives a HUD (`StarterPlayerScripts/ObjectiveHud`) through the generic
 `Remotes.Objective` event, so the player is never guessing what the bay wants:
@@ -133,7 +135,7 @@ world. The countdown turns red under 10s by itself, whatever the task tone is.
 The payload is `{title, task, hint, tone, timer, timerLabel, timerTone, flash}` and firing
 `nil` clears the HUD — nothing in it is saw-wall specific, so later bays can reuse it.
 
-## 5. Colour code
+## 6. Colour code
 
 Green means **"this is your target right now"** and nothing else is ever green.
 
@@ -148,7 +150,7 @@ screen at once.
 
 ---
 
-## 6. Geometry
+## 7. Geometry
 
 Bay 1 spans `z = 0..24`, `x = 0..32`. Entrance at `z = 0`.
 
@@ -177,7 +179,7 @@ unchanged.
 
 ---
 
-## 7. Timing
+## 8. Timing
 
 `Config.SawWallSeconds = 60` is the whole bay's difficulty in one number.
 
@@ -194,7 +196,7 @@ longer than 0.05s, which made a nominal 30s traverse take ~34s before this was f
 
 ---
 
-## 8. Architecture change this bay introduced
+## 9. Architecture change this bay introduced
 
 Bay 1 is the first obstacle solved by an **action** rather than a **placement**, so it
 opted out of the usual path:
@@ -214,7 +216,7 @@ cleared. Only the saw bay rebuilds itself properly.
 
 ---
 
-## 9. Verified
+## 10. Verified
 
 Driven through the real `CellEdit` remote, not by requiring modules — `execute_luau`'s
 Server datamodel is a separate Luau VM with its own module cache, so a direct `require`
@@ -245,7 +247,7 @@ gets a *different instance* and proves nothing.
 
 ---
 
-## 10. Bugs found building this (don't reintroduce)
+## 11. Bugs found building this (don't reintroduce)
 
 1. **Wall blocked entry.** It started 2 studs inside the door, full width, `CanCollide`
    on. Missed because the test *teleported* to row 2 and never walked through the door.
@@ -275,7 +277,7 @@ gets a *different instance* and proves nothing.
 
 ---
 
-## 11. Open
+## 12. Open
 
 - **60s and the 10s stall are unvalidated.** Both need a real teleop run to tune.
 - **Lever heights (8.6 / 11.8) are unplaytested.** The `minStand` gate is what actually
