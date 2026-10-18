@@ -86,18 +86,25 @@ states.Idle = {
 	end,
 }
 
+-- The player who started picks on the mode select screen (StarterGui.PatternModeSelect) through the
+-- PatternPick remote -> Game:pick. No pick by the end of the countdown means Easy. After a pick the
+-- state holds for Config.modeConfirmSeconds ("HARD MODE") before round 1.
 states.ModeSelect = {
 	enter = function(self)
 		self.mode, self.round, self.score, self.roundScores = nil, 0, 0, {}
+		self.picked = false
 		self:startTimer(Config.modeSelectSeconds)
-		self.message = "Choosing a mode..."
+		self.message = (self.chooserName or "Someone") .. " is choosing a mode"
 	end,
-	tick = function(self)
-		if self.timeLeft <= 0 then
-			-- The real mode select screen is build step 6. Until then: Config.debugForceMode, else Easy.
-			self.mode = Config.debugForceMode == "hard" and "Hard" or "Easy"
-			self.round = 1
-			self:setState("Round")
+	tick = function(self, dt)
+		if self.picked then
+			self.confirmLeft -= dt
+			if self.confirmLeft <= 0 then
+				self.round = 1
+				self:setState("Round")
+			end
+		elseif self.timeLeft <= 0 then
+			self:choose("Easy", "auto-picked at 0")
 		end
 	end,
 }
@@ -198,7 +205,7 @@ function Game.new(opts)
 	local liveModel = opts.cabinet:WaitForChild("LiveBoard")
 	self.targetBoard = TargetBoard.new(targetModel)
 	self.liveBoard = LiveBoard.new(liveModel)
-	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard, boards = { targetModel, liveModel } })
+	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard })
 	self.liveGrid = {}
 	self.state = "Idle"
 	self.mode, self.round, self.score, self.roundScores = nil, 0, 0, {}
@@ -206,13 +213,46 @@ function Game.new(opts)
 	return self
 end
 
--- Starts a game. Returns false (and does nothing) if one is already running.
-function Game:start()
+-- Starts a game for the player who pressed Play; that player picks the mode. Returns false (and does
+-- nothing) if one is already running. Config.debugForceMode skips the mode select screen.
+function Game:start(player)
 	if self.state ~= "Idle" then
 		return false
 	end
-	self:setState("ModeSelect")
+	self.chooserName = player and player.Name or nil
+	self.chooserUserId = player and player.UserId or nil
+	local forced = Config.debugForceMode
+	if forced == "easy" or forced == "hard" then
+		self.mode, self.round, self.score, self.roundScores = forced == "hard" and "Hard" or "Easy", 1, 0, {}
+		log("mode %s (debugForceMode)", self.mode)
+		self:setState("Round")
+	else
+		self:setState("ModeSelect")
+	end
 	return true
+end
+
+-- A mode pick from a client ("easy" or "hard"). Accepted only from the player who started, only during
+-- ModeSelect, and only once. Returns true if accepted.
+function Game:pick(player, choice)
+	local mode = (choice == "easy" and "Easy") or (choice == "hard" and "Hard") or nil
+	if self.state ~= "ModeSelect" or self.picked or mode == nil or player == nil
+		or player.UserId ~= self.chooserUserId then
+		log("pick rejected: %s chose %s during %s", player and player.Name or "?", tostring(choice), self.state)
+		return false
+	end
+	self:choose(mode, "picked by " .. player.Name)
+	return true
+end
+
+function Game:choose(mode, why)
+	self.mode = mode
+	self.picked = true
+	self.timerRunning = false
+	self.confirmLeft = seconds(Config.modeConfirmSeconds)
+	self.message = string.upper(mode) .. " MODE"
+	log("mode %s (%s)", mode, why)
+	self:pushUI()
 end
 
 -- Runs forever, one step per tick.
@@ -279,6 +319,9 @@ function Game:payload()
 		revealTimeLeft = self.revealPhase and math.ceil(self.revealLeft) or nil,
 		event = event,                 -- { name, banner, phase = "warning" | "active", timeLeft } or nil
 		vanishedCells = vanishedCells, -- sorted list of cells
+		chooser = self.chooserName,    -- who picks the mode this game
+		chooserUserId = self.chooserUserId,
+		confirming = self.state == "ModeSelect" and self.picked == true, -- picked, showing "HARD MODE"
 	}
 end
 

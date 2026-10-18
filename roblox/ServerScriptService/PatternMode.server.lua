@@ -1,12 +1,14 @@
 -- ServerScriptService.PatternMode
--- Wires up Pattern Match: the remotes, the "Play Pattern Match" prompt on PatternCabinet.Entry, and the
--- game loop in ReplicatedStorage.PatternMatch.Game (which holds the state machine).
+-- Wires up Pattern Match: the remotes, the "Play Pattern Match" prompt on PatternCabinet.Entry, the mode
+-- pick from the mode select screen, the click-to-spin boards, and the game loop in
+-- ReplicatedStorage.PatternMatch.Game (which holds the state machine).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Game = require(PatternMatch.Game)
+local BoardSpinner = require(PatternMatch.BoardSpinner)
 local Core = ReplicatedStorage:WaitForChild("Core")
 local StateStore = require(Core:WaitForChild("StateStore"))
 local Events = require(Core:WaitForChild("Events"))
@@ -23,6 +25,7 @@ end
 
 local remotes = getOrCreate(PatternMatch, "Folder", "Remotes")
 local patternUI = getOrCreate(remotes, "RemoteEvent", "PatternUI")          -- server -> clients: HUD payload
+local patternPick = getOrCreate(remotes, "RemoteEvent", "PatternPick")      -- chooser -> server: "easy" / "hard"
 local patternState = getOrCreate(remotes, "BindableEvent", "PatternState")  -- server only: state changes
 
 local cabinet = workspace:WaitForChild("PatternCabinet")
@@ -37,10 +40,27 @@ local patternGame = Game.new({
 })
 
 prompt.Triggered:Connect(function(player)
-	if patternGame:start() then
+	if patternGame:start(player) then
 		print("[PatternMode] " .. player.Name .. " started a game")
 	end
 end)
+
+patternPick.OnServerEvent:Connect(function(player, choice)
+	patternGame:pick(player, choice)
+end)
+
+-- Click a board to spin it 90 degrees. Spins wait while clients are shaking the boards for a tremor.
+for _, name in ipairs({ "TargetBoard", "LiveBoard" }) do
+	local board = cabinet:WaitForChild(name)
+	local spinner = BoardSpinner.new(board, {
+		isShaking = function()
+			return patternGame.events:tremorActive()
+		end,
+	})
+	board:WaitForChild("SpinClick").MouseClick:Connect(function()
+		spinner:request()
+	end)
+end
 
 -- A player who joins mid-game gets the current HUD state right away.
 Players.PlayerAdded:Connect(function(player)

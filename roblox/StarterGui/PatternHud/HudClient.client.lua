@@ -1,14 +1,19 @@
 -- StarterGui.PatternHud.HudClient
 -- Plain Pattern Match HUD: state, round, time left, score and message from the PatternUI remote,
--- plus the event banner, and a small camera shake while a Tremor is active.
--- No styling yet (build step 9).
+-- plus the event banner. While a Tremor is active this client shakes its camera and the boards
+-- (PatternMatch.BoardShake, restored exactly afterwards). Hidden while this player is on the mode
+-- select screen. No styling yet (build step 9).
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Config = require(PatternMatch:WaitForChild("Config"))
+local BoardShake = require(PatternMatch:WaitForChild("BoardShake"))
 local patternUI = PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternUI")
+local cabinet = workspace:WaitForChild("PatternCabinet")
+local localPlayer = Players.LocalPlayer
 
 local CAMERA_SHAKE_STUDS = 0.12
 local CAMERA_SHAKE_RADIANS = math.rad(0.6)
@@ -66,9 +71,11 @@ eventLabel.Font = Enum.Font.GothamBold
 eventLabel.TextColor3 = Color3.fromRGB(255, 210, 60)
 eventLabel.Visible = false
 
--- Camera shake: nudge the camera a little every frame, after the camera scripts have placed it.
+-- Tremor: nudge the camera a little every frame (after the camera scripts have placed it) and shake
+-- both boards locally.
 local shaking = false
-local function setCameraShake(on)
+local boardShake = nil
+local function setTremor(on)
 	if on == shaking then
 		return
 	end
@@ -81,12 +88,19 @@ local function setCameraShake(on)
 				rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS), 0)
 				* CFrame.Angles(0, 0, rng:NextNumber(-CAMERA_SHAKE_RADIANS, CAMERA_SHAKE_RADIANS))
 		end)
+		boardShake = BoardShake.start({ cabinet:WaitForChild("TargetBoard"), cabinet:WaitForChild("LiveBoard") })
 	else
 		RunService:UnbindFromRenderStep("PatternTremor")
+		if boardShake then
+			boardShake:stop()
+			boardShake = nil
+		end
 	end
 end
 
 patternUI.OnClientEvent:Connect(function(p)
+	-- The mode select screen replaces the HUD for the player who is choosing.
+	frame.Visible = not (p.state == "ModeSelect" and p.chooserUserId == localPlayer.UserId)
 	stateLabel.Text = "Pattern Match: " .. p.state
 
 	local round = ""
@@ -115,7 +129,7 @@ patternUI.OnClientEvent:Connect(function(p)
 			eventLabel.Text = string.format("%s  %ds", event.banner, event.timeLeft)
 		end
 	end
-	setCameraShake(event ~= nil and event.name == "tremor" and event.phase == "active")
+	setTremor(event ~= nil and event.name == "tremor" and event.phase == "active")
 
 	local rounds = {}
 	for r, points in ipairs(p.roundScores or {}) do

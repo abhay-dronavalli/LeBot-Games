@@ -3,20 +3,17 @@
 -- PatternMatch.Game owns one and drives it: startRound when a round starts, tick every 0.2 s during
 -- the round, stopRound when it ends. So events only ever run inside a Round.
 --   vanish   - 1-2 empty non-target LiveBoard tiles turn invisible for Config.vanishSeconds (Roblox only)
---   tremor   - both boards shake and clients shake their camera; Core.Events.fire("earthquake", 0.5, 4)
+--   tremor   - Core.Events.fire("earthquake", 0.5, 4); each client shakes the boards and its camera
+--              locally while the HUD payload says the tremor is active (PatternMatch.BoardShake)
 --   inverted - "ARM INVERTED" banner; Core.Events.fire("mirror", 1, 8)
 -- The first event runs one interval into the round (Config.easy/hard.eventEvery, or debugEventEvery),
 -- then one every interval. Each shows a 2 s warning banner first. One event at a time, and never the
 -- same event twice in a row.
 
-local RunService = game:GetService("RunService")
-
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
 
 local WARNING_SECONDS = 2
-local SHAKE_STUDS = 0.15
-local SHAKE_RADIANS = math.rad(1)
 
 local SPECS = {
 	vanish = { banner = "TILES VANISHING", seconds = function() return Config.vanishSeconds end },
@@ -55,12 +52,11 @@ function PatternEvents.pickVanishCells(target, liveGrid, vanished, count, rng)
 	return picked
 end
 
--- opts: core (Core.Events), liveBoard (LiveBoard object), boards (Models that shake), rng (optional Random)
+-- opts: core (Core.Events), liveBoard (LiveBoard object), rng (optional Random)
 function PatternEvents.new(opts)
 	local self = setmetatable({}, PatternEvents)
 	self.core = opts.core
 	self.liveBoard = opts.liveBoard
-	self.boards = opts.boards or {}
 	self.rng = opts.rng or Random.new()
 	self.running = false
 	self.current = nil -- { name, phase = "warning" | "active", timeLeft, cells }
@@ -80,11 +76,10 @@ function PatternEvents:startRound(mode)
 	self.nextAt = self.every -- when the next event runs; its warning starts WARNING_SECONDS earlier
 end
 
--- The round is over: end any event, restore the boards, schedule nothing.
+-- The round is over: end any event, restore the vanished tiles, schedule nothing.
 function PatternEvents:stopRound()
 	self.running = false
 	self.current = nil
-	self:stopShake()
 	table.clear(self.vanished)
 	table.clear(self.sticky)
 	if self.liveBoard then
@@ -179,8 +174,6 @@ function PatternEvents:begin(event, target, liveGrid)
 			log("vanish skipped: its cells filled up during the warning")
 			return
 		end
-	elseif event.name == "tremor" then
-		self:startShake()
 	end
 	if spec.core then
 		self.core.fire(spec.core[1], spec.core[2], spec.core[3])
@@ -200,46 +193,16 @@ function PatternEvents:finish(event, liveGrid)
 				self.vanished[cell] = nil
 			end
 		end
-	elseif event.name == "tremor" then
-		self:stopShake()
 	end
 	self.current = nil
 	log("end %s", event.name)
 end
 
--- Shakes the boards every frame until stopShake, which puts every part back exactly where it was.
-function PatternEvents:startShake()
-	self:stopShake()
-	local saved, pivots = {}, {}
-	for _, board in ipairs(self.boards) do
-		pivots[board] = board:GetPivot()
-		for _, part in ipairs(board:GetDescendants()) do
-			if part:IsA("BasePart") then
-				saved[part] = part.CFrame
-			end
-		end
-	end
-	local rng = self.rng
-	local connection = RunService.Heartbeat:Connect(function()
-		for board, pivot in pairs(pivots) do
-			local offset = CFrame.new(rng:NextNumber(-SHAKE_STUDS, SHAKE_STUDS), 0, rng:NextNumber(-SHAKE_STUDS, SHAKE_STUDS))
-				* CFrame.Angles(0, rng:NextNumber(-SHAKE_RADIANS, SHAKE_RADIANS), 0)
-			board:PivotTo(pivot * offset)
-		end
-	end)
-	self.shake = { saved = saved, connection = connection }
-end
-
-function PatternEvents:stopShake()
-	local shake = self.shake
-	if not shake then
-		return
-	end
-	shake.connection:Disconnect()
-	for part, cframe in pairs(shake.saved) do
-		part.CFrame = cframe
-	end
-	self.shake = nil
+-- True from a tremor's warning until it ends. Clients shake the boards while it is active, and
+-- BoardSpinner waits on this: a spin started before the 2 s warning finishes long before the shake.
+function PatternEvents:tremorActive()
+	local event = self.current
+	return event ~= nil and event.name == "tremor"
 end
 
 -- HUD fields: event = { name, banner, phase, timeLeft } or nil, and the sorted vanished cells.

@@ -1,5 +1,5 @@
--- Edit-time build script for Workspace.PatternCabinet (placeholder floor, Entry pad with the
--- "Play Pattern Match" prompt, TargetBoard, LiveBoard).
+-- Edit-time build script for Workspace.PatternCabinet (placeholder floor on a rough island, Entry pad
+-- with the "Play Pattern Match" prompt, TargetBoard and LiveBoard with click-to-spin detectors).
 -- Not part of the game: run it once in Studio's command bar (or via the MCP execute_luau tool).
 -- Refuses to run if PatternCabinet already exists. Undo with Ctrl+Z.
 
@@ -66,6 +66,29 @@ local floor = part("Floor", Vector3.new(44, 1, 26), CFrame.new(center + Vector3.
 	Color3.fromRGB(150, 140, 120), cabinet)
 local floorTop = floor.Position.Y + floor.Size.Y / 2
 
+-- Island: a rough grass and rock mass under the floor. The Baseplate hides it in normal play; the mode
+-- select shot hides the Baseplate on the chooser's client, so the cabinet floats in open sky.
+local island = Instance.new("Model")
+island.Name = "Island"
+island.Parent = cabinet
+local ISLAND_LAYERS = { -- size, depth of its top below the floor, color, material, turn (deg), x/z nudge
+	{ Vector3.new(48, 2, 30), 0.2, Color3.fromRGB(88, 148, 68), Enum.Material.Grass, 0, 0, 0 },
+	{ Vector3.new(42, 5, 25), 2.2, Color3.fromRGB(112, 102, 90), Enum.Material.Rock, 4, 1, -1 },
+	{ Vector3.new(32, 5, 18), 7.2, Color3.fromRGB(100, 90, 80), Enum.Material.Rock, -6, -1.5, 1 },
+	{ Vector3.new(20, 5, 11), 12.2, Color3.fromRGB(90, 80, 70), Enum.Material.Rock, 9, 2, -1.5 },
+	{ Vector3.new(9, 4, 5), 17.2, Color3.fromRGB(80, 72, 64), Enum.Material.Rock, -3, -1, 0.5 },
+}
+for i, layer in ipairs(ISLAND_LAYERS) do
+	local size, depth, color, material, turn, dx, dz = table.unpack(layer)
+	local top = groundY - depth
+	local rock = part("Layer" .. i, size,
+		CFrame.new(center.X + dx, top - size.Y / 2, center.Z + dz) * CFrame.Angles(0, math.rad(turn), 0), color, island)
+	rock.Material = material
+	rock.CanCollide = false
+	rock.CanQuery = false
+	rock.CanTouch = false
+end
+
 -- Entry pad between the spawn and the boards. ServerScriptService.PatternMode listens to its prompt.
 local entry = part("Entry", Vector3.new(4, 0.4, 4), CFrame.new(center.X, floorTop + 0.2, center.Z + 10),
 	Color3.fromRGB(70, 170, 90), cabinet)
@@ -113,6 +136,12 @@ for i, spec in ipairs({ { "TargetBoard", "TARGET" }, { "LiveBoard", "LIVE" } }) 
 		blocks.Name = "Blocks"
 		blocks.Parent = board
 	end
+	-- Click anywhere on the board to spin it (ServerScriptService.PatternMode). On the Model rather than
+	-- the Base alone, because the tiles cover the Base's top.
+	local spinClick = Instance.new("ClickDetector")
+	spinClick.Name = "SpinClick"
+	spinClick.MaxActivationDistance = 40
+	spinClick.Parent = board
 	board.PrimaryPart = base
 	board.Parent = cabinet
 end

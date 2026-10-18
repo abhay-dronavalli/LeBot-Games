@@ -124,6 +124,7 @@ return {
   holdToClear = 1,
   intermissionSeconds = 10,
   modeSelectSeconds = 15,
+  modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before round 1
   resultsSeconds = 10,                 -- how long Results stays up before Idle
   debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
   debugFastTimers = false,             -- testing: every game timer runs 4x faster

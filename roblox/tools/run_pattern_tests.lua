@@ -223,12 +223,20 @@ if cab then
 		return list
 	end
 
+	local tester = { Name = "Tester", UserId = 1 }
+	-- Easy game from Idle to round 1: mode select runs out, auto-picks Easy, then the confirmation.
+	local function startEasy()
+		g:setState("Idle")
+		g:start(tester)
+		g:step(Config.modeSelectSeconds)
+		g:step(Config.modeConfirmSeconds)
+	end
+
 	Config.debugForceMode = "hard"
 	g:setState("Idle")
-	check("start() from Idle", g:start(), true)
-	check("start() while running is ignored", g:start(), false)
-	g:step(Config.modeSelectSeconds)
-	check("debugForceMode=hard: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
+	check("start() from Idle", g:start(tester), true)
+	check("start() while running is ignored", g:start(tester), false)
+	check("debugForceMode=hard skips mode select: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
 	check("round 1 starts in show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
 	local tcell, tcolor = next(g.target)
 	local tile = board.TargetBoard[tcell]
@@ -264,10 +272,8 @@ if cab then
 
 	section("17. Easy mode unchanged, LiveBoard problem highlight")
 	Config.debugForceMode = nil
-	g:setState("Idle")
-	g:start()
-	g:step(Config.modeSelectSeconds)
-	check("debugForceMode=nil: mode", g.mode, "Easy")
+	startEasy()
+	check("debugForceMode=nil: auto-picked Easy, round 1", g.mode .. " " .. g.state, "Easy Round")
 	local ecell, ecolor = next(g.target)
 	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(board.TargetBoard[ecell].TargetOutline.Visible), "nil false")
 	check("easy: target tile in its color", board.TargetBoard[ecell].Color == Config.colors[ecolor], true)
@@ -330,9 +336,7 @@ if cab then
 	Config.events = { "vanish" }
 	Config.debugEventEvery = 4
 	fakeBlocks = {}
-	g:setState("Idle")
-	g:start()
-	g:step(Config.modeSelectSeconds)
+	startEasy()
 	steps(7, 0.25) -- 1.75 s
 	check("1.75 s: no event yet", tostring(sent[#sent].event), "nil")
 	g:step(0.25) -- 2.0 s: warning, 2 s before the 4 s mark
@@ -384,13 +388,12 @@ if cab then
 	end
 	fakeBlocks = {}
 	g:setState("Idle")
-	g:start()
-	for _ = 1, 60 do g:step(0.25); watch() end -- 15 s of ModeSelect
-	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired, "0 0")
+	g:start(tester)
+	for _ = 1, 66 do g:step(0.25); watch() end -- 15 s of ModeSelect + 1.5 s confirmation
+	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired .. " " .. g.state, "0 0 Round")
 	for _ = 1, 240 do g:step(0.25); watch() end -- round 1, 60 s, empty grid
 	check("round 1 timed out", g.state, "Intermission")
-	check("board parts back exactly where they were", board.LiveBoard.Base.CFrame == baseBefore and board.LiveBoard.Blocks.A1.CFrame == blockBefore, true)
-	check("no shake left running", g.events.shake == nil, true)
+	check("server never moved the boards (tremor shake is client-side)", board.LiveBoard.Base.CFrame == baseBefore and board.LiveBoard.Blocks.A1.CFrame == blockBefore, true)
 	for _ = 1, 40 do g:step(0.25); watch() end -- 10 s of Intermission, then round 2 starts
 	check("round 2 started, schedule reset", g.state .. " " .. g.round .. " next at " .. g.events.nextAt, "Round 2 next at 3")
 	check("no event outside a Round", outside, 0)
@@ -410,19 +413,102 @@ if cab then
 	check("Core.Events: earthquake 0.5 4 per tremor, mirror 1 8 per inverted", quakes .. "/" .. tremors .. " " .. mirrors .. "/" .. inverts,
 		tremors .. "/" .. tremors .. " " .. inverts .. "/" .. inverts)
 
-	section("21. tremor shake restores every part exactly")
+	section("21. tremor board shake (BoardShake, run on clients) restores every part exactly")
+	local BoardShake = require(pm.BoardShake)
 	local baseStart = board.LiveBoard.Base.CFrame
 	local tileStart = board.TargetBoard.C4.CFrame
-	g.events:startShake()
+	local shake = BoardShake.start({ board.TargetBoard, board.LiveBoard })
 	local moved = false
 	for _ = 1, 10 do
 		task.wait()
 		if board.LiveBoard.Base.CFrame ~= baseStart then moved = true end
 	end
 	table.insert(lines, "     (boards moved while shaking: " .. tostring(moved) .. ")")
-	g.events:stopShake()
-	check("after stopShake: LiveBoard.Base and TargetBoard.C4 exactly restored",
+	shake:stop()
+	check("after stop: LiveBoard.Base and TargetBoard.C4 exactly restored",
 		board.LiveBoard.Base.CFrame == baseStart and board.TargetBoard.C4.CFrame == tileStart, true)
+
+	section("22. mode select: only the starter picks, only during ModeSelect, only once")
+	local alice, bob = { Name = "Alice", UserId = 101 }, { Name = "Bob", UserId = 202 }
+	Config.debugForceMode = nil
+	Config.debugEventEvery = nil
+	fakeBlocks = {}
+	g:setState("Idle")
+	check("Alice starts a game", g:start(alice), true)
+	check("state | chooser | HUD message", g.state .. " | " .. sent[#sent].chooser .. " | " .. sent[#sent].message,
+		"ModeSelect | Alice | Alice is choosing a mode")
+	check("Bob can't pick", g:pick(bob, "hard"), false)
+	check("an unknown choice is rejected", g:pick(alice, "medium"), false)
+	check("still choosing, no mode yet", g.state .. " " .. tostring(g.mode), "ModeSelect nil")
+	check("Alice picks hard", g:pick(alice, "hard"), true)
+	check("payload: confirming, mode, message", tostring(sent[#sent].confirming) .. " " .. sent[#sent].mode .. " | " .. sent[#sent].message,
+		"true Hard | HARD MODE")
+	check("a second pick is rejected", g:pick(alice, "easy"), false)
+	steps(5, 0.25) -- 1.25 s of the 1.5 s confirmation
+	check("confirmation still showing at 1.25 s", g.state, "ModeSelect")
+	g:step(0.25)
+	check("then round 1 starts in Hard", g.state .. " " .. g.round .. " " .. g.mode, "Round 1 Hard")
+	check("a pick during the round is rejected", g:pick(alice, "easy"), false)
+	g:setState("Idle")
+	g:start(alice)
+	steps(59, 0.25) -- 14.75 s
+	check("14.75 s: no pick yet", g.state .. " " .. tostring(g.mode), "ModeSelect nil")
+	g:step(0.25)
+	check("15 s: auto-picks Easy and confirms", g.mode .. " " .. tostring(sent[#sent].confirming) .. " " .. sent[#sent].message, "Easy true EASY MODE")
+	Config.debugForceMode = "easy"
+	g:setState("Idle")
+	g:start(alice)
+	check("debugForceMode=easy skips the screen", g.state .. " " .. g.mode, "Round Easy")
+	Config.debugForceMode = nil
+	g:setState("Idle")
+
+	section("23. spinning a board keeps tiles and blocks on their cells")
+	local BoardSpinner = require(pm.BoardSpinner)
+	g.liveBoard:render({ block("A1", "red"), block("B3", "teal"), block("C4", "yellow") })
+	local function offCells()
+		local bad = 0
+		for _, c in ipairs(cells) do
+			local tile = board.LiveBoard[c]
+			local d = tile.Position - Grid.worldPositionOf(c, board.LiveBoard)
+			local e = board.LiveBoard.Blocks[c].Position - tile.Position
+			if Vector3.new(d.X, 0, d.Z).Magnitude > 0.01 or Vector3.new(e.X, 0, e.Z).Magnitude > 0.01 then bad += 1 end
+		end
+		return bad
+	end
+	local function waitIdle(spinner, limit)
+		local from = os.clock()
+		repeat task.wait() until not spinner:busy() or os.clock() - from > limit
+		return os.clock() - from
+	end
+	local liveSpinner = BoardSpinner.new(board.LiveBoard)
+	local look0, a1Start = board.LiveBoard.Base.CFrame.LookVector, board.LiveBoard.A1.Position
+	liveSpinner:request()
+	waitIdle(liveSpinner, 2)
+	check("1 spin: base turned 90 degrees", math.abs(board.LiveBoard.Base.CFrame.LookVector:Dot(look0)) < 0.001, true)
+	check("1 spin: tiles on Grid.worldPositionOf, block parts on their tiles (cells off)", offCells(), 0)
+	check("1 spin: A1 / B3 / C4 blocks still shown in their colors",
+		board.LiveBoard.Blocks.A1.Transparency == 0 and board.LiveBoard.Blocks.A1.Color == Config.colors.red
+		and board.LiveBoard.Blocks.B3.Color == Config.colors.teal and board.LiveBoard.Blocks.C4.Color == Config.colors.yellow, true)
+	liveSpinner:request()
+	liveSpinner:request()
+	liveSpinner:request()
+	waitIdle(liveSpinner, 4)
+	check("3 more queued spins run one after another: back to the start", board.LiveBoard.Base.CFrame.LookVector:Dot(look0) > 0.9999
+		and (board.LiveBoard.A1.Position - a1Start).Magnitude < 0.001, true)
+	check("after 4 spins: cells off", offCells(), 0)
+	liveSpinner:destroy()
+
+	local shakingNow = true
+	local targetSpinner = BoardSpinner.new(board.TargetBoard, { isShaking = function() return shakingNow end })
+	local tlook0 = board.TargetBoard.Base.CFrame.LookVector
+	targetSpinner:request()
+	task.wait(0.6)
+	check("during a tremor the spin waits", board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0) > 0.9999, true)
+	shakingNow = false
+	local took = waitIdle(targetSpinner, 3)
+	check("tremor over: the spin runs, after the 0.5 s margin", math.abs(board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0)) < 0.001
+		and took >= BoardSpinner.AFTER_SHAKE_SECONDS + BoardSpinner.SPIN_SECONDS - 0.05, true)
+	targetSpinner:destroy()
 	board:Destroy()
 end
 
