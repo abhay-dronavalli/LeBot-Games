@@ -38,6 +38,34 @@ ArenaConfig.STALE_ARM_S     = 0.5    -- arm_age above this makes the dragon dorm
 -- own either, which is why AttackDetect requires both tests. See the style guide, section 7.
 ArenaConfig.BUTTERFINGERS_FLOOR_PCT = 18.0
 
+-- TESTING AGAINST `--source mock`.
+--
+-- The mock is not a toy: it drives the real IK and the real fitted calibration through a scripted
+-- pick-carry-stack, eased with a cosine so peak speed is about 1.57x the average for each move.
+-- Worked against that script, the shipped thresholds above mean:
+--
+--   Fire  - fires out of the box. The mock's jaw runs 20..50, so the learned span is 30, an open
+--           jaw reads frac 1.0, and 50 is well above FIRE_MIN_PCT. It will be lit most of the
+--           cycle, which is exactly what you want when checking the cone and the scorch marks.
+--   Slam  - NEVER fires. The fastest descent ("lower on A1", 150 -> 18 mm in 1.0 s) is down to
+--           about 145 mm/s by the time it crosses the slam height, because the ease is already
+--           slowing it. That is below SLAM_SPEED_MMS, so nothing triggers.
+--   Sweep - NEVER fires, at any speed threshold. The mock only moves sideways at carry height
+--           (150 mm), and only moves vertically when it is low, so "low AND moving sideways" is
+--           never true. The height gate has to move, not just the speed gate.
+--
+-- So a mock run that shows fire but no slams and no sweeps is CORRECT, not broken. To see all
+-- three, use these while testing against mock, and put the real values back before tuning against
+-- the arm - they are chosen to catch the mock's motion, not to describe a dragon:
+--
+--   ArenaConfig.SLAM_SPEED_MMS  = 100   -- mock peaks ~145 mm/s below the slam height
+--   ArenaConfig.SWEEP_HEIGHT_MM = 130   -- so carry height (150 mm) counts as "low"
+--   ArenaConfig.SWEEP_SPEED_MMS = 90    -- mock's lateral peak is ~129 mm/s
+--
+-- Note the mock's grasp height (14 mm) is below ARENA_FLOOR_MM, so the head dips a few studs
+-- through the arena floor at the bottom of a pick. That is the floor being above the real table,
+-- working as designed, not a rig bug.
+
 -- Velocity is differentiated from each frame's `ts`, never from Heartbeat's delta time: Bridge
 -- keeps only the newest frame and drops the rest, so Heartbeat's dt and the gap between the frames
 -- actually seen are different numbers. Smoothing spans a few frames so one jittery FK sample

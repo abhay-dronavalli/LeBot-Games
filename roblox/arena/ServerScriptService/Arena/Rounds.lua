@@ -73,6 +73,15 @@ function Rounds.start(self)
 	if self.state ~= "Waiting" and self.state ~= "Over" then
 		return
 	end
+	-- No floor, no round. In Studio, PlayerAdded fires the instant you press Play while the
+	-- WebSocket is still connecting, so without this the first round starts over empty space:
+	-- players fall past FallenPartsDestroyHeight, die, and still count as survivors for the full
+	-- two minutes because nothing ever hit them. The state is left at Waiting, so the `hello`
+	-- handler's own start() call is what gets the round going once the arena is built.
+	if not self.arena.bounds then
+		return
+	end
+
 	local players = {}
 	for _, player in Players:GetPlayers() do
 		if not self.excluded[player] then

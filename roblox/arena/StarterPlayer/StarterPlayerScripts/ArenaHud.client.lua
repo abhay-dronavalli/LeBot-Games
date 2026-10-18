@@ -406,20 +406,41 @@ local function becomeOperator()
 		p.CharacterAdded:Connect(mark)
 	end)
 
-	local arenaModel = workspace:WaitForChild("Arena", 20)
-	local floor = arenaModel and arenaModel:FindFirstChild("Floor") :: BasePart?
-	if not floor then
-		return
+	-- Waited for, not sampled once. The arena is only built when the `hello` frame arrives, which
+	-- is after the robot process connects - and if Python is started after Studio, that can be
+	-- tens of seconds. A single timed WaitForChild gives up and silently leaves the operator on a
+	-- normal player camera with no hint why.
+	local floor: BasePart? = nil
+	while not floor do
+		local arenaModel = workspace:FindFirstChild("Arena")
+		local found = arenaModel and arenaModel:FindFirstChild("Floor")
+		if found and found:IsA("BasePart") then
+			floor = found
+		else
+			task.wait(0.5)
+		end
 	end
 
-	camera.CameraType = Enum.CameraType.Scriptable
 	local centre = floor.Position
 	local height = math.max(floor.Size.X, floor.Size.Z) * 1.15
 	-- Pulled back toward the far edge and tilted, rather than straight down: a pure top-down view
 	-- hides how high the head is, which is the one thing the operator needs to judge.
-	camera.CFrame = CFrame.lookAt(
+	local view = CFrame.lookAt(
 		centre + Vector3.new(0, height, floor.Size.Z * 0.45),
 		centre)
+
+	-- Re-asserted every frame rather than set once. The engine takes the camera back whenever it
+	-- decides the player needs a default one - a character loading, a respawn, a CameraType reset -
+	-- and a demo where the operator's view silently drops back to third person mid-round is worse
+	-- than the cost of two assignments a frame.
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = view
+	RunService.RenderStepped:Connect(function()
+		if camera.CameraType ~= Enum.CameraType.Scriptable then
+			camera.CameraType = Enum.CameraType.Scriptable
+		end
+		camera.CFrame = view
+	end)
 
 	-- Debuffs that affect the *operator* are shown large here, because they change what their own
 	-- hands are doing.
