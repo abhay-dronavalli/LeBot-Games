@@ -78,6 +78,16 @@ def main(argv=None):
             answers[got] += 1
             mark = "" if want is None else ("  ok" if got == want else "  <- wrong")
             print(f"  {model:<10} #{i + 1}  {time.perf_counter() - t0:5.1f}s  {got}{mark}")
+            g = getattr(board_mod.read_board, "last", {}).get("geometry")
+            if g:
+                note = ""
+                if g.get("invented") or g.get("skipped"):
+                    note = f", model invented {g['invented']} skipped {g['skipped']}"
+                print(f"             sheet: tags {g['tags']} fit {g['fit_mm']}mm "
+                      f"-> cells {g['cells']}{note}")
+            elif g is None and i == 0:
+                print("             sheet: NOT located - falling back to reading printed "
+                      "labels, so position is the model's guess again")
 
         top, hits = answers.most_common(1)[0]
         if len(answers) > 1:
