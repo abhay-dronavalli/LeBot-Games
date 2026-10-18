@@ -20,18 +20,21 @@ return {
 	-- Values are the Apprentice 3D view's block palette.
 	colors = { red = Color3.fromHex("e2383f"), orange = Color3.fromHex("f5862a"), yellow = Color3.fromHex("f6c933"),
 	           teal = Color3.fromHex("16a59b"), skyblue = Color3.fromHex("62bdea"), purple = Color3.fromHex("8a5cc7") },
-	blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
-	maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
-	stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block
-	                                     -- instead of a new cell, when the round's height allows
-	roundSeconds = { 60, 75, 90 },
+	-- The shift: one countdown; tickets (target patterns) arrive on a rail and are made one at a time.
+	shiftSeconds = 180,
+	ticketIntervalMin = 12, ticketIntervalMax = 20, -- seconds between ticket arrivals (random in this range)
+	ticketRailMax = 4,                   -- tickets the rail holds; the arrival timer pauses while it is full
+	ticketBlocksMin = 2, ticketBlocksMax = 4, -- blocks per ticket, towers included (towers up to maxStackGlobal)
+	stackChanceStart = 0.2,              -- chance a ticket block goes on top of another, ramping linearly over
+	stackChanceEnd = 0.6,                --   the shift from start to end
+	ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
+	ticketPoints = { ticket = 1, flat = 1, stacked = 3 }, -- per ticket, per level 0 block, per level 1 block
 	holdToClear = 1,
-	intermissionSeconds = 10,
 	modeSelectSeconds = 15,
-	modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before round 1
+	modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
 	resultsSeconds = 10,
-	debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
-	debugFastTimers = false,             -- testing: every game timer runs 4x faster
+	debugAutoSolve = false,              -- testing: fake StateStore rebuilds the board for the active ticket 3 s after it becomes active
+	debugFastTimers = false,             -- testing: every game timer (shift, ticket arrivals, events, reveal) runs 4x faster
 	debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
 	debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
 	hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },

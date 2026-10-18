@@ -189,7 +189,10 @@ for _ = 1, 500 do
 end
 check("6000 patterns, problems", bad, 0)
 check("tallest tower seen with maxHeight 1 / 2 / 3 (global cap 2)", tallestSeen[1] .. tallestSeen[2] .. tallestSeen[3], "122")
-check("Config: maxStackByRound / maxStackGlobal / stackChance", table.concat(Config.maxStackByRound, ",") .. " " .. Config.maxStackGlobal .. " " .. Config.stackChance, "1,2,2 2 0.5")
+check("Config: shift / interval / rail / blocks / stack ramp / bonus / global cap",
+	string.format("%d %d-%d %d %d-%d %.1f-%.1f %d %d", Config.shiftSeconds, Config.ticketIntervalMin, Config.ticketIntervalMax,
+		Config.ticketRailMax, Config.ticketBlocksMin, Config.ticketBlocksMax, Config.stackChanceStart, Config.stackChanceEnd,
+		Config.ticketTimeBonus, Config.maxStackGlobal), "180 12-20 4 2-4 0.2-0.6 3 2")
 check("same seed, same towers", (function()
 	local a, b = Target.generate(5, 2, Random.new(42)), Target.generate(5, 2, Random.new(42))
 	for cell, tower in pairs(a) do
@@ -202,7 +205,15 @@ for _ = 1, 200 do
 	local _, tallest = Target.count(Target.generate(4, 2))
 	if tallest == 2 then stacked += 1 end
 end
-check("stackChance 0.5: 200 four-block round 2 targets, some with a tower, some flat", stacked > 20 and stacked < 200, true)
+check("default stack chance (stackChanceStart): 200 four-block targets, some with a tower, some flat", stacked > 20 and stacked < 200, true)
+local always, never = 0, 0
+for _ = 1, 100 do
+	local _, a = Target.count(Target.generate(3, 2, nil, 1))
+	local _, b = Target.count(Target.generate(3, 2, nil, 0))
+	if a == 2 then always += 1 end
+	if b == 1 then never += 1 end
+end
+check("stackChance argument: 1 always stacks, 0 never does", always .. " " .. never, "100 100")
 check("24 blocks at maxHeight 2 fills every cell twice", select(1, Target.count(Target.generate(24, 2))), 24)
 check("13 blocks at maxHeight 1 is refused", pcall(Target.generate, 13, 1), false)
 
@@ -396,12 +407,20 @@ end
 local Game = require(pm.Game)
 local TargetBoard = require(pm.TargetBoard)
 
-section("15. Hard reveal timing: Game.revealAt(seconds since round start), show 5 s / hide 5 s")
+section("15a. ticket points and the stack chance ramp")
+check("points: empty / one flat / one 2-tower / 2 flat + 1 stacked",
+	table.concat({ Game.ticketPoints({}), Game.ticketPoints(towers({ A1 = "red" })), Game.ticketPoints(towers({ A1 = { "red", "teal" } })),
+		Game.ticketPoints(towers({ A1 = "red", A2 = { "teal", "yellow" } })) }, ","), "1,2,5,6")
+check("stack chance at 0 / half / end / past the end of a 180 s shift",
+	string.format("%.2f %.2f %.2f %.2f", Game.stackChanceAt(0, 180), Game.stackChanceAt(90, 180), Game.stackChanceAt(180, 180), Game.stackChanceAt(400, 180)),
+	"0.20 0.40 0.60 0.60")
+
+section("15. Hard reveal timing: Game.revealAt(seconds since shift start), show 5 s / hide 5 s")
 local function reveal(t)
 	local phase, left = Game.revealAt(t)
 	return string.format("%s %.2f", phase, left)
 end
-check("0 s (round start)", reveal(0), "show 5.00")
+check("0 s (shift start)", reveal(0), "show 5.00")
 check("4.9 s", reveal(4.9), "show 0.10")
 check("5.0 s boundary", reveal(5), "hide 5.00")
 check("9.9 s", reveal(9.9), "hide 0.10")
@@ -411,139 +430,201 @@ Config.debugFastTimers = true
 check("fast timers: 1.25 s boundary", reveal(1.25), "hide 1.25")
 Config.debugFastTimers = false
 
-section("16. Game driven by step() on a cloned cabinet (fake store and remote)")
+section("16. shift: tickets on the rail (Game driven by step() on a cloned cabinet, fake store and remote)")
 if cab then
 	local board = cab:Clone() -- never parented, so the place is untouched
 	local fakeBlocks = {}
-	local sent = {}
-	local fired = {}
+	local sent, fired, changes = {}, {}, {}
 	local g = Game.new({
 		cabinet = board,
 		store = { get = function() return { blocks = fakeBlocks } end },
 		core = { fire = function(name, intensity, duration) table.insert(fired, name .. " " .. intensity .. " " .. duration) end },
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
+		stateChanged = { Fire = function(_, info) table.insert(changes, info) end },
+		rng = Random.new(11),
 	})
 	local function steps(n, dt)
 		for _ = 1, n do g:step(dt) end
 	end
-
+	local function railIds()
+		local list = {}
+		for _, t in ipairs(g.tickets) do table.insert(list, t.id) end
+		return table.concat(list, ",")
+	end
+	local function ticketById(id)
+		for _, t in ipairs(g.tickets) do if t.id == id then return t end end
+	end
+	-- Gives a ticket a known pattern (and its points); redraws the TargetBoard if it is the active one.
+	local function setPattern(ticket, map)
+		ticket.target = towers(map)
+		ticket.points = Game.ticketPoints(ticket.target)
+		if ticket.id == g.activeId then g:showActive() end
+	end
 	local tester = { Name = "Tester", UserId = 1 }
-	-- Easy game from Idle to round 1: mode select runs out, auto-picks Easy, then the confirmation.
+	-- Easy shift from Idle: mode select runs out, auto-picks Easy, then the confirmation.
 	local function startEasy()
 		g:setState("Idle")
 		g:start(tester)
 		g:step(Config.modeSelectSeconds)
 		g:step(Config.modeConfirmSeconds)
 	end
+	Config.debugEventEvery = 100000 -- no events in this section
 
-	Config.debugForceMode = "hard"
+	Config.debugForceMode = "easy"
 	g:setState("Idle")
 	check("start() from Idle", g:start(tester), true)
 	check("start() while running is ignored", g:start(tester), false)
-	check("debugForceMode=hard skips mode select: mode / state / round", g.mode .. " " .. g.state .. " " .. g.round, "Hard Round 1")
-	check("round 1 starts in show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
-	local tcell, ttower = next(g.target)
-	local tcolor = ttower[1]
-	check("round 1 (maxStackByRound 1): 3 blocks, all flat", table.concat({ Target.count(g.target) }, ","), "3,1")
-	local tblock = board.TargetBoard.Blocks[tcell]
+	check("debugForceMode=easy: straight into the shift, full timer", g.mode .. " " .. g.state .. " " .. g.timeLeft, "Easy Shift " .. Config.shiftSeconds)
+	check("the first ticket arrives at shift start and is active", railIds() .. " active " .. tostring(g.activeId), "1 active 1")
+	local t1 = g.tickets[1]
+	local t1Blocks, t1Tallest = Target.count(t1.target)
+	check("ticket 1: 2-4 blocks, towers up to 2, points from its pattern", t1Blocks >= 2 and t1Blocks <= 4 and t1Tallest <= 2
+		and t1.points == Game.ticketPoints(t1.target), true)
+	local acell = next(t1.target)
+	check("TargetBoard shows the active ticket", board.TargetBoard.Blocks[acell].Transparency == 0
+		and board.TargetBoard.Blocks[acell].Color == Config.colors[t1.target[acell][1]], true)
+	check("stateChanged: Shift with the active ticket's target", changes[#changes].state .. " " .. tostring(changes[#changes].activeId)
+		.. " " .. tostring(changes[#changes].target == t1.target), "Shift 1 true")
+	check("payload: rail, active id, points, age, cells", #sent[#sent].tickets .. " " .. sent[#sent].activeId .. " "
+		.. sent[#sent].tickets[1].points .. " " .. sent[#sent].tickets[1].age .. " " .. tostring(sent[#sent].tickets[1].cells[acell] ~= nil),
+		"1 1 " .. t1.points .. " 0 true")
+
+	section("16a. arrivals: random 12-20 s apart, paused while the rail is full")
+	local wait1 = g.arrivalIn
+	check("next arrival 12-20 s out", wait1 >= Config.ticketIntervalMin and wait1 <= Config.ticketIntervalMax, true)
+	g:step(wait1 - 0.1)
+	check("0.1 s before it: still one ticket", railIds(), "1")
+	g:step(0.2)
+	check("then ticket 2 arrives at the right end; ticket 1 stays active", railIds() .. " active " .. g.activeId, "1,2 active 1")
+	check("ticket 2's age on the payload counts from its arrival", sent[#sent].tickets[2].age, 0)
+	local guard = 0
+	while #g.tickets < Config.ticketRailMax and guard < 10 do
+		g:step(g.arrivalIn + 0.01)
+		guard += 1
+	end
+	check("rail fills to 4, oldest first, ticket 1 still active", railIds() .. " active " .. g.activeId, "1,2,3,4 active 1")
+	local paused, timeBefore = g.arrivalIn, g.timeLeft
+	steps(40, 0.5) -- 20 s with a full rail
+	check("full rail: no 5th ticket, the arrival timer is paused", railIds() .. " " .. tostring(g.arrivalIn == paused), "1,2,3,4 true")
+	check("the shift timer keeps running meanwhile", math.abs((timeBefore - g.timeLeft) - 20) < 0.01, true)
+
+	section("16b. switching the active ticket")
+	check("selectTicket(3) makes it active", g:selectTicket(tester, 3), true)
+	check("active 3, on the payload and stateChanged", g.activeId .. " " .. sent[#sent].activeId .. " " .. changes[#changes].activeId, "3 3 3")
+	check("an unknown ticket or the already active one is rejected", tostring(g:selectTicket(tester, 99)) .. " " .. tostring(g:selectTicket(tester, 3)), "false false")
+	setPattern(ticketById(3), { A1 = "red", A2 = { "teal", "yellow" } })
+	check("TargetBoard shows ticket 3: A1 red, A2 teal under yellow", board.TargetBoard.Blocks.A1.Color == Config.colors.red
+		and board.TargetBoard.Blocks.A2.Color == Config.colors.teal and board.TargetBoard.Blocks.A2_1.Color == Config.colors.yellow
+		and board.TargetBoard.Blocks.A2_1.Transparency == 0, true)
+
+	section("16c. completing the active ticket: points, +3 s, oldest becomes active")
+	fakeBlocks = blocksFor({ A1 = "red", A2 = { "yellow", "teal" } }) -- A2 upside down
+	steps(8, 0.25)
+	check("wrong stack order: not completed after 2 s", railIds() .. " score " .. g.score, "1,2,3,4 score 0")
+	fakeBlocks = blocksFor({ A1 = "red", A2 = { "teal", "yellow" } })
+	local before = g.timeLeft
+	steps(3, 0.25)
+	check("0.75 s of a match: not yet (hold 1 s)", railIds(), "1,2,3,4")
+	g:step(0.25)
+	check("1 s: ORDER UP, ticket 3 leaves the rail", railIds(), "1,2,4")
+	check("points: 1 + 2 flat + 3 stacked = 6", g.score .. " " .. sent[#sent].completedCount, "6 1")
+	check("+3 s on the shift timer", math.abs(g.timeLeft - (before - 1 + Config.ticketTimeBonus)) < 0.01, true)
+	check("payload orderUp: id / points / bonus", sent[#sent].orderUp.id .. " " .. sent[#sent].orderUp.points .. " " .. sent[#sent].orderUp.bonus, "3 6 3")
+	check("the oldest remaining ticket (1) becomes active", g.activeId .. " " .. changes[#changes].activeId, "1 1")
+	check("rail not full any more: the arrival timer runs again", (function()
+		local a = g.arrivalIn
+		g:step(0.25)
+		return g.arrivalIn < a
+	end)(), true)
+
+	section("16d. reusing blocks: the board already matches part of the next ticket")
+	setPattern(ticketById(1), { A1 = "red", B1 = "purple" })
+	local keepA1
+	for _, b in ipairs(fakeBlocks) do
+		if b.color == "red" and Grid.cellOfBlock(b) == "A1" then keepA1 = b end
+	end
+	fakeBlocks = { keepA1 } -- the A2 tower is cleared away, the red A1 block stays where it is
+	g:step(0.25)
+	local partial = Target.compare(g:activeTicket().target, g.liveGrid, g.events.vanished)
+	check("A1 already counts: only B1 is missing, nothing extra or wrong", Target.describe(partial),
+		"clear=false missing={B1} wrong={} extra={} blocked={} doubled={}")
+	table.insert(fakeBlocks, block("B1", "purple"))
+	steps(4, 0.25)
+	check("adding B1 completes ticket 1 with the reused A1 block (+3 points)", railIds() .. " score " .. g.score .. " active " .. g.activeId, "2,4 score 9 active 2")
+
+	section("16e. an empty rail gets the next ticket right away")
+	g.tickets = { ticketById(2) } -- leave one ticket on the rail
+	setPattern(g.tickets[1], { C4 = "orange" })
+	fakeBlocks = { block("C4", "orange") }
+	steps(4, 0.25)
+	local newest = g.tickets[1]
+	check("completing the last ticket brings a new one at once, and it is active", #g.tickets .. " " .. tostring(newest.id > 4)
+		.. " " .. tostring(g.activeId == newest.id), "1 true true")
+	check("its arrival timer starts over (12-20 s)", g.arrivalIn >= Config.ticketIntervalMin and g.arrivalIn <= Config.ticketIntervalMax, true)
+
+	section("16f. shift end")
+	g.timeLeft = 0.1
+	g:step(0.25)
+	check("timer hits 0: Results", g.state, "Results")
+	local done = sent[#sent].completed
+	check("results payload: tickets completed, points, per-ticket list", #done .. " " .. sent[#sent].score .. " " .. done[1].id .. ":" .. done[1].points
+		.. " " .. done[2].id .. ":" .. done[2].points, "3 11 3:6 1:3")
+	check("rail and TargetBoard cleared", #sent[#sent].tickets .. " " .. board.TargetBoard.Blocks.A1.Transparency, "0 1")
+	g:step(Config.resultsSeconds)
+	check("then back to Idle", g.state, "Idle")
+
+	section("16g. Hard: reveal cycle on the TargetBoard (and the cards, via the payload)")
+	Config.debugForceMode = "hard"
+	fakeBlocks = {}
+	g:setState("Idle")
+	g:start(tester)
+	check("Hard shift starts in show, 5 s left", g.mode .. " " .. g.state .. " " .. g.revealPhase .. " " .. math.ceil(g.revealLeft), "Hard Shift show 5")
+	setPattern(g:activeTicket(), { A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" })
+	local tblock = board.TargetBoard.Blocks.A1
 	check("BlockPool: 12 cells x 2 levels of block parts, level 1 one block higher", #board.TargetBoard.Blocks:GetChildren() == 24
-		and math.abs((board.TargetBoard.Blocks[tcell .. "_1"].Position - tblock.Position).Y - tblock.Size.Y) < 0.001, true)
+		and math.abs((board.TargetBoard.Blocks.A1_1.Position - tblock.Position).Y - tblock.Size.Y) < 0.001, true)
 	local BlockPool = require(pm.BlockPool)
 	check("block is 84% of a cell wide and sits on its tile", math.abs(tblock.Size.X - Config.boardCellStuds * BlockPool.BLOCK_FRACTION) < 0.001
-		and math.abs((tblock.Position.Y - tblock.Size.Y / 2) - (board.TargetBoard[tcell].Position.Y + board.TargetBoard[tcell].Size.Y / 2)) < 0.001, true)
+		and math.abs((tblock.Position.Y - tblock.Size.Y / 2) - (board.TargetBoard.A1.Position.Y + board.TargetBoard.A1.Size.Y / 2)) < 0.001, true)
 	check("block is a rounded-cube MeshPart clone when PatternMatch.BlockMesh exists, else a Part",
 		(RS.PatternMatch:FindFirstChild("BlockMesh") ~= nil) == tblock:IsA("MeshPart") and tblock.Material == Enum.Material.SmoothPlastic, true)
-	local other
-	for _, c in ipairs(cells) do
-		if not g.target[c] then other = board.TargetBoard.Blocks[c] break end
-	end
-	check("show: target block shown in its color", tblock.Transparency == 0 and tblock.Color == Config.colors[tcolor], true)
-	check("show: target block outlined", tblock.TargetOutline.Visible, true)
-	check("show: non-target cell has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
+	check("target block matches a LiveBoard block (size, material, height above its tile)",
+		tblock.Size == board.LiveBoard.Blocks.A1.Size and tblock.Material == board.LiveBoard.Blocks.A1.Material
+		and math.abs((tblock.Position.Y - board.TargetBoard.A1.Position.Y) - (board.LiveBoard.Blocks.A1.Position.Y - board.LiveBoard.A1.Position.Y)) < 0.001, true)
+	local b2lo, b2hi = board.TargetBoard.Blocks.B2, board.TargetBoard.Blocks.B2_1
+	check("show: colors and outlines, B2 red under teal", tblock.Color == Config.colors.red and tblock.TargetOutline.Visible
+		and b2lo.Color == Config.colors.red and b2hi.Color == Config.colors.teal and b2hi.TargetOutline.Visible, true)
+	check("show: non-target cell has no block", board.TargetBoard.Blocks.A4.Transparency == 1 and not board.TargetBoard.Blocks.A4.TargetOutline.Visible, true)
+	steps(19, 0.25) -- 4.75 s
+	check("4.75 s: still show, 1 s left on HUD", g.revealPhase .. " " .. sent[#sent].revealTimeLeft, "show 1")
+	g:step(0.25) -- 5.0 s
+	check("5.0 s: hide; the payload tells the cards to gray out", g.revealPhase .. " " .. sent[#sent].revealPhase, "hide hide")
+	check("hide: every level gray, outlines stay", tblock.Color == TargetBoard.HIDDEN and b2lo.Color == TargetBoard.HIDDEN
+		and b2hi.Color == TargetBoard.HIDDEN and b2hi.TargetOutline.Visible, true)
+	check("hide: the cards keep their layout (cells still on the payload)", sent[#sent].tickets[1].cells.B2[2], "teal")
 	local woodTiles = 0
 	for _, c in ipairs(cells) do
 		if board.TargetBoard[c].Color == cab.TargetBoard[c].Color then woodTiles += 1 end
 	end
 	check("all 12 TargetBoard squares keep their chessboard wood colors", woodTiles, 12)
-	check("target block matches a LiveBoard block (size, material, height above its tile)",
-		tblock.Size == board.LiveBoard.Blocks[tcell].Size and tblock.Material == board.LiveBoard.Blocks[tcell].Material
-		and math.abs((tblock.Position.Y - board.TargetBoard[tcell].Position.Y) - (board.LiveBoard.Blocks[tcell].Position.Y - board.LiveBoard[tcell].Position.Y)) < 0.001, true)
-	steps(19, 0.25) -- 4.75 s
-	check("4.75 s: still show, 1 s left on HUD", g.revealPhase .. " " .. sent[#sent].revealTimeLeft, "show 1")
-	g:step(0.25) -- 5.0 s
-	check("5.0 s: hide", g.revealPhase, "hide")
-	check("hide: target block still shown, now gray", tblock.Transparency == 0 and tblock.Color == TargetBoard.HIDDEN, true)
-	check("hide: outline stays", tblock.TargetOutline.Visible, true)
-	check("hide: non-target cell still has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
-	check("hide: the square under it keeps its wood color", board.TargetBoard[tcell].Color == cab.TargetBoard[tcell].Color, true)
-	check("payload revealPhase / revealTimeLeft", sent[#sent].revealPhase .. " " .. sent[#sent].revealTimeLeft, "hide 5")
 	steps(20, 0.25) -- 10.0 s
 	check("10.0 s: show again", g.revealPhase, "show")
 	steps(20, 0.25) -- 15.0 s, back in hide
-	check("15.0 s: hide", g.revealPhase, "hide")
-
-	fakeBlocks = blocksFor(g.target)
-	steps(4, 0.25) -- clear held for 1 s
-	check("solved during hide -> Intermission", g.state, "Intermission")
-	check("intermission: target block in full color", tblock.Transparency == 0 and tblock.Color == Config.colors[tcolor], true)
-	check("intermission: no outline, no reveal in payload", tostring(tblock.TargetOutline.Visible) .. " " .. tostring(sent[#sent].revealPhase), "false nil")
-
-	fakeBlocks = {}
-	g:step(Config.intermissionSeconds)
-	check("round 2 state", g.state .. " " .. g.round, "Round 2")
-	check("round 2 reset to show, 5 s left", g.revealPhase .. " " .. math.ceil(g.revealLeft), "show 5")
-
-	section("16b. towers on the boards (round 2 target forced to A1=red, B2=red/teal, C3=yellow, C4=purple)")
-	g.target = towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow", C4 = "purple" })
-	g.targetBoard:show(g.target, false, true)
-	local b2lo, b2hi = board.TargetBoard.Blocks.B2, board.TargetBoard.Blocks.B2_1
-	check("TargetBoard B2: red below, teal on top, both outlined", b2lo.Color == Config.colors.red and b2hi.Color == Config.colors.teal
-		and b2lo.Transparency == 0 and b2hi.Transparency == 0 and b2lo.TargetOutline.Visible and b2hi.TargetOutline.Visible, true)
-	check("TargetBoard A1: single, level 1 hidden and not outlined", board.TargetBoard.Blocks.A1.Transparency == 0
-		and board.TargetBoard.Blocks.A1_1.Transparency == 1 and not board.TargetBoard.Blocks.A1_1.TargetOutline.Visible, true)
-	g.targetBoard:show(g.target, true, true)
-	check("hidden phase: both B2 levels gray, outlines stay", b2lo.Color == TargetBoard.HIDDEN and b2hi.Color == TargetBoard.HIDDEN
-		and b2lo.TargetOutline.Visible and b2hi.TargetOutline.Visible, true)
-	fakeBlocks = blocksFor({ A1 = "red", B2 = { "teal", "red" }, C3 = "yellow", C4 = "purple" }) -- B2 upside down
-	steps(8, 0.25)
-	check("LiveBoard B2: teal below, red on top", board.LiveBoard.Blocks.B2.Color == Config.colors.teal
-		and board.LiveBoard.Blocks.B2_1.Color == Config.colors.red and board.LiveBoard.Blocks.B2_1.Transparency == 0, true)
-	check("wrong order does not clear after 2 s", g.state .. " " .. Target.describe(Target.compare(g.target, g.liveGrid, {})),
-		"Round clear=false missing={} wrong={B2} extra={} blocked={} doubled={}")
-	fakeBlocks = blocksFor(g.target)
-	steps(5, 0.25)
-	check("right order clears", g.state, "Intermission")
-	fakeBlocks = {}
-	g:step(Config.intermissionSeconds)
-	check("round 3 target: 5 blocks, towers up to 2", (function()
-		local n, tallest = Target.count(g.target)
-		return n == 5 and tallest <= 2
-	end)(), true)
-
-	section("17. Easy mode unchanged, LiveBoard problem highlight on the specific block")
+	fakeBlocks = blocksFor({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" })
+	steps(4, 0.25)
+	check("completed during hide", sent[#sent].completedCount, 1)
 	Config.debugForceMode = nil
-	startEasy()
-	check("debugForceMode=nil: auto-picked Easy, round 1", g.mode .. " " .. g.state, "Easy Round")
-	local ecell, etower = next(g.target)
-	local ecolor = etower[1]
-	local eblock = board.TargetBoard.Blocks[ecell]
-	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(eblock.TargetOutline.Visible), "nil false")
-	check("easy: target block shown in its color", eblock.Transparency == 0 and eblock.Color == Config.colors[ecolor], true)
-	local easyBlocks = 0
-	for _, c in ipairs(cells) do
-		if board.TargetBoard.Blocks[c].Transparency == 0 then easyBlocks += 1 end
-	end
-	check("easy: one target block per target cell, round 1 = 3", easyBlocks, 3)
 
-	local free = {}
-	for _, c in ipairs(cells) do
-		if not g.target[c] then table.insert(free, c) end
-	end
-	fakeBlocks = blocksFor(g.target)
-	table.insert(fakeBlocks, block(free[1], "red"))                       -- extra
-	table.insert(fakeBlocks, block(free[2], "red"))                       -- double...
-	table.insert(fakeBlocks, block(free[2], "teal", { x = select(1, at(Grid.parseCell(free[2]))) + 1 }))
-	table.insert(fakeBlocks, block(ecell, "purple", { level = 1 }))       -- stack on a correct target cell
+	section("17. Easy mode, LiveBoard problem highlight on the specific block")
+	startEasy()
+	check("debugForceMode=nil: auto-picked Easy, shift running", g.mode .. " " .. g.state, "Easy Shift")
+	check("easy: no reveal phase, no outline", tostring(g.revealPhase) .. " " .. tostring(board.TargetBoard.Blocks.A1.TargetOutline.Visible), "nil false")
+	setPattern(g:activeTicket(), { A1 = "red", B2 = "teal" })
+	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal" })
+	table.insert(fakeBlocks, block("C1", "red"))                       -- extra
+	table.insert(fakeBlocks, block("C2", "red"))                       -- double...
+	table.insert(fakeBlocks, block("C2", "teal", { x = select(1, at(3, 2)) + 1 }))
+	table.insert(fakeBlocks, block("A1", "purple", { level = 1 }))     -- stack on a correct target cell
 	g:step(0.25)
 	local function litBlocks()
 		local lit = {}
@@ -553,10 +634,8 @@ if cab then
 		table.sort(lit)
 		return lit
 	end
-	local want = { free[1], free[2], ecell .. "_1" }
-	table.sort(want)
-	check("extra + double (level 0) + stacked block (level 1) outlined, not the correct block under the stack", litBlocks(), want)
-	fakeBlocks = blocksFor(g.target)
+	check("extra + double (level 0) + stacked block (level 1) outlined, not the correct block under the stack", litBlocks(), { "A1_1", "C1", "C2" })
+	fakeBlocks = {}
 	g:step(0.25)
 	check("problems removed -> highlights cleared", litBlocks(), {})
 
@@ -589,11 +668,13 @@ if cab then
 	for _, c in ipairs(cells) do allButB2[c] = c ~= "B2" or nil end
 	check("already vanished cells are not picked again", PatternEvents.pickVanishCells({}, {}, allButB2, 2, rng), { "B2" })
 
-	section("19. vanish in a round: sticky rule, blocked compare, white outline")
+	section("19. vanish during a shift: sticky rule, blocked compare, white outline, active ticket's cells kept")
 	Config.events = { "vanish" }
 	Config.debugEventEvery = 4
 	fakeBlocks = {}
 	startEasy()
+	local active = g:activeTicket()
+	setPattern(active, { A1 = "red", B2 = "teal", C3 = "yellow" })
 	steps(7, 0.25) -- 1.75 s
 	check("1.75 s: no event yet", tostring(sent[#sent].event), "nil")
 	g:step(0.25) -- 2.0 s: warning, 2 s before the 4 s mark
@@ -602,34 +683,32 @@ if cab then
 	check("4.0 s: vanish active", g.events.current.phase, "active")
 	local vanishedNow = sent[#sent].vanishedCells
 	local onTarget = 0
-	for _, c in ipairs(vanishedNow) do if g.target[c] then onTarget += 1 end end
-	check("1-2 cells vanished, none on the target", #vanishedNow >= 1 and #vanishedNow <= 2 and onTarget == 0, true)
+	for _, c in ipairs(vanishedNow) do if active.target[c] then onTarget += 1 end end
+	check("1-2 cells vanished, none in the ACTIVE ticket's pattern", #vanishedNow >= 1 and #vanishedNow <= 2 and onTarget == 0, true)
 	local v1, v2 = vanishedNow[1], vanishedNow[2]
 	check("vanished square transparent, the dark groove layer shows under it", board.LiveBoard[v1].Transparency == 1
 		and board.LiveBoard.Base.Color.R < 0.15, true)
 	check("TargetBoard unchanged", board.TargetBoard[v1].Transparency, 0)
-
-	fakeBlocks = blocksFor(g.target)
+	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal", C3 = "yellow" })
 	table.insert(fakeBlocks, block(v1, "red"))
-	steps(8, 0.25) -- 6.0 s: target solved, but a block sits on a vanished cell
-	check("solved + block on a vanished cell: still Round", g.state, "Round")
-	check("compare reports it as blocked", Target.compare(g.target, g.liveGrid, g.events.vanished).blocked, { v1 })
+	steps(8, 0.25) -- 6.0 s: pattern built, but a block sits on a vanished cell
+	check("built + block on a vanished cell: not completed", sent[#sent].completedCount, 0)
+	check("compare reports it as blocked", Target.compare(active.target, g.liveGrid, g.events.vanished).blocked, { v1 })
 	check("white outline on the blocked cell's block", board.LiveBoard.Blocks[v1].ProblemHighlight.Visible, true)
 	steps(20, 0.25) -- 11.0 s: the 6 s vanish timer ran out at 10 s
 	check("timer over, block still there: cell stays vanished", board.LiveBoard[v1].Transparency, 1)
 	if v2 then
 		check("the other vanished cell (no block) came back", board.LiveBoard[v2].Transparency, 0)
 	end
-	check("round still not cleared", g.state, "Round")
-
-	fakeBlocks = blocksFor(g.target)
+	check("ticket still not completed", sent[#sent].completedCount, 0)
+	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal", C3 = "yellow" })
 	g:step(0.25)
 	check("block removed: cell comes back", board.LiveBoard[v1].Transparency .. " " .. table.concat(sent[#sent].vanishedCells, ","), "0 ")
 	steps(4, 0.25)
-	check("then the round clears", g.state, "Intermission")
+	check("then the ticket completes", sent[#sent].completedCount, 1)
 	check("vanish never calls Core.Events", #fired, 0)
 
-	section("20. scheduler: only during a Round, never the same event twice in a row")
+	section("20. scheduler: only during the Shift, never the same event twice in a row")
 	Config.events = { "vanish", "tremor", "inverted" }
 	Config.debugEventEvery = 3
 	local baseBefore = board.LiveBoard.Base.CFrame
@@ -638,7 +717,7 @@ if cab then
 	local seq, outside, lastActive = {}, 0, nil
 	local function watch()
 		local ev = g.events.current
-		if ev and g.state ~= "Round" then outside += 1 end
+		if ev and g.state ~= "Shift" then outside += 1 end
 		if ev and ev.phase == "active" and ev ~= lastActive then
 			table.insert(seq, ev.name)
 			lastActive = ev
@@ -648,19 +727,19 @@ if cab then
 	g:setState("Idle")
 	g:start(tester)
 	for _ = 1, 66 do g:step(0.25); watch() end -- 15 s of ModeSelect + 1.5 s confirmation
-	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired .. " " .. g.state, "0 0 Round")
-	for _ = 1, 240 do g:step(0.25); watch() end -- round 1, 60 s, empty grid
-	check("round 1 timed out", g.state, "Intermission")
+	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired .. " " .. g.state, "0 0 Shift")
+	check("shift start: schedule reset", g.events.nextAt, 3)
+	for _ = 1, Config.shiftSeconds * 4 do g:step(0.25); watch() end -- the whole shift, empty grid
+	check("shift timed out", g.state, "Results")
 	check("server never moved the boards (tremor shake is client-side)", board.LiveBoard.Base.CFrame == baseBefore and board.LiveBoard.Blocks.A1.CFrame == blockBefore, true)
-	for _ = 1, 40 do g:step(0.25); watch() end -- 10 s of Intermission, then round 2 starts
-	check("round 2 started, schedule reset", g.state .. " " .. g.round .. " next at " .. g.events.nextAt, "Round 2 next at 3")
-	check("no event outside a Round", outside, 0)
+	for _ = 1, 8 do g:step(0.25); watch() end
+	check("no event outside the Shift; scheduler stopped in Results", outside .. " " .. tostring(g.events.running), "0 false")
 	local repeats = 0
 	for i = 2, #seq do
 		if seq[i] == seq[i - 1] then repeats += 1 end
 	end
-	check("round 1 ran at least 5 events", #seq >= 5, true)
-	check("back-to-back repeats in " .. table.concat(seq, ","), repeats, 0)
+	check("the shift ran at least 5 events", #seq >= 5, true)
+	check("back-to-back repeats in " .. #seq .. " events", repeats, 0)
 	local tremors, inverts, quakes, mirrors = 0, 0, 0, 0
 	for _, name in ipairs(seq) do
 		if name == "tremor" then tremors += 1 elseif name == "inverted" then inverts += 1 end
@@ -707,6 +786,7 @@ if cab then
 	check("Bob can't pick", g:pick(bob, "hard"), false)
 	check("an unknown choice is rejected", g:pick(alice, "medium"), false)
 	check("still choosing, no mode yet", g.state .. " " .. tostring(g.mode), "ModeSelect nil")
+	check("ticket clicks are ignored outside the shift", g:selectTicket(alice, 1), false)
 	check("Alice picks hard", g:pick(alice, "hard"), true)
 	check("payload: confirming, mode, message", tostring(sent[#sent].confirming) .. " " .. sent[#sent].mode .. " | " .. sent[#sent].message,
 		"true Hard | HARD MODE")
@@ -714,8 +794,8 @@ if cab then
 	steps(5, 0.25) -- 1.25 s of the 1.5 s confirmation
 	check("confirmation still showing at 1.25 s", g.state, "ModeSelect")
 	g:step(0.25)
-	check("then round 1 starts in Hard", g.state .. " " .. g.round .. " " .. g.mode, "Round 1 Hard")
-	check("a pick during the round is rejected", g:pick(alice, "easy"), false)
+	check("then the shift starts in Hard", g.state .. " " .. g.mode, "Shift Hard")
+	check("a pick during the shift is rejected", g:pick(alice, "easy"), false)
 	g:setState("Idle")
 	g:start(alice)
 	steps(59, 0.25) -- 14.75 s
@@ -725,7 +805,7 @@ if cab then
 	Config.debugForceMode = "easy"
 	g:setState("Idle")
 	g:start(alice)
-	check("debugForceMode=easy skips the screen", g.state .. " " .. g.mode, "Round Easy")
+	check("debugForceMode=easy skips the screen", g.state .. " " .. g.mode, "Shift Easy")
 	Config.debugForceMode = nil
 	g:setState("Idle")
 

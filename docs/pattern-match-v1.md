@@ -23,39 +23,49 @@ Depends on the core only through `StateStore.blocks` (fields from plan.md: `id, 
 ## 3. Flow
 
 ```
-Lobby -> enter Pattern cabinet -> MODE SELECT -> ROUND 1 -> INTERMISSION -> ROUND 2 -> INTERMISSION -> ROUND 3 -> RESULTS -> back to lobby
+Lobby -> enter Pattern cabinet -> MODE SELECT -> SHIFT (tickets) -> RESULTS -> back to lobby
 ```
+
+A Papa's-style ticket shift: one timer, target patterns arriving as tickets on a rail, made one at a time.
 
 ### Mode select
 - Camera flies to a low front-left shot of the table inside the bedroom, the room blurred behind it (section 5, depth of field). ScreenGui with two black tiles: Easy and Hard, each with an image.
 - 15 s countdown; no pick = Easy.
 - Back button to the lobby: later, not v1.
 
-### Round
-- Target: `Config.blocksPerRound[round]` blocks in total (default 3, 4, 5), random colors from `Config.colors`, arranged in towers no taller than `Config.maxStackByRound[round]` (default 1, 2, 2: round 1 is flat, rounds 2 and 3 may stack 2 high). A target cell is a list of colors bottom to top, e.g. `B2 = {"red", "teal"}`. `Target.generate(n, maxHeight)` places blocks one at a time: after the first, each block goes on top of a target tower that still has room with probability `Config.stackChance` (default 0.5), otherwise on a fresh cell, so at most 12 cells are used. Colors can repeat, within a tower too.
-- Round timer: `Config.roundSeconds[round]` (default 60, 75, 90).
-- Target board shows the pattern. Live board shows the real table from `StateStore.blocks`, redrawn every 0.2 s.
-- Compare runs per cell, per level: `missing` (a target level with no block), `wrong` (wrong color at that level, including a tower built in the wrong order), `extra` (a block at a level the target doesn't have, on a non-target cell, or at or above `maxStackGlobal`), `doubled` (2+ blocks at one cell and level), `blocked` (any block on a vanished cell).
-- Clear condition: every target tower matches exactly bottom to top, nothing else on the grid, no block on a vanished cell. Must hold true for 1 s continuously (vision jitter).
-- On clear: round score = seconds left. On timeout: round score 0, game continues to the next round.
+### Shift
+- One timer counting down from `Config.shiftSeconds` (default 180).
+- **Tickets.** The first ticket arrives at shift start. After that a new ticket arrives every random `Config.ticketIntervalMin..Max` seconds (default 12-20). The rail holds at most `Config.ticketRailMax` (4); while it is full the arrival timer pauses. Tickets are numbered from #1 each shift.
+- **A ticket is a target pattern**: `Config.ticketBlocksMin..Max` blocks in total (default 2-4), random colors from `Config.colors` (they can repeat, within a tower too), in towers up to `Config.maxStackGlobal` (2) high. A target cell is a list of colors bottom to top, e.g. `B2 = {"red", "teal"}`. `Target.generate(n, maxHeight, rng, stackChance)` places blocks one at a time: after the first, each block goes on top of a tower that still has room with probability `stackChance`, otherwise on a fresh cell. The stack chance ramps linearly over the shift from `Config.stackChanceStart` (0.2) to `Config.stackChanceEnd` (0.6).
+- **Active ticket.** The oldest ticket is active by default; any player can click a ticket card to make it active instead (`TicketPick` remote). The TargetBoard shows the active ticket. The Live board shows the real table from `StateStore.blocks`, redrawn every 0.2 s.
+- **Compare** runs per cell, per level against the active ticket: `missing` (a target level with no block), `wrong` (wrong color at that level, including a tower built in the wrong order), `extra` (a block at a level the target doesn't have, on a non-target cell, or at or above `maxStackGlobal`), `doubled` (2+ blocks at one cell and level), `blocked` (any block on a vanished cell).
+- **Completing.** When every tower of the active ticket matches exactly bottom to top, nothing else is on the grid and no block sits on a vanished cell, for `Config.holdToClear` (1 s) continuously: ORDER UP. The ticket's points are added, `Config.ticketTimeBonus` (3) seconds go on the shift timer, the ticket leaves the rail and the oldest remaining ticket becomes active. If the rail is empty, the next ticket arrives right away.
+- No intermission and no clear-the-grid step: blocks stay on the table and get reused for the next ticket.
+- The shift ends when the timer hits 0.
+
+### Scoring
+- Each completed ticket = `Config.ticketPoints`: 1 point + 1 per flat block (level 0) + 3 per stacked block (level 1). Example: 2 flat + 1 stacked on top = 1 + 2 + 3 = 6.
+- Each ticket card shows its point value.
+
+### Ticket rail HUD (`StarterGui.PatternHud`)
+- Top left, Papa's-style: paper ticket cards hanging on a rail, oldest on the left. Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like the board seen from the row C side; a stacked cell is split, top color over bottom color, with a small "2" badge), its point value and its age.
+- The active ticket is raised with an orange border and "ACTIVE". Clicking a card makes it active.
+- New tickets slide in; a completed ticket gets an "ORDER UP! +points" stamp and flies off the rail, with a big "ORDER UP! +points" in the middle of the screen.
+- Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets completed, the Hard reveal phase, the event banner and the game message.
 
 ### Easy vs Hard
 | | Easy | Hard |
 |---|---|---|
-| Target colors | always shown | shown 5 s, hidden 5 s, repeating for the whole round |
-| Hidden look | n/a | every target block, at every level, goes gray; outlines stay, so the player still sees where blocks go and how tall each tower is |
+| Target colors | always shown | shown 5 s, hidden 5 s, repeating for the whole shift, on the TargetBoard and the ticket cards |
+| Hidden look | n/a | every target block, at every level, goes gray, outlines stay; the cards gray their squares but keep the layout, so the player still sees where blocks go and how tall each tower is |
 | Event interval | every 45 s | every 30 s |
 
-### Intermission (after every round)
-- 10 s countdown. Big text: "Clear the grid. Swap seats if you want."
-- Next round starts when the 10 s is up AND the grid reads empty. If the grid still has blocks after 10 s, the message changes to "Waiting for grid to clear" and the next round starts the moment it's empty.
-
 ### Results
-Total score, per-round breakdown, leaderboard entry (DataStore keyed by UserId, v1 can be in-memory).
+Shown when the shift ends, for `Config.resultsSeconds`: tickets completed, total points, and one line per completed ticket (number, blocks, stacked or not, points, seconds it took). Then back to Idle. Leaderboard entry (DataStore keyed by UserId) later, not v1.
 
 ## 4. Events
 
-An event fires on the interval above, picked at random from the enabled list. One event at a time. Events never fire during intermission or mode select.
+An event fires on the interval above, picked at random from the enabled list. One event at a time. Events only run during the shift (never in mode select or results). Vanish picks cells that are empty and not in the ACTIVE ticket's pattern.
 
 | Event | Roblox side | Real arm side (via `Events.fire`) | v1 |
 |---|---|---|---|
@@ -81,7 +91,7 @@ The cabinet stands in a teen gamer's bedroom. Two chunky wooden game boards sit 
 - Only the TargetBoard spins: click anywhere on it to turn it 90 degrees around its vertical center axis, 0.3 s. The ClickDetector (`SpinClick`) sits on the whole TargetBoard Model, not just the base, because the tiles cover the base's top. Spins run on the server so everyone sees the same orientation, queue up, and wait while a tremor is on. The LiveBoard has no ClickDetector and `BoardSpinner` ignores requests for any board without one, so the LiveBoard and the arm twin always stay fixed, matching the real table. Board spacing is unchanged.
 - Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell and level (12 cells x `maxStackGlobal` levels, named `B2` and `B2_1`), made once, each sitting one block height above the one below, recolored or hidden, never created per tick.
 - LiveBoard: 12 cell tiles plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`: the inlaid square disappears and the dark groove layer under it shows as a hole. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
-- TargetBoard: 12 wooden squares (never recolored) plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns mid gray (150, 150, 150, same blocks, recolored), which reads as gray on both wood tones. Intermission and Results show full colors.
+- TargetBoard: 12 wooden squares (never recolored) plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns mid gray (150, 150, 150, same blocks, recolored), which reads as gray on both wood tones. Outside the shift the TargetBoard is empty.
 
 ## 6. Robot twin (v1, parts-built)
 
@@ -98,20 +108,19 @@ Workspace.PatternCabinet
   TargetBoard (Model): Base, Cells A1..C4
   LiveBoard (Model): Base, Cells A1..C4, Blocks (Folder)
   ArmTwin (clone)
-  Sign (SurfaceGui): mode, round, timer, score, event banner
 ReplicatedStorage
   PatternMatch.Config (ModuleScript)
   PatternMatch.Grid (ModuleScript)        cm -> cell, cell -> world position
   PatternMatch.Target (ModuleScript)      generate, compare
   PatternMatch.LiveBoard (ModuleScript)   pooled block parts on the LiveBoard
-  PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Round, Intermission, Results
+  PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Shift (tickets), Results
   PatternMatch.PatternEvents (ModuleScript) event scheduler + vanish / tremor / inverted
   PatternMatch.TargetBoard (ModuleScript) target colors, Hard-mode hidden look
   PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
   ArmTwin (Model, parts-built SO-101) with Rig (geometry, FK, builder) and Driver (server broadcast,
     client easing + Motor6D Transforms) ModuleScripts; the LiveBoard holds a clone without the modules
   PatternMatch.Remotes: ArmPose (UnreliableRemoteEvent, arm angles 20 Hz, server -> clients)
-  Remotes: PatternUI (server -> client), PatternPick (client -> server)
+  Remotes: PatternUI (server -> client), PatternPick (chooser -> server: mode), TicketPick (any player -> server: active ticket)
 ServerScriptService
   PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
 StarterPlayer.StarterPlayerScripts
@@ -121,7 +130,7 @@ Lighting
   CabinetFocus (DepthOfFieldEffect), Bloom, Atmosphere, SunRays, Sky
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
-  PatternHud (ScreenGui + LocalScript)     timer, round, event banner
+  PatternHud (ScreenGui + LocalScript)     ticket rail, shift timer, score, event banner, results
 ```
 
 ## 8. Config defaults
@@ -146,18 +155,22 @@ return {
   -- Values are the Apprentice 3D view's block palette.
   colors = { red = Color3.fromHex("e2383f"), orange = Color3.fromHex("f5862a"), yellow = Color3.fromHex("f6c933"),
              teal = Color3.fromHex("16a59b"), skyblue = Color3.fromHex("62bdea"), purple = Color3.fromHex("8a5cc7") },
-  blocksPerRound = { 3, 4, 5 },        -- total blocks per round, towers included
-  maxStackByRound = { 1, 2, 2 },       -- tallest tower a round's target may ask for (clamped to maxStackGlobal)
-  stackChance = 0.5,                   -- chance a generated block goes on top of an existing target block
-                                       -- instead of a new cell, when the round's height allows
-  roundSeconds = { 60, 75, 90 },
+  -- The shift: one countdown; tickets (target patterns) arrive on a rail and are made one at a time.
+  shiftSeconds = 180,
+  ticketIntervalMin = 12, ticketIntervalMax = 20, -- seconds between ticket arrivals (random in this range)
+  ticketRailMax = 4,                   -- tickets the rail holds; the arrival timer pauses while it is full
+  ticketBlocksMin = 2, ticketBlocksMax = 4, -- blocks per ticket, towers included (towers up to maxStackGlobal)
+  stackChanceStart = 0.2,              -- chance a ticket block goes on top of another, ramping linearly over
+  stackChanceEnd = 0.6,                --   the shift from start to end
+  ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
+  ticketPoints = { ticket = 1, flat = 1, stacked = 3 }, -- per ticket, per level 0 block, per level 1 block
   holdToClear = 1,
-  intermissionSeconds = 10,
   modeSelectSeconds = 15,
-  modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before round 1
+  modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
   resultsSeconds = 10,                 -- how long Results stays up before Idle
-  debugAutoSolve = false,              -- testing: fake StateStore solves each round after 5 s, clears the grid 3 s into intermission
-  debugFastTimers = false,             -- testing: every game timer runs 4x faster
+  debugAutoSolve = false,              -- testing: fake StateStore rebuilds the board for the active ticket 3 s after it becomes active,
+                                       -- reusing the blocks already there (leftovers go to the tray)
+  debugFastTimers = false,             -- testing: every game timer (shift, ticket arrivals, events, reveal) runs 4x faster
   debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
   debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
   hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },

@@ -27,6 +27,7 @@ end
 local remotes = getOrCreate(PatternMatch, "Folder", "Remotes")
 local patternUI = getOrCreate(remotes, "RemoteEvent", "PatternUI")          -- server -> clients: HUD payload
 local patternPick = getOrCreate(remotes, "RemoteEvent", "PatternPick")      -- chooser -> server: "easy" / "hard"
+local ticketPick = getOrCreate(remotes, "RemoteEvent", "TicketPick")        -- any player -> server: ticket id to make active
 local patternState = getOrCreate(remotes, "BindableEvent", "PatternState")  -- server only: state changes
 local armPose = getOrCreate(remotes, "UnreliableRemoteEvent", "ArmPose")    -- server -> clients: arm angles, 20 Hz
 
@@ -49,6 +50,10 @@ end)
 
 patternPick.OnServerEvent:Connect(function(player, choice)
 	patternGame:pick(player, choice)
+end)
+
+ticketPick.OnServerEvent:Connect(function(player, id)
+	patternGame:selectTicket(player, id)
 end)
 
 -- Click the TargetBoard to spin it 90 degrees. Spins wait while clients are shaking the boards for a

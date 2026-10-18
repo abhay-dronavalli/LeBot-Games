@@ -13,8 +13,9 @@
 -- up to Config.maxStackGlobal), or adds/drops one off-grid block (in the tray, or on a cell boundary) or
 -- one held block so the game can be seen ignoring those. Moves and removes take a cell's top block.
 -- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
--- no random changes during a round or intermission, the exact target appears 5 s into each round, and
--- the grid empties 3 s into each intermission. These two delays ignore debugFastTimers.
+-- no random changes during a shift, and 3 s after each ticket becomes active the board is rebuilt to
+-- match it, reusing the blocks already there (rebuiltBlocks; leftovers go to the tray). The delay
+-- ignores debugFastTimers.
 -- In fake mode a server-only BindableEvent StateStore.Debug takes test commands (see debugCommand).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -234,29 +235,97 @@ local function fakeArm(t)
 	}
 end
 
--- Blocks at the target's cells (centers plus jitter) in the target's colors: one block per tower level,
--- bottom to top, with matching level values.
-local function solvedBlocks(target)
-	table.clear(fakeCell)
-	local blocks = {}
+local AUTO_SOLVE_DELAY = 3 -- debugAutoSolve: seconds after a ticket becomes active (ignores debugFastTimers)
+local FAKE_TRAY_MAX = 8     -- blocks the fake tray keeps; extras beyond this are taken off the table
+
+local function cellOfLabel(cell)
+	return string.byte(cell) - 64, tonumber(string.sub(cell, 2)) -- row, col
+end
+
+-- The current blocks rearranged so the grid matches `target` exactly, reusing what is already there, the
+-- way a player would: a block already at the right cell and level in the right color stays put; every
+-- other needed block is taken from the unused blocks of that color (wrong spot on the grid, the tray, or
+-- held) and moved; anything still missing is added; leftover blocks go to the tray (zone "tray", which
+-- the game ignores). Towers get matching level values.
+local function rebuiltBlocks(target)
+	local need = {} -- "B2:1" -> color, for every target cell and level
 	for cell, tower in pairs(target) do
-		local row, col = string.byte(cell) - 64, tonumber(string.sub(cell, 2))
+		for i, color in ipairs(tower) do
+			need[cell .. ":" .. (i - 1)] = color
+		end
+	end
+
+	local kept, pool = {}, {}
+	for _, block in ipairs(state.blocks) do
+		local tag = fakeCell[block.id]
+		local key = tag and tag ~= "offgrid" and tag ~= "held" and (tag .. ":" .. (block.level or 0)) or nil
+		if key and need[key] == block.color then
+			need[key] = nil
+			table.insert(kept, block)
+		else
+			table.insert(pool, block)
+		end
+	end
+
+	local keys = {}
+	for key in pairs(need) do
+		table.insert(keys, key)
+	end
+	table.sort(keys) -- by cell, then level 0 before level 1
+	local moved, added = 0, 0
+	for _, key in ipairs(keys) do
+		local cell, levelText = string.match(key, "^(%w+):(%d+)$")
+		local level = tonumber(levelText)
+		local color = need[key]
+		local row, col = cellOfLabel(cell)
 		local cx, cy = cellCenterCm(col, row)
 		local x = cx + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
 		local y = cy + rng:NextNumber(-FAKE_JITTER_CM, FAKE_JITTER_CM)
-		for i, color in ipairs(tower) do
-			table.insert(blocks, newBlock(x, y, cell, color, i - 1))
+		local reuse = nil
+		for i, block in ipairs(pool) do
+			if block.color == color then
+				reuse = table.remove(pool, i)
+				break
+			end
+		end
+		if reuse then
+			local block = table.clone(reuse)
+			block.x, block.y, block.z, block.level = x, y, level * FAKE_BLOCK_CM, level
+			block.held, block.visible, block.zone = false, true, "play"
+			fakeCell[block.id] = cell
+			table.insert(kept, block)
+			moved += 1
+		else
+			table.insert(kept, newBlock(x, y, cell, color, level))
+			added += 1
 		end
 	end
-	return blocks
+
+	-- Leftovers to the tray strip past column 4 (zone "tray": never counted), up to FAKE_TRAY_MAX.
+	local trayX = Config.gridOriginCm.X + Config.cellSizeCm * (Config.gridCols + 0.5)
+	for i, leftover in ipairs(pool) do
+		if i > FAKE_TRAY_MAX then
+			fakeCell[leftover.id] = nil
+		else
+			local block = table.clone(leftover)
+			local _, y = cellCenterCm(1, (i - 1) % Config.gridRows + 1)
+			block.x, block.y, block.z, block.level = trayX, y, 0, 0
+			block.held, block.visible, block.zone = false, true, "tray"
+			fakeCell[block.id] = "offgrid"
+			table.insert(kept, block)
+		end
+	end
+	return kept, string.format("kept %d, moved %d, added %d, %d to the tray", #kept - moved - added - math.min(#pool, FAKE_TRAY_MAX),
+		moved, added, math.min(#pool, FAKE_TRAY_MAX))
 end
 
-local autoSolvePaused = false -- debugAutoSolve: no random changes while a round or intermission runs
+local autoSolvePaused = false -- debugAutoSolve: no random changes while a shift runs
 local debugPaused = false     -- set by the Debug hook's "pause" command
-local currentTarget = nil     -- the game's current round target, for the Debug hook's "solve"
+local currentTarget = nil     -- the game's active ticket target, for the Debug hook's "solve"
 
--- Follows the Pattern Match game (PatternMatch.Remotes.PatternState): keeps the current target, and with
--- Config.debugAutoSolve solves each round and empties the grid in intermission.
+-- Follows the Pattern Match game (PatternMatch.Remotes.PatternState, fired on every state change and
+-- every active ticket change): keeps the active ticket's target, and with Config.debugAutoSolve rebuilds
+-- the board for it AUTO_SOLVE_DELAY seconds after it becomes active.
 local function followGame()
 	local stateSignal = ReplicatedStorage.PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternState")
 	local generation = 0
@@ -267,20 +336,13 @@ local function followGame()
 		if not Config.debugAutoSolve then
 			return
 		end
-		autoSolvePaused = info.state == "Round" or info.state == "Intermission"
-		if info.state == "Round" then
-			task.delay(5, function()
+		autoSolvePaused = info.state == "Shift"
+		if info.state == "Shift" and info.target then
+			task.delay(AUTO_SOLVE_DELAY, function()
 				if generation == mine then
-					publish(solvedBlocks(info.target))
-					print("[StateStore fake] debugAutoSolve: wrote the round " .. info.round .. " target")
-				end
-			end)
-		elseif info.state == "Intermission" then
-			task.delay(3, function()
-				if generation == mine then
-					table.clear(fakeCell)
-					publish({})
-					print("[StateStore fake] debugAutoSolve: cleared the grid")
+					local blocks, note = rebuiltBlocks(info.target)
+					publish(blocks)
+					print(string.format("[StateStore fake] debugAutoSolve: rebuilt the board for ticket #%s (%s)", tostring(info.activeId), note))
 				end
 			end)
 		end
@@ -292,7 +354,7 @@ end
 --   { op = "add", cell = "B2", color = "red", level = 1 } add a block at that cell's center, at the given
 --                                              stack level (default 0, the table)
 --   { op = "remove", cell = "B2" }             remove the fake blocks on that cell, every level
---   { op = "solve" }                           replace every block with the current round's target
+--   { op = "solve" }                           rebuild the board for the active ticket (reusing blocks)
 --   { op = "arm", angles = { shoulder_pan = 0, ... } }  hold the fake arm at exact joint angles (degrees,
 --                                              gripper 0..100; joints left out show their rest values);
 --                                              angles = nil goes back to the sine waves
@@ -324,7 +386,7 @@ local function debugCommand(cmd)
 		end
 		publish(blocks)
 	elseif cmd.op == "solve" and currentTarget then
-		publish(solvedBlocks(currentTarget))
+		publish((rebuiltBlocks(currentTarget)))
 	end
 	print(string.format("[StateStore fake] debug %s %s %s%s", cmd.op, cmd.cell or "", cmd.color or tostring(cmd.on or ""),
 		cmd.level and (" level " .. cmd.level) or ""))
