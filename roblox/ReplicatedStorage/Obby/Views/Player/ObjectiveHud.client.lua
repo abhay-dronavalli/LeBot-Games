@@ -1,31 +1,50 @@
 -- ReplicatedStorage.Obby.Views.Player.ObjectiveHud (LocalScript template; Views.PlayerView clones it into
 -- PlayerGui for the runner and, read only, for spectators). Its ScreenGui carries ObbyView = true and goes
--- when the copy's Exiting attribute is set. Arcade addition: the run clock pill beside the panel
--- (ReplicatedStorage.Obby RunEndsAt / RunState; hidden between rounds). The win / lose screens are ordinary
--- Objective payloads from the server.
+-- when the copy's Exiting attribute is set. Arcade addition: the run clock pill to the right of the order
+-- board (ReplicatedStorage.Obby RunEndsAt / RunState; hidden between rounds). The win / lose screens are
+-- ordinary Objective payloads from the server. Remotes live in ReplicatedStorage.Obby.Remotes; the old
+-- DebugStatus feed is Remotes.Status (same payload plus extra fields).
 --
--- ObjectiveHud -- tells the player what the current bay actually wants from them, and how long
--- they have. Driven entirely by the server: an obstacle fires Remotes.Objective with a payload
--- when its state changes, and firing nil clears the HUD so a player outside the bay isn't being
--- told to do anything.
+-- ObjectiveHud -- what the bay wants, how long you have, and anything that just happened.
+--
+-- Driven entirely by the server: an obstacle fires Remotes.Objective with a payload when its
+-- state changes, and firing nil clears the HUD so a player outside the bay isn't being told to
+-- do anything.
 --
 -- Payload: {title, task, hint, tone, timer, timerLabel, timerTone, flash, steps, note}
+--
+-- THREE LAYERS, deliberately separated, because they answer different questions and used to
+-- be crammed into one panel:
+--
+--   1. THE ORDER BOARD (top centre)  -- a standing statement of what this bay wants. It
+--      changes rarely and you should be able to ignore it once you have read it.
+--   2. TOASTS (under the board)      -- something JUST happened: a block was refused, a lever
+--      threw, a screw was found. Transient, stacked, self-expiring.
+--   3. THE STAMP (screen centre)     -- the big one. A bay was cleared, or you died. It
+--      interrupts, it animates, and it gets out of the way on its own.
+--
+-- The old HUD had only layer 1, so a refused block was a line of text that appeared inside a
+-- panel you had already stopped reading. Events need to move to be noticed.
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
 local Obby = ReplicatedStorage:WaitForChild("Obby")
-local Objective = Obby:WaitForChild("Remotes"):WaitForChild("Objective")
+local Ui = require(Obby:WaitForChild("UiTheme"))
+
+local Remotes = Obby:WaitForChild("Remotes")
+local Objective = Remotes:WaitForChild("Objective")
+local Status = Remotes:WaitForChild("Status")
+local Toast = Remotes:WaitForChild("Toast")
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+-- Spectator copy (Views.PlayerView sets ReadOnly): it mirrors the runner and sends nothing.
+local readOnly = script:GetAttribute("ReadOnly") == true
 local connections = {}
-
-local TONE = {
-	danger = Color3.fromRGB(255, 92, 80),
-	warn = Color3.fromRGB(255, 190, 70),
-	ok = Color3.fromRGB(120, 240, 150),
-}
-local DIM = Color3.fromRGB(165, 165, 180)
+local alive = true -- false once Exiting has run; delayed callbacks check it
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "ObjectiveHud"
@@ -35,115 +54,248 @@ gui.DisplayOrder = 10
 gui:SetAttribute("ObbyView", true)
 gui.Parent = playerGui
 
-local root = Instance.new("Frame")
-root.AnchorPoint = Vector2.new(0.5, 0)
-root.Position = UDim2.new(0.5, 0, 0, 14)
-root.Size = UDim2.new(0, 470, 0, 112)
-root.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-root.BackgroundTransparency = 0.22
-root.BorderSizePixel = 0
-root.Visible = false
-root.Parent = gui
+local PANEL_W = 500
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
-corner.Parent = root
+----------------------------------------------------------------
+-- 1. The order board
+----------------------------------------------------------------
+local board = Ui.panel({
+	parent = gui,
+	name = "OrderBoard",
+	title = "",
+	size = UDim2.fromOffset(PANEL_W, 140),
+	position = UDim2.new(0.5, 0, 0, 16),
+	anchor = Vector2.new(0.5, 0),
+	tone = "danger",
+	zindex = 2,
+})
+board.frame.Visible = false
 
-local stripe = Instance.new("Frame")
-stripe.Size = UDim2.new(1, 0, 0, 3)
-stripe.BorderSizePixel = 0
-stripe.BackgroundColor3 = TONE.danger
-stripe.Parent = root
+local taskLabel = Ui.text(board.body, {style = "task", text = "", size = UDim2.new(1, 0, 0, 32)})
+local hintLabel = Ui.text(board.body, {style = "hint", text = "",
+	position = UDim2.fromOffset(0, 34), size = UDim2.new(1, 0, 0, 18), wrap = true})
 
-local function line(y, height, size, colour, bold)
-	local l = Instance.new("TextLabel")
-	l.Size = UDim2.new(1, -24, 0, height)
-	l.Position = UDim2.new(0, 12, 0, y)
-	l.BackgroundTransparency = 1
-	l.TextColor3 = colour
-	l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
-	l.TextSize = size
-	l.TextXAlignment = Enum.TextXAlignment.Center
-	l.Text = ""
-	l.Parent = root
-	return l
-end
+-- Timer: a brass-framed readout, because a number floating in space reads as debug output.
+local timerBox = Instance.new("Frame")
+timerBox.Name = "TimerBox"
+timerBox.AnchorPoint = Vector2.new(0.5, 0)
+timerBox.Position = UDim2.new(0.5, 0, 0, 56)
+timerBox.Size = UDim2.fromOffset(150, 40)
+timerBox.BackgroundColor3 = Ui.C.ironDark
+timerBox.BorderSizePixel = 0
+timerBox.ZIndex = board.body.ZIndex + 1
+timerBox.Visible = false
+timerBox.Parent = board.body
+Ui.corner(timerBox, 4)
+Ui.stroke(timerBox, Ui.C.brassDim, 1.5)
 
-local titleLabel = line(10, 16, 14, DIM, true)
-local taskLabel = line(28, 28, 24, TONE.danger, true)
-local hintLabel = line(57, 18, 15, DIM, false)
-local timerLabel = line(78, 16, 13, DIM, true)
-local timerValue = line(90, 22, 20, Color3.fromRGB(255, 255, 255), true)
+local timerCaption = Ui.text(timerBox, {style = "caption", text = "", align = Enum.TextXAlignment.Center,
+	size = UDim2.new(1, 0, 0, 12), position = UDim2.fromOffset(0, 3)})
+local timerValue = Ui.text(timerBox, {style = "number", text = "", textSize = 24,
+	size = UDim2.new(1, 0, 0, 24), position = UDim2.fromOffset(0, 14)})
 
--- A step checklist and a standing note, both optional. The panel used to show one task line
--- at a time, which told you what to do next but never what the SHAPE of the bay was -- so you
--- could not see that there were two levers, or that you had already done one.
 local stepLabels = {}
-for idx = 1, 4 do
-	local l = line(112 + (idx - 1) * 19, 17, 15, DIM, false)
-	l.TextXAlignment = Enum.TextXAlignment.Left
-	l.Position = UDim2.new(0, 22, 0, 112 + (idx - 1) * 19)
-	l.Size = UDim2.new(1, -44, 0, 17)
-	l.Visible = false
-	stepLabels[idx] = l
+for i = 1, 5 do
+	stepLabels[i] = Ui.text(board.body, {style = "step", text = "",
+		position = UDim2.fromOffset(8, 0), size = UDim2.new(1, -16, 0, 17)})
+	stepLabels[i].Visible = false
 end
 
-local noteLabel = line(112, 30, 13, DIM, false)
-noteLabel.TextWrapped = true
+local noteLabel = Ui.text(board.body, {style = "note", text = "", wrap = true,
+	size = UDim2.new(1, -8, 0, 30)})
 noteLabel.Visible = false
 
--- flash sits outside the panel so a transient message never shifts the layout
-local flash = Instance.new("TextLabel")
-flash.AnchorPoint = Vector2.new(0.5, 0)
-flash.Position = UDim2.new(0.5, 0, 0, 132)
-flash.Size = UDim2.new(0, 470, 0, 24)
-flash.BackgroundColor3 = Color3.fromRGB(60, 20, 10)
-flash.BackgroundTransparency = 0.25
-flash.TextColor3 = Color3.fromRGB(255, 170, 110)
-flash.Font = Enum.Font.SourceSansBold
-flash.TextSize = 16
-flash.BorderSizePixel = 0
-flash.Text = ""
-flash.Visible = false
-flash.Parent = gui
+----------------------------------------------------------------
+-- 2. Toasts
+----------------------------------------------------------------
+-- A stack under the board. Newest at the top, each one shoving the others down, each one
+-- removing itself. Capped, because an obstacle that refuses ten blocks in a row should not
+-- own the whole screen.
+local TOAST_MAX = 3
+local TOAST_LIFE = 4.5   -- long enough to actually read a sentence before it goes
+local toasts = {}
 
-local flashCorner = corner:Clone()
-flashCorner.Parent = flash
+local toastHolder = Instance.new("Frame")
+toastHolder.Name = "Toasts"
+toastHolder.AnchorPoint = Vector2.new(0.5, 0)
+toastHolder.Position = UDim2.new(0.5, 0, 0, 170)
+toastHolder.Size = UDim2.fromOffset(PANEL_W, 140)
+toastHolder.BackgroundTransparency = 1
+toastHolder.ZIndex = 4
+toastHolder.Parent = gui
 
-table.insert(connections, Objective.OnClientEvent:Connect(function(p)
-	if not p then
-		root.Visible = false
-		flash.Visible = false
+local function layoutToasts()
+	for i, t in ipairs(toasts) do
+		TweenService:Create(t.frame, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {
+			Position = UDim2.new(0.5, 0, 0, (i - 1) * 38),
+		}):Play()
+	end
+end
+
+local function dismissToast(entry)
+	local idx = table.find(toasts, entry)
+	if not idx then
+		return
+	end
+	table.remove(toasts, idx)
+	local out = TweenService:Create(entry.frame, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {
+		BackgroundTransparency = 1,
+		Position = entry.frame.Position + UDim2.fromOffset(0, -10),
+	})
+	for _, d in ipairs(entry.frame:GetDescendants()) do
+		if d:IsA("TextLabel") then
+			TweenService:Create(d, TweenInfo.new(0.22), {TextTransparency = 1}):Play()
+		elseif d:IsA("UIStroke") then
+			TweenService:Create(d, TweenInfo.new(0.22), {Transparency = 1}):Play()
+		end
+	end
+	out.Completed:Connect(function()
+		entry.frame:Destroy()
+	end)
+	out:Play()
+	layoutToasts()
+end
+
+local function showToast(text, tone)
+	if not text or text == "" then
+		return
+	end
+	-- Normalised to caps. These come from two different server paths -- a guard's rejection
+	-- reason ("blades live") and an obstacle's own notice ("BLADES LIVE - CANNOT DROP
+	-- THERE") -- and side by side in the same stack the mixed casing read like a bug. The
+	-- toast is signage; signage shouts.
+	text = text:upper()
+	-- Repeat of the message already on top? Refresh it instead of stacking a duplicate --
+	-- a guard refusing the same cell twice is one event the player needs to see, not two.
+	local top = toasts[1]
+	if top and top.text == text then
+		top.expires = os.clock() + TOAST_LIFE
 		return
 	end
 
-	root.Visible = true
-	local tone = TONE[p.tone] or TONE.danger
-	stripe.BackgroundColor3 = tone
-	taskLabel.TextColor3 = tone
+	local frame = Instance.new("Frame")
+	frame.AnchorPoint = Vector2.new(0.5, 0)
+	frame.Position = UDim2.new(0.5, 0, 0, -10)
+	frame.Size = UDim2.fromOffset(PANEL_W - 40, 32)
+	frame.BackgroundColor3 = Ui.C.iron
+	frame.BackgroundTransparency = 0.08
+	frame.BorderSizePixel = 0
+	frame.ZIndex = 5
+	frame.Parent = toastHolder
+	Ui.corner(frame, 4)
+	Ui.stroke(frame, Ui.tone(tone, Ui.C.brass), 1.5)
+	Ui.sheen(frame, 0.25)
 
-	titleLabel.Text = p.title or ""
-	taskLabel.Text = p.task or ""
-	hintLabel.Text = p.hint or ""
+	-- a tone-coloured tab on the left edge, so the kind of event reads before the words
+	local tab = Instance.new("Frame")
+	tab.Size = UDim2.new(0, 4, 1, -10)
+	tab.Position = UDim2.fromOffset(5, 5)
+	tab.BackgroundColor3 = Ui.tone(tone, Ui.C.brass)
+	tab.BorderSizePixel = 0
+	tab.ZIndex = 6
+	tab.Parent = frame
+	Ui.corner(tab, 2)
 
-	if p.timer then
-		timerLabel.Text = p.timerLabel or ""
-		-- whole seconds only; a ticking fraction reads as noise at this size
-		local secs = math.max(0, math.floor(p.timer + 0.5))
-		timerValue.Text = string.format("%d:%02d", math.floor(secs / 60), secs % 60)
-		-- the countdown goes red on its own once it is nearly out, whatever the task tone is
-		timerValue.TextColor3 = (p.timerTone and TONE[p.timerTone])
-			or (secs <= 10 and TONE.danger)
-			or Color3.fromRGB(255, 255, 255)
-		timerLabel.Visible = true
-		timerValue.Visible = true
-	else
-		timerLabel.Visible = false
-		timerValue.Visible = false
+	Ui.text(frame, {style = "step", text = text, textSize = 14,
+		colour = Ui.C.parchment, position = UDim2.fromOffset(18, 0),
+		size = UDim2.new(1, -26, 1, 0), zindex = 6})
+
+	local entry = {frame = frame, text = text, expires = os.clock() + TOAST_LIFE}
+	table.insert(toasts, 1, entry)
+	while #toasts > TOAST_MAX do
+		dismissToast(toasts[#toasts])
+	end
+	layoutToasts()
+end
+
+----------------------------------------------------------------
+-- 3. The stamp
+----------------------------------------------------------------
+-- Centre screen, big, brief. Scales down onto the screen like a stamp hitting paper rather
+-- than fading in, because the whole point is that you cannot miss it.
+local stamp = Ui.panel({
+	parent = gui,
+	name = "Stamp",
+	size = UDim2.fromOffset(440, 96),
+	position = UDim2.new(0.5, 0, 0.36, 0),
+	anchor = Vector2.new(0.5, 0.5),
+	tone = "ok",
+	zindex = 8,
+})
+stamp.frame.Visible = false
+stamp.frame.BackgroundTransparency = 0.04
+
+local stampTitle = Ui.text(stamp.body, {style = "big", text = "", size = UDim2.new(1, 0, 0, 40)})
+local stampSub = Ui.text(stamp.body, {style = "hint", text = "", textSize = 14,
+	position = UDim2.fromOffset(0, 42), size = UDim2.new(1, 0, 0, 18)})
+
+local stampToken = 0
+local function showStamp(title, sub, tone)
+	stampToken += 1
+	local mine = stampToken
+	stamp.setTone(tone or "ok")
+	stampTitle.Text = title
+	stampTitle.TextColor3 = Ui.tone(tone, Ui.C.amber)
+	stampSub.Text = sub or ""
+	stamp.frame.Visible = true
+	stamp.frame.Size = UDim2.fromOffset(560, 122)
+	TweenService:Create(stamp.frame, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.fromOffset(440, 96),
+	}):Play()
+
+	task.delay(2.4, function()
+		if not alive or stampToken ~= mine then
+			return
+		end
+		local out = TweenService:Create(stamp.frame, TweenInfo.new(0.3), {BackgroundTransparency = 1})
+		TweenService:Create(stampTitle, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+		TweenService:Create(stampSub, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+		out.Completed:Connect(function()
+			if stampToken == mine then
+				stamp.frame.Visible = false
+				stamp.frame.BackgroundTransparency = 0.04
+				stampTitle.TextTransparency = 0
+				stampSub.TextTransparency = 0
+			end
+		end)
+		out:Play()
+	end)
+end
+
+----------------------------------------------------------------
+-- Wiring
+----------------------------------------------------------------
+local lastFlash = nil
+
+table.insert(connections, Objective.OnClientEvent:Connect(function(p)
+	if not p then
+		board.frame.Visible = false
+		lastFlash = nil
+		return
 	end
 
-	-- Steps first, then the note under them; the panel grows to fit whatever is present so a
-	-- bay with no checklist looks exactly as it did before.
+	board.frame.Visible = true
+	board.setTone(p.tone)
+	board.setTitle(p.title or "")
+	taskLabel.Text = p.task or ""
+	taskLabel.TextColor3 = Ui.tone(p.tone, Ui.C.amber)
+	hintLabel.Text = p.hint or ""
+
+	local y = 58
+	if p.timer then
+		timerCaption.Text = p.timerLabel or ""
+		local secs = math.max(0, math.floor(p.timer + 0.5))
+		timerValue.Text = string.format("%d:%02d", math.floor(secs / 60), secs % 60)
+		timerValue.TextColor3 = (p.timerTone and Ui.tone(p.timerTone))
+			or (secs <= 10 and Ui.C.danger)
+			or Ui.C.parchment
+		timerBox.Position = UDim2.new(0.5, 0, 0, y)
+		timerBox.Visible = true
+		y += 48
+	else
+		timerBox.Visible = false
+	end
+
 	local used = 0
 	for idx, l in ipairs(stepLabels) do
 		local text = p.steps and p.steps[idx]
@@ -151,67 +303,140 @@ table.insert(connections, Objective.OnClientEvent:Connect(function(p)
 		if text then
 			used = idx
 			l.Text = text
-			-- a finished step reads as finished without having to parse the [x]
-			l.TextColor3 = text:find("%[x%]") and TONE.ok
-				or text:find("%[%-%]") and Color3.fromRGB(120, 124, 136)
-				or Color3.fromRGB(226, 230, 240)
+			l.TextColor3 = text:find("%[x%]") and Ui.C.ok
+				or text:find("%[%-%]") and Ui.C.ghost
+				or Ui.C.parchment
+			l.Position = UDim2.fromOffset(8, y + (idx - 1) * 18)
 		end
 	end
+	y += used * 18 + (used > 0 and 4 or 0)
 
-	local noteTop = 112 + used * 19 + 2
 	noteLabel.Visible = p.note ~= nil
 	if p.note then
 		noteLabel.Text = p.note
-		noteLabel.Position = UDim2.new(0, 22, 0, noteTop)
-		noteLabel.Size = UDim2.new(1, -44, 0, 30)
+		noteLabel.Position = UDim2.fromOffset(4, y)
+		y += 32
 	end
 
-	local panelHeight = 112 + used * 19 + (p.note and 34 or 0) + 8
-	root.Size = UDim2.new(0, 470, 0, math.max(120, panelHeight))
-	flash.Position = UDim2.new(0.5, 0, 0, math.max(132, panelHeight + 10))
+	board.frame.Size = UDim2.fromOffset(PANEL_W, math.max(120, y + 34))
+	toastHolder.Position = UDim2.new(0.5, 0, 0, 16 + board.frame.Size.Y.Offset + 10)
 
-	flash.Text = p.flash or ""
-	flash.Visible = (p.flash ~= nil)
+	-- `flash` is the server's refusal channel. It arrives merged into the next objective push
+	-- and persists in the payload, so it has to be edge-detected or every subsequent push
+	-- re-raises the same toast.
+	if p.flash and p.flash ~= lastFlash then
+		showToast(p.flash, "warn")
+	end
+	lastFlash = p.flash
+end))
+
+-- Direct event channel: obstacles announce things that are not a change of objective.
+table.insert(connections, Toast.OnClientEvent:Connect(function(text, tone, big)
+	if big then
+		showStamp(text, nil, tone)
+	else
+		showToast(text, tone)
+	end
+end))
+
+-- Bay cleared. Taken from the status feed rather than from the objective payload, because
+-- `solved` is the authoritative edge and a bay may clear its objective on the same frame.
+-- (Arcade: the feed is Remotes.Status, the old DebugStatus payload plus a few extra fields.)
+local wasSolved = {}
+table.insert(connections, Status.OnClientEvent:Connect(function(status)
+	if type(status) ~= "table" then
+		return
+	end
+	for i, b in pairs(status.bays or {}) do
+		if b.solved and wasSolved[i] == false then
+			showStamp("BAY " .. string.format("%02d", i) .. "  CLEARED",
+				(b.obstacle or ""):upper(), "ok")
+		end
+		wasSolved[i] = b.solved or false
+	end
+end))
+
+-- Death, worth a stamp of its own: the respawn is silent otherwise and in a dark room you
+-- genuinely cannot tell you died. (Arcade: not on a spectator's copy -- the spectator's own
+-- character is not the one running the course.)
+local diedConn = nil
+local function watchCharacter(ch)
+	local hum = ch:WaitForChild("Humanoid", 5)
+	if hum and alive then
+		if diedConn then
+			diedConn:Disconnect()
+		end
+		diedConn = hum.Died:Connect(function()
+			showStamp("YOU DIED", "the machine resets", "danger")
+		end)
+	end
+end
+if not readOnly then
+	table.insert(connections, player.CharacterAdded:Connect(watchCharacter))
+	if player.Character then
+		-- spawned, so the Humanoid wait can't hold up the rest of this script (the Exiting hook)
+		task.spawn(watchCharacter, player.Character)
+	end
+end
+
+-- Toast expiry.
+table.insert(connections, RunService.Heartbeat:Connect(function()
+	local now = os.clock()
+	for i = #toasts, 1, -1 do
+		if now >= toasts[i].expires then
+			dismissToast(toasts[i])
+		end
+	end
 end))
 
 ----------------------------------------------------------------
--- The run clock (arcade): the whole course has one, and it is the win condition. A pill to the
--- right of the panel, so it is there even between bays when the panel itself is empty.
+-- The run clock (arcade)
 ----------------------------------------------------------------
-local pill = Instance.new("TextLabel")
-pill.Name = "RunClock"
-pill.AnchorPoint = Vector2.new(0, 0)
-pill.Position = UDim2.new(0.5, 245, 0, 14)
-pill.Size = UDim2.new(0, 104, 0, 28)
-pill.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-pill.BackgroundTransparency = 0.22
-pill.BorderSizePixel = 0
-pill.Font = Enum.Font.SourceSansBold
-pill.TextSize = 18
-pill.TextColor3 = Color3.fromRGB(255, 255, 255)
-pill.Text = ""
-pill.Visible = false
-pill.Parent = gui
-corner:Clone().Parent = pill
+-- The whole course has one, and it is the win condition. A brass-framed readout in the same
+-- style as the bay timer, sitting to the right of the order board's top edge so it never covers
+-- the board or the toast stack under it, and is there even between bays when the board is hidden.
+local CLOCK_W, CLOCK_H = 112, 46
+local clock = Instance.new("Frame")
+clock.Name = "RunClock"
+clock.AnchorPoint = Vector2.new(0, 0)
+clock.Position = UDim2.new(0.5, PANEL_W / 2 + 12, 0, 16)
+clock.Size = UDim2.fromOffset(CLOCK_W, CLOCK_H)
+clock.BackgroundColor3 = Ui.C.iron
+clock.BackgroundTransparency = 0.06
+clock.BorderSizePixel = 0
+clock.ZIndex = 2
+clock.Visible = false
+clock.Parent = gui
+Ui.corner(clock, 5)
+Ui.sheen(clock, 0.3)
+local clockEdge = Ui.stroke(clock, Ui.C.brass, 2)
+
+Ui.text(clock, {style = "caption", text = "RUN", align = Enum.TextXAlignment.Center,
+	size = UDim2.new(1, 0, 0, 12), position = UDim2.fromOffset(0, 4), zindex = 3})
+local clockValue = Ui.text(clock, {style = "number", text = "", textSize = 24,
+	size = UDim2.new(1, 0, 0, 26), position = UDim2.fromOffset(0, 16), zindex = 3})
 
 local function refreshClock()
 	local state = Obby:GetAttribute("RunState")
 	local endsAt = Obby:GetAttribute("RunEndsAt")
 	if state == nil then
-		pill.Visible = false
+		clock.Visible = false
 		return
 	end
-	pill.Visible = true
+	clock.Visible = true
 	if state == "Won" then
-		pill.Text = "CLEAR"
-		pill.TextColor3 = TONE.ok
+		clockValue.Text = "CLEAR"
+		clockValue.TextColor3 = Ui.C.ok
+		clockEdge.Color = Ui.C.ok
 		return
 	end
 	local left = type(endsAt) == "number" and math.max(0, endsAt - workspace:GetServerTimeNow())
 		or (Obby:GetAttribute("RunSeconds") or 0)
 	local secs = math.ceil(left)
-	pill.Text = string.format("RUN %d:%02d", secs // 60, secs % 60)
-	pill.TextColor3 = (state == "Lost" or left < 30) and TONE.danger or Color3.fromRGB(255, 255, 255)
+	clockValue.Text = string.format("%d:%02d", secs // 60, secs % 60)
+	local hot = state == "Lost" or left < 30
+	clockValue.TextColor3 = hot and Ui.C.danger or Ui.C.parchment
+	clockEdge.Color = hot and Ui.C.danger or Ui.C.brass
 end
 
 local sinceClock = 0
@@ -227,9 +452,24 @@ refreshClock()
 
 -- Views.PlayerView sets Exiting on this copy before destroying it.
 script:GetAttributeChangedSignal("Exiting"):Connect(function()
+	alive = false
 	for _, c in ipairs(connections) do
 		c:Disconnect()
 	end
 	table.clear(connections)
+	if diedConn then
+		diedConn:Disconnect()
+		diedConn = nil
+	end
+	stampToken += 1 -- any pending stamp fade-out is now stale
+	table.clear(toasts)
 	gui:Destroy()
 end)
+
+-- Ask for the status now (arcade): a HUD cloned in mid-run gets its solved baseline straight away, so the
+-- first BAY CLEARED stamp is not missed waiting for the next push.
+if not script:GetAttribute("ReadOnly") then
+	Status:FireServer()
+end
+
+print("[ObjectiveHud] steampunk HUD online")

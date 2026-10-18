@@ -17,6 +17,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local Obby = ReplicatedStorage:WaitForChild("Obby")
 local Config = require(Obby:WaitForChild("Config"))
+local Ui = require(Obby:WaitForChild("UiTheme"))
 
 if Obby:GetAttribute("ArcadeDebug") ~= true then
 	return
@@ -31,13 +32,13 @@ local connections = {}
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local INK = Color3.fromRGB(232, 236, 244)
-local PANEL = Color3.fromRGB(18, 19, 24)
-local EDGE = Color3.fromRGB(52, 56, 68)
-local LIVE = Color3.fromRGB(90, 230, 130)
-local WARM = Color3.fromRGB(255, 180, 90)
-local COLD = Color3.fromRGB(110, 170, 255)
-local DONE = Color3.fromRGB(120, 240, 140)
+local INK = Ui.C.parchment
+local PANEL = Ui.C.iron
+local EDGE = Ui.C.brass
+local LIVE = Ui.C.ok
+local WARM = Ui.C.amber
+local COLD = Ui.C.info
+local DONE = Ui.C.ok
 
 local FEED_LABEL = {
 	live = "MODE: LIVE ARM",
@@ -63,7 +64,13 @@ root.BackgroundColor3 = PANEL
 root.BackgroundTransparency = 0.08
 root.BorderSizePixel = 0
 root.Parent = gui
-Instance.new("UICorner", root).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", root).CornerRadius = UDim.new(0, 5)
+Ui.stroke(root, Ui.C.brass, 2)
+Ui.sheen(root, 0.3)
+-- NO rivetRow here. This panel lays its children out with a UIListLayout, so decorative
+-- frames parented to it become LIST ITEMS: the rivets marched down the left edge as rows and
+-- shoved every control out of place. Rivets belong on panels that position their own
+-- children, which is what UiTheme.panel builds.
 local stroke = Instance.new("UIStroke", root)
 stroke.Color = EDGE
 stroke.Thickness = 1
@@ -88,7 +95,7 @@ local function label(text, size, colour, parent)
 	local l = Instance.new("TextLabel")
 	l.Size = UDim2.new(1, 0, 0, size + 6)
 	l.BackgroundTransparency = 1
-	l.Font = Enum.Font.GothamBold
+	l.Font = Ui.F.label
 	l.TextSize = size
 	l.TextColor3 = colour or INK
 	l.TextXAlignment = Enum.TextXAlignment.Left
@@ -101,21 +108,22 @@ end
 local function button(text, parent, tint)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(1, 0, 0, 30)
-	b.BackgroundColor3 = tint or Color3.fromRGB(38, 41, 52)
+	b.BackgroundColor3 = tint or Ui.C.ironLight
 	b.BorderSizePixel = 0
 	b.AutoButtonColor = true
-	b.Font = Enum.Font.GothamBold
+	b.Font = Ui.F.label
 	b.TextSize = 13
 	b.TextColor3 = INK
 	b.Text = text
 	b.LayoutOrder = nextOrder()
 	b.Parent = parent or root
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+	Ui.stroke(b, Ui.C.brassDim, 1.5)
 	return b
 end
 
 label("DEBUG  -  SCENARIOS", 14)
-local hint = label("F1 hides this panel", 11, Color3.fromRGB(140, 146, 160))
+local hint = label("F1 hides this panel", 11, Ui.C.faded)
 hint.Size = UDim2.new(1, 0, 0, 14)
 
 -- Bay grid -------------------------------------------------------------
@@ -134,15 +142,16 @@ local bayButtons = {}
 for i = 1, Config.NumBays do
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(0, 88, 0, 28)
-	b.BackgroundColor3 = Color3.fromRGB(38, 41, 52)
+	b.BackgroundColor3 = Ui.C.ironLight
 	b.BorderSizePixel = 0
-	b.Font = Enum.Font.GothamBold
+	b.Font = Ui.F.label
 	b.TextSize = 11
 	b.TextColor3 = INK
 	b.Text = ("%d"):format(i)
 	b.LayoutOrder = i
 	b.Parent = grid
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+	Ui.stroke(b, Ui.C.brassDim, 1.5)
 	local st = Instance.new("UIStroke", b)
 	st.Color = EDGE
 	st.Thickness = 1
@@ -154,24 +163,24 @@ end
 
 local current = label("Bay 01  -  Saw", 12, COLD)
 
-local startBtn = button("START RUN HERE  (fresh state)", root, Color3.fromRGB(32, 78, 48))
+local startBtn = button("START RUN HERE  (fresh state)", root, Color3.fromRGB(30, 62, 44))
 local resetBtn = button("RESET THIS BAY", root)
 local resetAllBtn = button("RESET ALL BAYS", root)
 -- Distinct from RESET ALL BAYS, which rebuilds the course and leaves you standing wherever
 -- you were -- usually mid-bay, mid-hazard, sometimes dead. This one also puts you back on the
 -- spawn with a fresh body, which is the state a demo wants to start from.
-local fullResetBtn = button("RESET EVERYTHING  (F2)", root, Color3.fromRGB(86, 34, 40))
+local fullResetBtn = button("RESET EVERYTHING  (F2)", root, Color3.fromRGB(78, 32, 22))
 
 -- Player 2 ------------------------------------------------------------
 local sep = label("WHO PLACES BLOCKS  (switching resets everything)", 11,
-	Color3.fromRGB(140, 146, 160))
+	Ui.C.faded)
 sep.Size = UDim2.new(1, 0, 0, 16)
 
 local feedBtn = button("P2: ...", root)
-local feedHint = label("", 10, Color3.fromRGB(140, 146, 160))
+local feedHint = label("", 10, Ui.C.faded)
 feedHint.Size = UDim2.new(1, 0, 0, 26)
 feedHint.TextWrapped = true
-feedHint.Font = Enum.Font.Gotham
+feedHint.Font = Ui.F.body
 
 local state = {activeBay = 1, feedMode = "solo", bays = {}}
 
@@ -200,8 +209,8 @@ local function render()
 		local isActive = (i == state.activeBay)
 		local solved = info and info.solved
 		entry.button.Text = info and ("%d  %s"):format(i, info.obstacle) or tostring(i)
-		entry.button.BackgroundColor3 = isActive and Color3.fromRGB(28, 54, 86)
-			or Color3.fromRGB(38, 41, 52)
+		entry.button.BackgroundColor3 = isActive and Color3.fromRGB(58, 42, 18)
+			or Ui.C.ironLight
 		entry.stroke.Color = isActive and COLD or (solved and DONE or EDGE)
 		entry.stroke.Thickness = isActive and 2 or 1
 		entry.button.TextColor3 = solved and DONE or INK
@@ -213,7 +222,7 @@ local function render()
 		current.TextColor3 = info.solved and DONE or COLD
 	end
 	feedBtn.Text = FEED_LABEL[state.feedMode] or "P2: ?"
-	feedBtn.BackgroundColor3 = Color3.fromRGB(32, 36, 46)
+	feedBtn.BackgroundColor3 = Ui.C.ironLight
 	local tint = FEED_TINT[state.feedMode]
 	feedBtn.TextColor3 = tint or INK
 	feedHint.Text = FEED_HINT[state.feedMode] or ""

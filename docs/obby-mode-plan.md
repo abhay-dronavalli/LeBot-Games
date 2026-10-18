@@ -194,7 +194,8 @@ the newest `Place1.rbxl`) with no conflicts, and `roblox/` is identical to lobby
 **Files only.** None of it has been run in Studio yet, and there is no Luau checker here, so the first install will
 surface any typos in Output.
 
-Kushagra's standalone copy stays in `lebot_obby/`, and he can keep working there. The arcade copies listed below started
+Kushagra's standalone copy stays in `lebot_obby/`, and he can keep working there. Ported so far: everything up to
+`obby_kushi` 80ba26f ("ui changes": UiTheme, the three-layer HUD, the overseer's NEXT BLOCK card, brass plates). The arcade copies listed below started
 as his files with minimal edits, so a later design change can be ported by diffing his file against its arcade twin.
 
 ### Where everything is
@@ -204,7 +205,8 @@ as his files with minimal edits, so a later design change can be ported by diffi
 | `roblox/ServerStorage/Modes/Obby/Module.lua` | `ServerStorage.Modes.Obby.Module` | The mode: Start/Stop/PlayerLeft/IsDecided, run clock, finish, respawn checkpoint, lobby pad, runner scale. `DisplayName "Robo Obby"`, `WinsToUnlock 0`, `MaxDuration 500` |
 | `roblox/ServerStorage/Modes/Obby/Server/*.lua` | `ServerStorage.Modes.Obby.Server.*` (ModuleScripts) | His server code, cloned fresh as `Modes.Obby.Runtime` each round: RunControl, BlockSync, SkyArm, ArmMirror, HazardManager, ActiveBayTracker, BridgeFeed, DebugMode (the solo crate source), Status (new: the always-on half of his DebugMenu), DebugMenu and GhostMode (debug only), BayData, CrateDefs, Mapping |
 | `roblox/ReplicatedStorage/Obby/Config.lua` | `ReplicatedStorage.Obby.Config` | His tunables, plus `OriginZ = 1100`, `ArcadeDebug = false`, `RunnerScale = 1`, `ArcadeScale = 1.5`, `ResultSeconds`, `RespawnSettleSeconds`, `Dark*` |
-| (made by Module and the installer) | `ReplicatedStorage.Obby.Remotes` | His 9 remotes (`DebugStatus` is renamed `Status`) |
+| `roblox/ReplicatedStorage/Obby/UiTheme.lua` | `ReplicatedStorage.Obby.UiTheme` | His shared steampunk UI kit (obby_planmds/ui.md), unchanged. Used by the views and HazardManager's brass plates |
+| (made by Module and the installer) | `ReplicatedStorage.Obby.Remotes` | His 10 remotes (`DebugStatus` is renamed `Status`; `Toast` is his popup channel) |
 | `roblox/ReplicatedStorage/Obby/Views/PlayerView.lua`, `RobotView.lua` | `ReplicatedStorage.Obby.Views.*` | Role views. RobotView is OverseerCam, always on, with the objective panel and run/link status |
 | `roblox/ReplicatedStorage/Obby/Views/Player/*.client.lua` | `...Views.Player.*` (LocalScripts) | ObjectiveHud (plus a run clock), CellEditor (solo only), BackdropFx, CameraPolish, DarkRoom (new) |
 | `roblox/ReplicatedStorage/Obby/Views/Debug/*.client.lua` | `...Views.Debug.*` | DebugMenu (F1/F2) and GhostControl (Q), cloned only when ArcadeDebug is on |

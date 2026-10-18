@@ -2,24 +2,26 @@
 -- Robo Obby's robot view (Core.Games.Obby): what the operator at the real arm sees while the Obby is the
 -- active game. The arcade port of lebot_obby/StarterPlayerScripts/OverseerCam.client.lua (Kushagra's
 -- overseer view, his notes kept below), turned into enter(ctx) / exit():
---   * enter builds the panel and the overlay and turns the overseer view ON at once. The robot role has no
---     runner of its own to flip back to, so there is no V key. Zoom (wheel, - / =), right-drag pan, G walls
---     and the two buttons stay: they are the operator's controls.
---   * the robot has NO character. The "runner" it outlines and tracks on the mini grid is the player whose
+--   * enter builds the panels and the overlay and turns the overseer view ON at once. The robot role has
+--     no runner of its own to flip back to, so there is no V key. Zoom (wheel, - / =), right-drag pan, G
+--     walls and the two buttons stay: they are the operator's controls.
+--   * the robot has NO character. The "runner" it outlines and tracks on the mat grid is the player whose
 --     Role attribute is "player" (fallback: any other player with a character).
 --   * the world is workspace.ObbyMap (cloned in each round, ModelStreamingMode Persistent). It is waited for
 --     by the paint loop, not by enter, so enter never holds up Core RoleClient; the bays sit Config.OriginZ
 --     down +Z, so every Z worked out from a bay index adds it (bayZStart).
---   * Remotes.Status (activeBay, solveCells, resetToken, feedMode, linkOnline) and Remotes.BayCells (the
---     occupied cells) drive the grid; Remotes.Objective (the runner's task, copied to the robot by the
---     server) shows top centre with the runner's ObjectiveHud look. A status pill top left: the run clock
---     (ReplicatedStorage.Obby RunEndsAt / RunState), the feed mode, and ROBOT LINK OFFLINE when the feed is
---     live and the core link is down.
+--   * Remotes.Status (activeBay, solveCells, level, resetToken, feedMode, linkOnline) and Remotes.BayCells
+--     (the occupied cells) drive his order card and the mat grid; Remotes.Objective (the runner's task,
+--     copied to the robot by the server, the win / lose screens included) shows top centre in his
+--     ObjectiveHud order-board look. A status panel top left, under the Roblox top bar: the run clock
+--     (ReplicatedStorage.Obby RunEndsAt / RunState), the feed mode, and ROBOT LINK OFFLINE when the feed
+--     is live and the core link is down. His card, mat and buttons own the right-hand column; the two
+--     arcade panels stay left of it and clear of it down to a 1024-wide screen.
 --   * exit disconnects everything, stops the paint loop, puts back every LocalTransparencyModifier it
 --     ghosted, destroys the overlay, the highlight and the GUI, unbinds its actions and puts the camera back
 --     (FloodRobotView's savedCamera). Never touches Lighting.
 --
--- OverseerCam -- player 2's view of the bay.
+-- OverseerCam (client) -- player 2's view of the bay.
 --
 -- The overseer's job is to put real cubes on a real mat and have them land in the right cells.
 -- That needs a view where the 4x3 grid is legible, the runner is findable, and the obstacle is
@@ -45,6 +47,7 @@ local Workspace = game:GetService("Workspace")
 
 local Obby = ReplicatedStorage:WaitForChild("Obby")
 local Config = require(Obby:WaitForChild("Config"))
+local Ui = require(Obby:WaitForChild("UiTheme"))
 
 local Remotes = Obby:WaitForChild("Remotes")
 local Status = Remotes:WaitForChild("Status")
@@ -62,17 +65,20 @@ local SETBACK = 9          -- a few degrees of tilt so the room keeps its walls
 -- the old one back).
 local FOV = 70
 
-local INK = Color3.fromRGB(232, 236, 244)
-local WANT = Color3.fromRGB(90, 230, 130)
-local HELD = Color3.fromRGB(96, 170, 255)
-local DIMMED = Color3.fromRGB(96, 104, 122)
+local INK = Ui.C.parchment
+local WANT = Ui.C.amber        -- the cell being asked for RIGHT NOW
+local HELD = Ui.C.ok           -- already filled
+local RUNNER = Ui.C.info       -- where player 1 is standing
+local DIMMED = Ui.C.ghost
 
-local TONE = {
-	danger = Color3.fromRGB(255, 92, 80),
-	warn = Color3.fromRGB(255, 190, 70),
-	ok = Color3.fromRGB(120, 240, 150),
-}
-local DIM = Color3.fromRGB(165, 165, 180)
+-- Arcade panels. His right-hand column (buttons, order card, mat) is 250 wide at 18 from the right
+-- edge; the objective board is centred and the status panel sits top left, and both are sized so
+-- neither reaches that column on a 1024-wide screen (460 + 2 * (250 + 18 + 12) = 1020).
+local OBJ_W = 460
+local OBJ_TOP = 16
+local STATUS_W, STATUS_H = 250, 80
+local STATUS_TOP = 64      -- under the Roblox top bar's buttons (the gui ignores the inset)
+local TOAST_LIFE = 4.5     -- as ObjectiveHud's toasts: long enough to read a sentence
 
 local RobotView = {}
 
@@ -113,151 +119,173 @@ local panning = false
 local xray = true
 local xrayBtn, recenterBtn
 local solveCells, bayName = nil, "?"
+local bayLevel = nil          -- cubes per cell, for the order card
 local occupied = {}
 local markers = {}
 local hidden = {}          -- part -> its real LocalTransparencyModifier
 local highlight = nil
 local status = nil         -- the last Remotes.Status payload
 
+-- Built by buildGui at enter, dropped by exit.
 local overlay
 local gui, banner, sub, gridFrame
+local card, crateHolder, colLabel, rowLabel, qtyLabel, progressLabel
 local cellBtns = {}
 local objectiveUi, statusUi
 
-----------------------------------------------------------------
--- Panel
-----------------------------------------------------------------
--- Controls the operator can hit without knowing a keybind. The keys stay, but a hackathon
--- demo gets driven by someone who has never seen this screen before, and a visible button is
--- the difference between "the walls are in my way" and "I pressed the walls button".
+local function drawCrate(count)
+	if not crateHolder then
+		return
+	end
+	crateHolder:ClearAllChildren()
+	if count and count > 0 then
+		Ui.crateIcon(crateHolder, {count = count, anchor = Vector2.new(0.5, 1),
+			position = UDim2.new(0.5, 0, 1, 0), size = UDim2.fromOffset(40, 58)})
+	end
+end
+
 local function ctrlButton(text, y)
 	local b = Instance.new("TextButton")
 	b.AnchorPoint = Vector2.new(1, 0)
 	b.Position = UDim2.new(1, -18, 0, y)
-	b.Size = UDim2.new(0, 214, 0, 28)
-	b.BackgroundColor3 = Color3.fromRGB(34, 38, 48)
-	b.BackgroundTransparency = 0.08
+	b.Size = UDim2.fromOffset(250, 30)
+	b.BackgroundColor3 = Ui.C.ironLight
 	b.BorderSizePixel = 0
 	b.AutoButtonColor = true
-	b.Font = Enum.Font.GothamBold
+	b.Font = Ui.F.label
 	b.TextSize = 11
-	b.TextColor3 = DIMMED
+	b.TextColor3 = Ui.C.faded
 	b.Text = text
+	b.ZIndex = 3
 	b.Parent = gui
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	Ui.corner(b, 4)
+	Ui.stroke(b, Ui.C.brassDim, 1.5)
+	Ui.sheen(b, 0.2)
 	return b
 end
 
--- The runner's task panel, ported from Views.Player.ObjectiveHud (same look, same place: top
--- centre). The camera already aims past the bay's middle to keep the grid out from under it,
--- which is the layout this view was built around when the runner's HUD shared the screen.
+----------------------------------------------------------------
+-- The objective board (arcade)
+----------------------------------------------------------------
+-- The runner's task, ported from Views.Player.ObjectiveHud's order board (same look, same place:
+-- top centre). The camera already aims past the bay's middle to keep the grid out from under it,
+-- which is the layout this view was built around when the runner's HUD shared the screen. The
+-- mode's win / lose screens arrive here too, as ordinary payloads.
 -- Payload: {title, task, hint, tone, timer, timerLabel, timerTone, flash, steps, note}
+-- `flash` is raised as one toast under the board, edge-detected like ObjectiveHud's (it persists in
+-- every later push, so showing it while present would never take it down).
 local function buildObjective(parent)
-	local root = Instance.new("Frame")
-	root.Name = "Objective"
-	root.AnchorPoint = Vector2.new(0.5, 0)
-	root.Position = UDim2.new(0.5, 0, 0, 14)
-	root.Size = UDim2.new(0, 470, 0, 112)
-	root.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-	root.BackgroundTransparency = 0.22
-	root.BorderSizePixel = 0
-	root.Visible = false
-	root.Parent = parent
+	local board = Ui.panel({
+		parent = parent,
+		name = "Objective",
+		title = "",
+		size = UDim2.fromOffset(OBJ_W, 140),
+		position = UDim2.new(0.5, 0, 0, OBJ_TOP),
+		anchor = Vector2.new(0.5, 0),
+		tone = "danger",
+		zindex = 2,
+	})
+	board.frame.Visible = false
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = root
+	local taskLabel = Ui.text(board.body, {style = "task", text = "", size = UDim2.new(1, 0, 0, 32)})
+	local hintLabel = Ui.text(board.body, {style = "hint", text = "",
+		position = UDim2.fromOffset(0, 34), size = UDim2.new(1, 0, 0, 18), wrap = true})
 
-	local stripe = Instance.new("Frame")
-	stripe.Size = UDim2.new(1, 0, 0, 3)
-	stripe.BorderSizePixel = 0
-	stripe.BackgroundColor3 = TONE.danger
-	stripe.Parent = root
+	local timerBox = Instance.new("Frame")
+	timerBox.Name = "TimerBox"
+	timerBox.AnchorPoint = Vector2.new(0.5, 0)
+	timerBox.Position = UDim2.new(0.5, 0, 0, 56)
+	timerBox.Size = UDim2.fromOffset(150, 40)
+	timerBox.BackgroundColor3 = Ui.C.ironDark
+	timerBox.BorderSizePixel = 0
+	timerBox.ZIndex = board.body.ZIndex + 1
+	timerBox.Visible = false
+	timerBox.Parent = board.body
+	Ui.corner(timerBox, 4)
+	Ui.stroke(timerBox, Ui.C.brassDim, 1.5)
 
-	local function line(y, height, size, colour, bold)
-		local l = Instance.new("TextLabel")
-		l.Size = UDim2.new(1, -24, 0, height)
-		l.Position = UDim2.new(0, 12, 0, y)
-		l.BackgroundTransparency = 1
-		l.TextColor3 = colour
-		l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
-		l.TextSize = size
-		l.TextXAlignment = Enum.TextXAlignment.Center
-		l.Text = ""
-		l.Parent = root
-		return l
+	local timerCaption = Ui.text(timerBox, {style = "caption", text = "", align = Enum.TextXAlignment.Center,
+		size = UDim2.new(1, 0, 0, 12), position = UDim2.fromOffset(0, 3)})
+	local timerValue = Ui.text(timerBox, {style = "number", text = "", textSize = 24,
+		size = UDim2.new(1, 0, 0, 24), position = UDim2.fromOffset(0, 14)})
+
+	local stepLabels = {}
+	for i = 1, 5 do
+		stepLabels[i] = Ui.text(board.body, {style = "step", text = "",
+			position = UDim2.fromOffset(8, 0), size = UDim2.new(1, -16, 0, 17)})
+		stepLabels[i].Visible = false
 	end
 
-	local ui = {
-		root = root,
-		stripe = stripe,
-		title = line(10, 16, 14, DIM, true),
-		task = line(28, 28, 24, TONE.danger, true),
-		hint = line(57, 18, 15, DIM, false),
-		timerLabel = line(78, 16, 13, DIM, true),
-		timerValue = line(90, 22, 20, Color3.fromRGB(255, 255, 255), true),
-		steps = {},
+	local noteLabel = Ui.text(board.body, {style = "note", text = "", wrap = true,
+		size = UDim2.new(1, -8, 0, 30)})
+	noteLabel.Visible = false
+
+	-- the flash toast: ObjectiveHud's toast look, one slot, under the board
+	local toast = Instance.new("Frame")
+	toast.Name = "Flash"
+	toast.AnchorPoint = Vector2.new(0.5, 0)
+	toast.Position = UDim2.new(0.5, 0, 0, OBJ_TOP + 150)
+	toast.Size = UDim2.fromOffset(OBJ_W - 40, 32)
+	toast.BackgroundColor3 = Ui.C.iron
+	toast.BackgroundTransparency = 0.08
+	toast.BorderSizePixel = 0
+	toast.ZIndex = 5
+	toast.Visible = false
+	toast.Parent = parent
+	Ui.corner(toast, 4)
+	Ui.stroke(toast, Ui.C.warn, 1.5)
+	Ui.sheen(toast, 0.25)
+
+	local tab = Instance.new("Frame")
+	tab.Size = UDim2.new(0, 4, 1, -10)
+	tab.Position = UDim2.fromOffset(5, 5)
+	tab.BackgroundColor3 = Ui.C.warn
+	tab.BorderSizePixel = 0
+	tab.ZIndex = 6
+	tab.Parent = toast
+	Ui.corner(tab, 2)
+
+	local toastLabel = Ui.text(toast, {style = "step", text = "", textSize = 14,
+		colour = Ui.C.parchment, position = UDim2.fromOffset(18, 0),
+		size = UDim2.new(1, -26, 1, 0), zindex = 6})
+
+	return {
+		board = board, task = taskLabel, hint = hintLabel,
+		timerBox = timerBox, timerCaption = timerCaption, timerValue = timerValue,
+		steps = stepLabels, note = noteLabel,
+		toast = toast, toastLabel = toastLabel, toastToken = 0, lastFlash = nil,
 	}
-	for idx = 1, 4 do
-		local l = line(112 + (idx - 1) * 19, 17, 15, DIM, false)
-		l.TextXAlignment = Enum.TextXAlignment.Left
-		l.Position = UDim2.new(0, 22, 0, 112 + (idx - 1) * 19)
-		l.Size = UDim2.new(1, -44, 0, 17)
-		l.Visible = false
-		ui.steps[idx] = l
-	end
-	ui.note = line(112, 30, 13, DIM, false)
-	ui.note.TextWrapped = true
-	ui.note.Visible = false
-
-	-- flash sits outside the panel so a transient message never shifts the layout
-	local flash = Instance.new("TextLabel")
-	flash.AnchorPoint = Vector2.new(0.5, 0)
-	flash.Position = UDim2.new(0.5, 0, 0, 132)
-	flash.Size = UDim2.new(0, 470, 0, 24)
-	flash.BackgroundColor3 = Color3.fromRGB(60, 20, 10)
-	flash.BackgroundTransparency = 0.25
-	flash.TextColor3 = Color3.fromRGB(255, 170, 110)
-	flash.Font = Enum.Font.SourceSansBold
-	flash.TextSize = 16
-	flash.BorderSizePixel = 0
-	flash.Text = ""
-	flash.Visible = false
-	flash.Parent = parent
-	corner:Clone().Parent = flash
-	ui.flash = flash
-	return ui
 end
 
 local function showObjective(ui, p)
 	if not p then
-		ui.root.Visible = false
-		ui.flash.Visible = false
+		ui.board.frame.Visible = false
+		ui.toast.Visible = false
+		ui.lastFlash = nil
 		return
 	end
 
-	ui.root.Visible = true
-	local tone = TONE[p.tone] or TONE.danger
-	ui.stripe.BackgroundColor3 = tone
-	ui.task.TextColor3 = tone
-
-	ui.title.Text = p.title or ""
+	ui.board.frame.Visible = true
+	ui.board.setTone(p.tone)
+	ui.board.setTitle(p.title or "")
 	ui.task.Text = p.task or ""
+	ui.task.TextColor3 = Ui.tone(p.tone, Ui.C.amber)
 	ui.hint.Text = p.hint or ""
 
+	local y = 58
 	if p.timer then
-		ui.timerLabel.Text = p.timerLabel or ""
+		ui.timerCaption.Text = p.timerLabel or ""
 		-- whole seconds only; a ticking fraction reads as noise at this size
 		local secs = math.max(0, math.floor(p.timer + 0.5))
 		ui.timerValue.Text = string.format("%d:%02d", math.floor(secs / 60), secs % 60)
-		ui.timerValue.TextColor3 = (p.timerTone and TONE[p.timerTone])
-			or (secs <= 10 and TONE.danger)
-			or Color3.fromRGB(255, 255, 255)
-		ui.timerLabel.Visible = true
-		ui.timerValue.Visible = true
+		ui.timerValue.TextColor3 = (p.timerTone and Ui.tone(p.timerTone))
+			or (secs <= 10 and Ui.C.danger)
+			or Ui.C.parchment
+		ui.timerBox.Position = UDim2.new(0.5, 0, 0, y)
+		ui.timerBox.Visible = true
+		y += 48
 	else
-		ui.timerLabel.Visible = false
-		ui.timerValue.Visible = false
+		ui.timerBox.Visible = false
 	end
 
 	local used = 0
@@ -267,62 +295,60 @@ local function showObjective(ui, p)
 		if text then
 			used = idx
 			l.Text = text
-			l.TextColor3 = text:find("%[x%]") and TONE.ok
-				or text:find("%[%-%]") and Color3.fromRGB(120, 124, 136)
-				or Color3.fromRGB(226, 230, 240)
+			l.TextColor3 = text:find("%[x%]") and Ui.C.ok
+				or text:find("%[%-%]") and Ui.C.ghost
+				or Ui.C.parchment
+			l.Position = UDim2.fromOffset(8, y + (idx - 1) * 18)
 		end
 	end
+	y += used * 18 + (used > 0 and 4 or 0)
 
-	local noteTop = 112 + used * 19 + 2
 	ui.note.Visible = p.note ~= nil
 	if p.note then
 		ui.note.Text = p.note
-		ui.note.Position = UDim2.new(0, 22, 0, noteTop)
-		ui.note.Size = UDim2.new(1, -44, 0, 30)
+		ui.note.Position = UDim2.fromOffset(4, y)
+		y += 32
 	end
 
-	local panelHeight = 112 + used * 19 + (p.note and 34 or 0) + 8
-	ui.root.Size = UDim2.new(0, 470, 0, math.max(120, panelHeight))
-	ui.flash.Position = UDim2.new(0.5, 0, 0, math.max(132, panelHeight + 10))
+	local height = math.max(120, y + 34)
+	ui.board.frame.Size = UDim2.fromOffset(OBJ_W, height)
+	ui.toast.Position = UDim2.new(0.5, 0, 0, OBJ_TOP + height + 10)
 
-	ui.flash.Text = p.flash or ""
-	ui.flash.Visible = (p.flash ~= nil)
+	if p.flash and p.flash ~= ui.lastFlash then
+		ui.toastToken += 1
+		local mine = ui.toastToken
+		ui.toastLabel.Text = tostring(p.flash):upper()
+		ui.toast.Visible = true
+		task.delay(TOAST_LIFE, function()
+			if ui.toastToken == mine and ui.toast.Parent then
+				ui.toast.Visible = false
+			end
+		end)
+	end
+	ui.lastFlash = p.flash
 end
 
--- Top left: the run clock and who owns the crates this round.
+----------------------------------------------------------------
+-- The status panel (arcade)
+----------------------------------------------------------------
+-- Top left: the run clock and who owns the crates this round. The accent bar carries the feed
+-- state, so a dead robot link reads before any word does.
 local function buildStatus(parent)
-	local frame = Instance.new("Frame")
-	frame.Name = "RunStatus"
-	frame.Position = UDim2.new(0, 18, 0, 18)
-	frame.Size = UDim2.new(0, 214, 0, 52)
-	frame.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
-	frame.BackgroundTransparency = 0.12
-	frame.BorderSizePixel = 0
-	frame.Parent = parent
-	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-	local clock = Instance.new("TextLabel")
-	clock.Position = UDim2.new(0, 12, 0, 5)
-	clock.Size = UDim2.new(1, -24, 0, 24)
-	clock.BackgroundTransparency = 1
-	clock.Font = Enum.Font.GothamBold
-	clock.TextSize = 20
-	clock.TextXAlignment = Enum.TextXAlignment.Left
-	clock.TextColor3 = INK
-	clock.Text = ""
-	clock.Parent = frame
-
-	local feed = Instance.new("TextLabel")
-	feed.Position = UDim2.new(0, 12, 0, 30)
-	feed.Size = UDim2.new(1, -24, 0, 16)
-	feed.BackgroundTransparency = 1
-	feed.Font = Enum.Font.GothamBold
-	feed.TextSize = 11
-	feed.TextXAlignment = Enum.TextXAlignment.Left
-	feed.TextColor3 = DIMMED
-	feed.Text = ""
-	feed.Parent = frame
-	return {frame = frame, clock = clock, feed = feed}
+	local panel = Ui.panel({
+		parent = parent,
+		name = "RunStatus",
+		size = UDim2.fromOffset(STATUS_W, STATUS_H),
+		position = UDim2.fromOffset(18, STATUS_TOP),
+		tone = "info",
+		zindex = 3,
+	})
+	local clock = Ui.text(panel.body, {style = "number", text = "", textSize = 22,
+		align = Enum.TextXAlignment.Left, size = UDim2.new(1, 0, 0, 24)})
+	local feed = Ui.text(panel.body, {style = "caption", text = "",
+		position = UDim2.fromOffset(0, 24), size = UDim2.new(1, 0, 0, 14)})
+	local detail = Ui.text(panel.body, {style = "note", text = "", align = Enum.TextXAlignment.Left,
+		position = UDim2.fromOffset(0, 38), size = UDim2.new(1, 0, 0, 14)})
+	return {panel = panel, clock = clock, feed = feed, detail = detail}
 end
 
 local function formatClock(sec)
@@ -337,145 +363,230 @@ local function refreshStatus()
 	local state = Obby:GetAttribute("RunState")
 	local endsAt = Obby:GetAttribute("RunEndsAt")
 	local clock = statusUi.clock
-	clock.TextColor3 = INK
+	clock.TextColor3 = Ui.C.parchment
 	if state == "Won" then
 		clock.Text = "RUN CLEAR"
-		clock.TextColor3 = TONE.ok
+		clock.TextColor3 = Ui.C.ok
 	elseif state == "Lost" then
 		clock.Text = "RUN OVER"
-		clock.TextColor3 = TONE.danger
-	elseif state ~= nil and type(endsAt) == "number" then
-		local left = endsAt - Workspace:GetServerTimeNow()
+		clock.TextColor3 = Ui.C.danger
+	elseif state ~= nil and (type(endsAt) == "number" or Obby:GetAttribute("RunSeconds")) then
+		local left = type(endsAt) == "number" and (endsAt - Workspace:GetServerTimeNow())
+			or Obby:GetAttribute("RunSeconds")
 		clock.Text = "RUN " .. formatClock(left) .. (state == "Ready" and "   READY" or "")
 		if left < 30 then
-			clock.TextColor3 = TONE.danger
+			clock.TextColor3 = Ui.C.danger
 		end
 	else
 		clock.Text = "ROBO OBBY"
+		clock.TextColor3 = Ui.C.amber
 	end
 
 	local feedMode = Obby:GetAttribute("FeedMode") or (status and status.feedMode)
-	local feed = statusUi.feed
+	local feed, detail = statusUi.feed, statusUi.detail
 	if feedMode == "live" and status and status.linkOnline == false then
+		statusUi.panel.setTone("danger")
 		feed.Text = "ROBOT LINK OFFLINE"
-		feed.TextColor3 = TONE.danger
+		feed.TextColor3 = Ui.C.danger
+		detail.Text = "the arm is not reaching the game"
 	elseif feedMode == "live" then
-		feed.Text = "LIVE ROBOT   -   your cubes place the crates"
-		feed.TextColor3 = WANT
+		statusUi.panel.setTone("ok")
+		feed.Text = "LIVE ROBOT"
+		feed.TextColor3 = Ui.C.ok
+		detail.Text = "your cubes place the crates"
 	elseif feedMode == "solo" then
-		feed.Text = "SOLO   -   the runner places the crates"
-		feed.TextColor3 = TONE.warn
+		statusUi.panel.setTone("warn")
+		feed.Text = "SOLO"
+		feed.TextColor3 = Ui.C.warn
+		detail.Text = "the runner places the crates"
 	else
+		statusUi.panel.setTone("info")
 		feed.Text = ""
+		detail.Text = ""
 	end
 end
 
+----------------------------------------------------------------
+-- Panel
+----------------------------------------------------------------
 local function buildGui()
 	gui = Instance.new("ScreenGui")
 	gui.Name = "OverseerCam"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
-
-	banner = Instance.new("TextLabel")
-	-- Bottom of the screen. The objective panel owns the top centre -- it is the runner's task
-	-- readout and the overseer needs it too -- so these were drawing straight over each other.
-	banner.AnchorPoint = Vector2.new(0.5, 1)
-	banner.Position = UDim2.new(0.5, 0, 1, -34)
-	banner.Size = UDim2.new(0, 460, 0, 30)
-	banner.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
-	banner.BackgroundTransparency = 0.12
-	banner.BorderSizePixel = 0
-	banner.Font = Enum.Font.GothamBold
-	banner.TextSize = 15
-	banner.TextColor3 = Color3.fromRGB(120, 200, 255)
-	banner.Text = "OVERSEER VIEW"
-	banner.Parent = gui
-	Instance.new("UICorner", banner).CornerRadius = UDim.new(0, 6)
-
-	sub = Instance.new("TextLabel")
-	sub.AnchorPoint = Vector2.new(0.5, 1)
-	sub.Position = UDim2.new(0.5, 0, 1, -12)
-	sub.Size = UDim2.new(0, 460, 0, 18)
-	sub.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
-	sub.BackgroundTransparency = 0.25
-	sub.BorderSizePixel = 0
-	sub.Font = Enum.Font.Gotham
-	sub.TextSize = 12
-	sub.TextColor3 = Color3.fromRGB(176, 186, 202)
-	sub.Text = ""
-	sub.Parent = gui
-	Instance.new("UICorner", sub).CornerRadius = UDim.new(0, 5)
-
-	xrayBtn = ctrlButton("WALLS: SEE-THROUGH  (G)", 18)
-	recenterBtn = ctrlButton("RECENTER VIEW", 52)
+	gui.DisplayOrder = 12
 
 	----------------------------------------------------------------
-	-- Mini grid. The same 4x3 the operator has in front of them on the table, in the same
-	-- orientation, so what is on screen and what they reach for line up without translating.
+	-- THE ORDER CARD. The most important thing on player 2's screen.
 	----------------------------------------------------------------
-	gridFrame = Instance.new("Frame")
-	gridFrame.AnchorPoint = Vector2.new(1, 0.5)
-	gridFrame.Position = UDim2.new(1, -18, 0.5, 0)
-	gridFrame.Size = UDim2.new(0, 214, 0, 190)
-	gridFrame.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
-	gridFrame.BackgroundTransparency = 0.12
-	gridFrame.BorderSizePixel = 0
-	gridFrame.Parent = gui
-	Instance.new("UICorner", gridFrame).CornerRadius = UDim.new(0, 8)
+	-- Player 2's entire job is "put a cube on the mat at the right square". Everything they need
+	-- for that is one coordinate and one quantity, and it used to be spelled out nowhere -- the
+	-- old panel said "2 cells want a block" and left them to find which two on a 4x3 of
+	-- identically-styled squares. This card answers it directly, in the largest type on screen,
+	-- and the mat below is now the confirmation rather than the instruction.
+	card = Ui.panel({
+		parent = gui,
+		name = "OrderCard",
+		title = "NEXT BLOCK",
+		size = UDim2.fromOffset(250, 150),
+		position = UDim2.new(1, -18, 0, 92),
+		anchor = Vector2.new(1, 0),
+		tone = "ok",
+		zindex = 3,
+	})
 
-	local gridTitle = Instance.new("TextLabel")
-	gridTitle.Position = UDim2.new(0, 10, 0, 7)
-	gridTitle.Size = UDim2.new(1, -20, 0, 16)
-	gridTitle.BackgroundTransparency = 1
-	gridTitle.Font = Enum.Font.GothamBold
-	gridTitle.TextSize = 11
-	gridTitle.TextXAlignment = Enum.TextXAlignment.Left
-	gridTitle.TextColor3 = Color3.fromRGB(150, 158, 172)
-	gridTitle.Text = "THE MAT   -   far end at the top"
-	gridTitle.Parent = gridFrame
+	crateHolder = Instance.new("Frame")
+	crateHolder.BackgroundTransparency = 1
+	crateHolder.Size = UDim2.fromOffset(52, 62)
+	crateHolder.Position = UDim2.fromOffset(0, 2)
+	crateHolder.ZIndex = card.body.ZIndex + 1
+	crateHolder.Parent = card.body
+	drawCrate(1)
+
+	-- The coordinate, as big as it will go. Two lines, because "COL 1 ROW 0" on one line reads as
+	-- a single four-token string the operator has to parse; stacked, it is two facts.
+	colLabel = Ui.text(card.body, {style = "task", text = "--", textSize = 30,
+		align = Enum.TextXAlignment.Left, position = UDim2.fromOffset(62, 2),
+		size = UDim2.new(1, -62, 0, 32)})
+	rowLabel = Ui.text(card.body, {style = "task", text = "", textSize = 30,
+		align = Enum.TextXAlignment.Left, position = UDim2.fromOffset(62, 32),
+		size = UDim2.new(1, -62, 0, 32)})
+
+	qtyLabel = Ui.text(card.body, {style = "caption", text = "",
+		align = Enum.TextXAlignment.Center, position = UDim2.fromOffset(0, 70),
+		size = UDim2.new(1, 0, 0, 14)})
+	Ui.rule(card.body, 88, 4)
+	progressLabel = Ui.text(card.body, {style = "hint", text = "", textSize = 13,
+		position = UDim2.fromOffset(0, 93), size = UDim2.new(1, 0, 0, 16)})
+
+	----------------------------------------------------------------
+	-- The mat
+	----------------------------------------------------------------
+	local matPanel = Ui.panel({
+		parent = gui,
+		name = "Mat",
+		title = "THE MAT   -   far end at the top",
+		size = UDim2.fromOffset(250, 236),
+		position = UDim2.new(1, -18, 0, 252),
+		anchor = Vector2.new(1, 0),
+		tone = "info",
+		zindex = 3,
+	})
+	gridFrame = matPanel.body
 
 	cellBtns = {}
 	for col = 0, Config.BayCols - 1 do
 		for row = 0, Config.BayRows - 1 do
 			local f = Instance.new("Frame")
-			-- row 2 (far) at the top, col 0 on the right: the same way round as the debug grid
-			f.Position = UDim2.new(0, 10 + (Config.BayCols - 1 - col) * 49,
-				0, 28 + (Config.BayRows - 1 - row) * 49)
-			f.Size = UDim2.new(0, 45, 0, 45)
-			f.BackgroundColor3 = Color3.fromRGB(30, 34, 44)
+			-- row 2 (far) at the top, col 0 on the right: the same way round as the real mat
+			f.Position = UDim2.fromOffset((Config.BayCols - 1 - col) * 54,
+				(Config.BayRows - 1 - row) * 54)
+			f.Size = UDim2.fromOffset(50, 50)
+			f.BackgroundColor3 = Ui.C.ironDark
 			f.BorderSizePixel = 0
+			f.ZIndex = gridFrame.ZIndex + 1
 			f.Parent = gridFrame
-			Instance.new("UICorner", f).CornerRadius = UDim.new(0, 5)
-			local st = Instance.new("UIStroke", f)
-			st.Color = Color3.fromRGB(52, 58, 72)
-			st.Thickness = 1
-			local t = Instance.new("TextLabel")
-			t.Size = UDim2.new(1, 0, 1, 0)
-			t.BackgroundTransparency = 1
-			t.Font = Enum.Font.GothamBold
-			t.TextSize = 12
-			t.TextColor3 = DIMMED
-			t.Text = ("%d,%d"):format(col, row)
-			t.Parent = f
+			Ui.corner(f, 4)
+			local st = Ui.stroke(f, Ui.C.brassDim, 1.5)
+			local t = Ui.text(f, {style = "label", text = ("%d,%d"):format(col, row), textSize = 12,
+				align = Enum.TextXAlignment.Center, colour = Ui.C.ghost,
+				size = UDim2.fromScale(1, 1), zindex = gridFrame.ZIndex + 2})
 			cellBtns[col .. "," .. row] = {frame = f, stroke = st, label = t}
 		end
 	end
 
-	local legend = Instance.new("TextLabel")
-	legend.Position = UDim2.new(0, 10, 1, -18)
-	legend.Size = UDim2.new(1, -20, 0, 14)
-	legend.BackgroundTransparency = 1
-	legend.Font = Enum.Font.Gotham
-	legend.TextSize = 10
-	legend.TextXAlignment = Enum.TextXAlignment.Left
-	legend.TextColor3 = Color3.fromRGB(130, 138, 152)
-	legend.Text = "green wanted   blue placed   amber runner"
-	legend.Parent = gridFrame
+	Ui.text(gridFrame, {style = "caption", text = "amber = place here      green = placed      blue = runner",
+		align = Enum.TextXAlignment.Center, position = UDim2.fromOffset(0, 168),
+		size = UDim2.new(1, 0, 0, 14)})
+
+	----------------------------------------------------------------
+	-- Banner and controls
+	----------------------------------------------------------------
+	local bannerPanel = Ui.panel({
+		parent = gui,
+		name = "Banner",
+		size = UDim2.fromOffset(540, 58),
+		position = UDim2.new(0.5, 0, 1, -18),
+		anchor = Vector2.new(0.5, 1),
+		tone = "info",
+		zindex = 3,
+	})
+	banner = Ui.text(bannerPanel.body, {style = "title", text = "OVERSEER VIEW",
+		textSize = 17, colour = Ui.C.amber, size = UDim2.new(1, 0, 0, 20)})
+	sub = Ui.text(bannerPanel.body, {style = "hint", text = "", textSize = 11,
+		position = UDim2.fromOffset(0, 20), size = UDim2.new(1, 0, 0, 14)})
+
+	xrayBtn = ctrlButton("WALLS: SEE-THROUGH  (G)", 18)
+	recenterBtn = ctrlButton("RECENTER VIEW", 52)
 
 	objectiveUi = buildObjective(gui)
 	statusUi = buildStatus(gui)
 
 	gui.Parent = player:WaitForChild("PlayerGui")
+end
+
+----------------------------------------------------------------
+-- Keeping the card truthful
+----------------------------------------------------------------
+-- The "next" cell is the first wanted one not already filled, in the server's own solveCells
+-- order -- so for a routed bay like the laser walk this follows the route rather than
+-- inventing an order of its own.
+local function nextWantedCell()
+	for _, c in ipairs(solveCells or {}) do
+		if not occupied[c[1] .. "," .. c[2]] then
+			return c[1], c[2]
+		end
+	end
+	return nil
+end
+
+local function refreshCard()
+	if not card then
+		return
+	end
+	local total = #(solveCells or {})
+	local filled = 0
+	for _, c in ipairs(solveCells or {}) do
+		if occupied[c[1] .. "," .. c[2]] then
+			filled += 1
+		end
+	end
+
+	local col, row = nextWantedCell()
+	if col then
+		card.setTone("ok")
+		card.setTitle("NEXT BLOCK")
+		colLabel.Text = "COL " .. col
+		rowLabel.Text = "ROW " .. row
+		colLabel.TextColor3 = Ui.C.amber
+		rowLabel.TextColor3 = Ui.C.amber
+		qtyLabel.Text = (bayLevel and bayLevel > 1)
+			and ("STACK " .. bayLevel .. " CUBES") or "ONE CUBE"
+		drawCrate(bayLevel or 1)
+	elseif total > 0 then
+		card.setTone("ok")
+		card.setTitle("ALL PLACED")
+		colLabel.Text = "STAND"
+		rowLabel.Text = "BY"
+		colLabel.TextColor3 = Ui.C.ok
+		rowLabel.TextColor3 = Ui.C.ok
+		qtyLabel.Text = "NOTHING TO PLACE"
+		drawCrate(nil)
+	else
+		-- an action bay: its cells are decided at runtime, or there are none at all
+		card.setTone("warn")
+		card.setTitle("NO CELL CALLED")
+		colLabel.Text = "WAIT"
+		rowLabel.Text = ""
+		colLabel.TextColor3 = Ui.C.faded
+		rowLabel.TextColor3 = Ui.C.faded
+		qtyLabel.Text = "THIS BAY CLEARS BY ACTION"
+		drawCrate(nil)
+	end
+
+	progressLabel.Text = (total > 0)
+		and ("%d of %d cells filled"):format(filled, total)
+		or "watch the runner"
 end
 
 ----------------------------------------------------------------
@@ -710,26 +821,67 @@ local function aimCamera()
 		Vector3.new(midX + panX, 0, midZ + 10 + panZ))
 end
 
+local nextKey = nil        -- the one cell the operator should be reaching for
+
 local function paintGrid()
 	local want = wantedSet()
 	local here = runnerCell()
+	local nc, nr = nextWantedCell()
+	nextKey = nc and (nc .. "," .. nr) or nil
+
 	for key, c in pairs(cellBtns) do
+		local isNext = (key == nextKey)
 		local isWanted = want[key]
 		local isHeld = occupied[key]
 		local isHere = (key == here)
-		c.frame.BackgroundColor3 = isHeld and Color3.fromRGB(26, 52, 86)
-			or (isWanted and Color3.fromRGB(22, 54, 36) or Color3.fromRGB(30, 34, 44))
-		c.stroke.Color = isHere and Color3.fromRGB(255, 210, 110)
-			or (isHeld and HELD or (isWanted and WANT or Color3.fromRGB(52, 58, 72)))
-		c.stroke.Thickness = isHere and 3 or (isHeld and 2 or 1)
-		c.label.TextColor3 = isHeld and HELD or (isWanted and WANT or DIMMED)
+
+		-- Priority is deliberate and is the whole point of the redesign: THE NEXT CELL WINS.
+		-- Everything else on this grid is context. Before, every wanted cell was painted the
+		-- same green and the operator had to work out which of them to do first.
+		if isNext then
+			c.frame.BackgroundColor3 = Color3.fromRGB(58, 42, 18)
+			c.stroke.Color = WANT
+			c.stroke.Thickness = 3
+			c.label.TextColor3 = WANT
+		elseif isHeld then
+			c.frame.BackgroundColor3 = Color3.fromRGB(22, 46, 32)
+			c.stroke.Color = HELD
+			c.stroke.Thickness = 2
+			c.label.TextColor3 = HELD
+		elseif isWanted then
+			c.frame.BackgroundColor3 = Color3.fromRGB(40, 32, 20)
+			c.stroke.Color = Ui.C.brassDim
+			c.stroke.Thickness = 1.5
+			c.label.TextColor3 = Ui.C.faded
+		else
+			c.frame.BackgroundColor3 = Ui.C.ironDark
+			c.stroke.Color = Ui.C.brassDim
+			c.stroke.Thickness = 1
+			c.label.TextColor3 = DIMMED
+		end
+		if not isNext then
+			-- the pulse below only ever writes the next cell; one that stops being next keeps
+			-- whatever fade it was left at unless it is put back here
+			c.stroke.Transparency = 0
+		end
+
+		-- the runner's square is marked on top of whatever it already is
+		if isHere then
+			c.stroke.Color = RUNNER
+			c.stroke.Thickness = 3
+		end
 	end
+
+	refreshCard()
 end
 
 -- On only at enter, off only at exit: the robot never hands the camera to a runner of its own.
 -- Off leaves the camera alone; exit puts back the one it saved.
 local function setActive(on)
 	active = on
+	if gui then
+		gui.Enabled = on
+	end
 	if on then
 		ghostWalls(xray)
 		setHighlight(true)
@@ -749,10 +901,8 @@ local function refreshBanner()
 		return
 	end
 	banner.Text = ("OVERSEER VIEW   -   BAY %02d   -   %s"):format(activeBay, bayName:upper())
-	local n = #(solveCells or {})
-	sub.Text = ("%s   -   scroll or -/= zoom, right-drag pan, G walls %s"):format(
-		(n > 0) and ("%d cells want a block"):format(n) or "cleared by an action, not by cells",
-		xray and "see-through" or "solid")
+	sub.Text = ("scroll or -/= zoom   .   right-drag pan   .   G walls %s")
+		:format(xray and "see-through" or "solid")
 end
 
 -- X-RAY, one place. It is reached three ways -- the G key, the on-screen button, and a bay
@@ -835,6 +985,7 @@ local function onStatus(s)
 	local info = s.bays and s.bays[activeBay]
 	solveCells = info and info.solveCells or nil
 	bayName = info and info.obstacle or "?"
+	bayLevel = info and info.level or nil
 	if moved then
 		occupied = {}
 		zoom, panX, panZ = 1, 0, 0    -- a new bay gets the default framing back
@@ -965,8 +1116,15 @@ function RobotView.enter(_ctx)
 	-- camera back to the default scripts on a few CoreGui transitions, and a one-shot CFrame
 	-- would silently lose the view.
 	track(RunService.RenderStepped:Connect(function()
-		if active then
-			aimCamera()
+		if not active then
+			return
+		end
+		aimCamera()
+		-- A slow breath on the one cell being asked for. Motion is what the eye finds first in a
+		-- grid of twelve identical squares, and it costs one property write a frame.
+		local c = nextKey and cellBtns[nextKey]
+		if c then
+			c.stroke.Transparency = 0.35 + 0.35 * math.sin(os.clock() * 4)
 		end
 	end))
 
@@ -1011,11 +1169,12 @@ function RobotView.exit()
 	if gui then
 		gui:Destroy()
 		gui, banner, sub, gridFrame, xrayBtn, recenterBtn = nil, nil, nil, nil, nil, nil
+		card, crateHolder, colLabel, rowLabel, qtyLabel, progressLabel = nil, nil, nil, nil, nil, nil
 		objectiveUi, statusUi = nil, nil
 		cellBtns = {}
 	end
 	map, warehouse, status, resetToken = nil, nil, nil, nil
-	occupied, solveCells, bayName = {}, nil, "?"
+	occupied, solveCells, bayName, bayLevel, nextKey = {}, nil, "?", nil, nil
 	activeBay = Config.LiveBay or 1
 	zoom, panX, panZ = 1, 0, 0
 	if savedCamera then

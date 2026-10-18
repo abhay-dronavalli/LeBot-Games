@@ -67,7 +67,7 @@ end
 
 local REMOTES = {
 	"Objective", "CellEdit", "CellsUpdated", "DebugHotkey", "GhostToggle", "DebugCommand", "Status", "BayCells",
-	"CameraFace",
+	"CameraFace", "Toast",
 }
 -- Runtime modules in the order they are required. The former Scripts do their work at require time.
 local LOAD_ORDER = { "BlockSync", "SkyArm", "HazardManager", "Status", "BridgeFeed", "DebugMode", "ActiveBayTracker" }
