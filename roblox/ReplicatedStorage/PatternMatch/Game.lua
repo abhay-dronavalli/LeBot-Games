@@ -25,6 +25,7 @@ local TargetBoard = require(script.Parent.TargetBoard)
 local PatternEvents = require(script.Parent.PatternEvents)
 local Attract = require(script.Parent.Attract)
 local Celebrate = require(script.Parent.Celebrate)
+local TicketStack = require(script.Parent.TicketStack)
 
 local TICK = 0.2
 
@@ -340,8 +341,8 @@ function Game:showActive()
 	self.targetBoard:show(ticket and ticket.target or nil, hard and self.revealPhase == "hide", hard)
 end
 
--- A player clicked a ticket card (TicketPick remote). Any player may, during the shift, for a ticket on
--- the rail. Returns true if it changed the active ticket.
+-- Makes ticket `id` active, if it is on the rail (during the shift). Any player may. Returns true if it
+-- changed the active ticket. Game:cycleTicket uses it; tests call it directly.
 function Game:selectTicket(player, id)
 	if self.state ~= "Shift" or type(id) ~= "number" or id == self.activeId then
 		return false
@@ -354,6 +355,25 @@ function Game:selectTicket(player, id)
 		end
 	end
 	return false
+end
+
+-- A player cycled the ticket stack (TicketCycle remote: Q / E keys or the < > arrows): dir -1 or +1
+-- through the rail, oldest first, wrapping around. Returns true if the active ticket changed.
+function Game:cycleTicket(player, dir)
+	if self.state ~= "Shift" or (dir ~= 1 and dir ~= -1) or #self.tickets < 2 then
+		return false
+	end
+	local ids = {}
+	for _, ticket in ipairs(self.tickets) do
+		table.insert(ids, ticket.id)
+	end
+	local nextId = TicketStack.cycledId(ids, self.activeId, dir)
+	if nextId == nil or nextId == self.activeId then
+		return false
+	end
+	self:setActive(nextId, string.format("%s by %s", dir > 0 and "next" or "previous", player and player.Name or "?"))
+	self:pushUI()
+	return true
 end
 
 -- The board matched the active ticket long enough: ORDER UP.

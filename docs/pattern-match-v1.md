@@ -47,7 +47,7 @@ While the game is Idle (players in the room, before Play), `PatternMatch.Attract
 - One timer counting down from `Config.shiftSeconds` (default 180).
 - **Tickets.** The first ticket arrives at shift start. After that a new ticket arrives every random `Config.ticketIntervalMin..Max` seconds (default 12-20). The rail holds at most `Config.ticketRailMax` (4); while it is full the arrival timer pauses. Tickets are numbered from #1 each shift.
 - **A ticket is a target pattern**: `Config.ticketBlocksMin..Max` blocks in total (default 2-4), random colors from `Config.colors` (they can repeat, within a tower too), in towers up to `Config.maxStackGlobal` (2) high. A target cell is a list of colors bottom to top, e.g. `B2 = {"red", "teal"}`. `Target.generate(n, maxHeight, rng, stackChance)` places blocks one at a time: after the first, each block goes on top of a tower that still has room with probability `stackChance`, otherwise on a fresh cell. The stack chance ramps linearly over the shift from `Config.stackChanceStart` (0.2) to `Config.stackChanceEnd` (0.6).
-- **Active ticket.** The oldest ticket is active by default; any player can click a ticket card to make it active instead (`TicketPick` remote). The TargetBoard shows the active ticket. The Live board shows the real table from `StateStore.blocks`, redrawn every 0.2 s.
+- **Active ticket.** The oldest ticket is active by default; any player can cycle to another one with Q / E or the stack's < > arrows (`TicketCycle` remote). The TargetBoard shows the active ticket. The Live board shows the real table from `StateStore.blocks`, redrawn every 0.2 s.
 - **Compare** runs per cell, per level against the active ticket: `missing` (a target level with no block), `wrong` (wrong color at that level, including a tower built in the wrong order), `extra` (a block at a level the target doesn't have, on a non-target cell, or at or above `maxStackGlobal`), `doubled` (2+ blocks at one cell and level), `blocked` (any block on a vanished cell).
 - **Completing.** When every tower of the active ticket matches exactly bottom to top, nothing else is on the grid and no block sits on a vanished cell, for `Config.holdToClear` (1 s) continuously: ORDER UP. The ticket's points are added, `Config.ticketTimeBonus` (3) seconds go on the shift timer, the ticket leaves the rail and the oldest remaining ticket becomes active. If the rail is empty, the next ticket arrives right away.
 - No intermission and no clear-the-grid step: blocks stay on the table and get reused for the next ticket.
@@ -64,10 +64,13 @@ While the game is Idle (players in the room, before Play), `PatternMatch.Attract
 - Big text above the boards (`PatternCabinet.CelebrateText`, a BillboardGui, placed a little toward the TargetBoard so the arm twin doesn't cut through it) that pops in with a scale tween and stays up for 1.5 s, plus a pop sound.
 - Mode select (or any state change that stops the demo) cuts a celebration short and restores the cell colors at once.
 
-### Ticket rail HUD (`StarterGui.PatternHud`)
-- Bottom left, Papa's-style: paper ticket cards standing on a rail along the bottom edge, oldest on the left. This keeps them clear of the top-left Roblox chat and buttons, the top-right status panel and the ORDER UP text. On mobile the rail shares the bottom-left corner with the thumbstick. Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like the board seen from the row C side; a stacked cell is split, top color over bottom color, with a small "2" badge), its point value and its age.
-- The active ticket is raised with an orange border and "ACTIVE". Clicking a card makes it active.
-- New tickets slide in; a completed ticket gets an "ORDER UP! +points" stamp and flies up and off the screen. The big "ORDER UP! +points" is the 3D celebration above the boards, so the HUD doesn't repeat it.
+### Ticket stack HUD (`StarterGui.PatternHud`)
+- One small stack in the bottom left, about 220 x 200 px at 1080p, scaled with the screen height (a UIScale), clear of the boards in the default camera view, the top-left Roblox chat and buttons, the top-right status panel and the 3D ORDER UP text. On mobile it shares the bottom-left corner with the thumbstick.
+- Only the ACTIVE ticket is face up (a bit over half the old rail card's size): ticket number, points, a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like the board seen from the row C side; a stacked cell is split, top color over bottom color, with a small "2" badge) and its age. In Hard mode's hidden phase its squares go gray, layout kept.
+- Waiting tickets sit behind it as a fanned pile: just their top edges peek out (5 px up and right each, at most 3 edges), with a "+N waiting" badge above the pile (hidden when none wait).
+- Cycling: the < and > arrow buttons beside the stack, or the Q and E keys, make the previous / next ticket active (`TicketCycle` remote, -1 / +1). The order stays oldest first, wrapping around; the active one is just the one on top, and the TargetBoard follows it. The swap takes about 0.2 s: the current card slides out and behind the pile while the next one slides to the front. `PatternMatch.TicketStack` holds the shared rules (keys, wrap-around, badge, pile edges) for the server and the HUD. There is no click-a-card selection.
+- Arrivals: a small card flies in and tucks onto the back of the pile, the badge pulses and a "NEW TICKET" chip flashes for 1 s. An arrival never changes the active ticket.
+- Completed: the face-up card gets an "ORDER UP! +points" stamp and flies up and off the screen, then the oldest remaining ticket comes to the front. The big "ORDER UP! +points" is the 3D celebration above the boards, so the HUD doesn't repeat it.
 - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets completed, the Hard reveal phase, the event banner and the game message.
 
 ### Easy vs Hard
@@ -133,13 +136,14 @@ ReplicatedStorage
   PatternMatch.Game (ModuleScript)        state machine: Idle, ModeSelect, Shift (tickets), Results
   PatternMatch.Attract (ModuleScript)     the Idle demo loop on the boards
   PatternMatch.Celebrate (ModuleScript)   the shared COMPLETE! / ORDER UP celebration
+  PatternMatch.TicketStack (ModuleScript) ticket stack rules shared by the server and the HUD
   PatternMatch.PatternEvents (ModuleScript) event scheduler + vanish / tremor / inverted
   PatternMatch.TargetBoard (ModuleScript) target colors, Hard-mode hidden look
   PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
   ArmTwin (Model, parts-built SO-101) with Rig (geometry, FK, builder) and Driver (server broadcast,
     client easing + Motor6D Transforms) ModuleScripts; the LiveBoard holds a clone without the modules
   PatternMatch.Remotes: ArmPose (UnreliableRemoteEvent, arm angles 20 Hz, server -> clients)
-  Remotes: PatternUI (server -> client), PatternPick (chooser -> server: mode), TicketPick (any player -> server: active ticket)
+  Remotes: PatternUI (server -> client), PatternPick (chooser -> server: mode), TicketCycle (any player -> server: -1 / +1 through the tickets)
 ServerScriptService
   PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
 StarterPlayer.StarterPlayerScripts
@@ -149,7 +153,7 @@ Lighting
   CabinetFocus (DepthOfFieldEffect), Bloom, Atmosphere, SunRays, Sky
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
-  PatternHud (ScreenGui + LocalScript)     ticket rail, shift timer, score, event banner, results
+  PatternHud (ScreenGui + LocalScript)     ticket stack, shift timer, score, event banner, results
 ```
 
 ## 8. Config defaults

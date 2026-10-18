@@ -497,6 +497,8 @@ if cab then
 	check("0.1 s before it: still one ticket", railIds(), "1")
 	g:step(0.2)
 	check("then ticket 2 arrives at the right end; ticket 1 stays active", railIds() .. " active " .. g.activeId, "1,2 active 1")
+	check("an arrival never changes the active ticket (payload + one waiting)", sent[#sent].activeId .. " "
+		.. require(pm.TicketStack).waitingCount(#sent[#sent].tickets), "1 1")
 	check("ticket 2's age on the payload counts from its arrival", sent[#sent].tickets[2].age, 0)
 	local guard = 0
 	while #g.tickets < Config.ticketRailMax and guard < 10 do
@@ -509,7 +511,43 @@ if cab then
 	check("full rail: no 5th ticket, the arrival timer is paused", railIds() .. " " .. tostring(g.arrivalIn == paused), "1,2,3,4 true")
 	check("the shift timer keeps running meanwhile", math.abs((timeBefore - g.timeLeft) - 20) < 0.01, true)
 
-	section("16b. switching the active ticket")
+	section("16b. cycling the ticket stack (Q / E and the < > arrows send TicketCycle -1 / +1)")
+	local TicketStack = require(pm.TicketStack)
+	local function cycleRun(dirs)
+		local seen = {}
+		for _, dir in ipairs(dirs) do
+			g:cycleTicket(tester, dir)
+			table.insert(seen, g.activeId)
+		end
+		return table.concat(seen, " ")
+	end
+	check("forward (E / >) from 1 wraps around: 2 3 4 1", cycleRun({ 1, 1, 1, 1 }), "2 3 4 1")
+	check("back (Q / <) from 1 wraps around: 4 3 2 1", cycleRun({ -1, -1, -1, -1 }), "4 3 2 1")
+	check("the rail order never changes (oldest first)", railIds(), "1,2,3,4")
+	g:cycleTicket(tester, 1) -- active 2
+	local t2 = ticketById(2)
+	local c2 = next(t2.target)
+	check("the TargetBoard follows the active ticket", board.TargetBoard.Blocks[c2].Transparency == 0
+		and board.TargetBoard.Blocks[c2].Color == Config.colors[t2.target[c2][1]], true)
+	check("stateChanged and the payload follow too", changes[#changes].activeId .. " " .. sent[#sent].activeId, "2 2")
+	g:cycleTicket(tester, -1) -- back to 1
+	check("bad directions are rejected", tostring(g:cycleTicket(tester, 2)) .. " " .. tostring(g:cycleTicket(tester, 0))
+		.. " " .. tostring(g:cycleTicket(tester, "next")), "false false false")
+	check("Q / E and the arrows map to the same -1 / +1", TicketStack.KEYS[Enum.KeyCode.Q] .. " " .. TicketStack.KEYS[Enum.KeyCode.E]
+		.. " " .. TicketStack.ARROWS.Prev .. " " .. TicketStack.ARROWS.Next, "-1 1 -1 1")
+	local hudSource = game:GetService("StarterGui").PatternHud:FindFirstChildWhichIsA("LocalScript").Source
+	check("the HUD wires Q / E and both arrows to one cycle() that fires TicketCycle",
+		string.find(hudSource, "TicketStack.KEYS[input.KeyCode]", 1, true) ~= nil
+		and string.find(hudSource, "cycle(TicketStack.ARROWS.Prev)", 1, true) ~= nil
+		and string.find(hudSource, "cycle(TicketStack.ARROWS.Next)", 1, true) ~= nil
+		and string.find(hudSource, "ticketCycle:FireServer(dir)", 1, true) ~= nil
+		and string.find(hudSource, "TicketPick", 1, true) == nil, true)
+	check("badge: waiting = tickets - 1, '+3 waiting', hidden at 0, at most 3 edges",
+		TicketStack.waitingCount(#sent[#sent].tickets) .. " | " .. TicketStack.badgeText(3) .. " | " .. tostring(TicketStack.badgeText(0))
+		.. " | " .. TicketStack.pileEdges(1) .. TicketStack.pileEdges(3) .. TicketStack.pileEdges(6), "3 | +3 waiting | nil | 133")
+	check("cycledId: one ticket stays put, empty is nil", tostring(TicketStack.cycledId({ 7 }, 7, 1)) .. " " .. tostring(TicketStack.cycledId({}, nil, 1)), "7 nil")
+
+	section("16b2. picking a ticket directly (server API)")
 	check("selectTicket(3) makes it active", g:selectTicket(tester, 3), true)
 	check("active 3, on the payload and stateChanged", g.activeId .. " " .. sent[#sent].activeId .. " " .. changes[#changes].activeId, "3 3 3")
 	check("an unknown ticket or the already active one is rejected", tostring(g:selectTicket(tester, 99)) .. " " .. tostring(g:selectTicket(tester, 3)), "false false")
@@ -791,7 +829,7 @@ if cab then
 	check("Bob can't pick", g:pick(bob, "hard"), false)
 	check("an unknown choice is rejected", g:pick(alice, "medium"), false)
 	check("still choosing, no mode yet", g.state .. " " .. tostring(g.mode), "ModeSelect nil")
-	check("ticket clicks are ignored outside the shift", g:selectTicket(alice, 1), false)
+	check("ticket picks and cycling are ignored outside the shift", tostring(g:selectTicket(alice, 1)) .. " " .. tostring(g:cycleTicket(alice, 1)), "false false")
 	check("Alice picks hard", g:pick(alice, "hard"), true)
 	check("payload: confirming, mode, message", tostring(sent[#sent].confirming) .. " " .. sent[#sent].mode .. " | " .. sent[#sent].message,
 		"true Hard | HARD MODE")

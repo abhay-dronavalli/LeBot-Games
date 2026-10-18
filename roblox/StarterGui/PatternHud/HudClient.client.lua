@@ -1,13 +1,15 @@
 -- StarterGui.PatternHud.HudClient
 -- Pattern Match HUD, driven by the PatternUI remote payload (PatternMatch.Game:payload):
---   - Ticket rail (bottom left, Papa's-style): paper ticket cards standing on a rail along the bottom edge,
---     oldest on the left, clear of the top-left chat and Roblox buttons and the top-right status panel.
---     Each card shows a mini 4 x 3 grid of the pattern (row A on top, columns 1-4 left to right, like
---     the board seen from the row C side; a stacked cell is split, top color over bottom color, with a
---     small "2" badge), its point value and its age. The active ticket is raised with a colored border.
---     Clicking a card makes it active (TicketPick remote). New cards slide in; a completed card flies off
---     with an "ORDER UP!" stamp and its points (the big ORDER UP text is in 3D above the boards). In Hard
---     mode's hidden phase the squares go gray, layout kept.
+--   - Ticket stack (bottom left, small): only the ACTIVE ticket is face up (ticket #, points, mini 4 x 3
+--     grid with row A on top and columns 1-4 left to right, like the board seen from the row C side; a
+--     stacked cell is split, top color over bottom, with a small "2" badge; age). Waiting tickets peek out
+--     behind it as a fanned pile (up to 3 edges) with a "+N waiting" badge. Q / E or the < > arrows cycle
+--     the active ticket (TicketCycle remote; PatternMatch.TicketStack has the shared rules), with a quick
+--     swap: the old card slides behind the pile, the next slides to the front. A new ticket flies in and
+--     tucks onto the back of the pile (badge pulse, "NEW TICKET" chip for 1 s) without changing the active
+--     ticket. A completed card gets an "ORDER UP!" stamp and flies up and off (the big ORDER UP text is in
+--     3D above the boards). In Hard mode's hidden phase the card's squares go gray, layout kept. About
+--     220 x 200 px at 1080p, scaled with the screen height.
 --   - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets done,
 --     the Hard reveal phase, the event banner and the game message.
 --   - Results screen at the end of a shift: tickets completed, total points, one line per ticket.
@@ -18,24 +20,28 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Config = require(PatternMatch:WaitForChild("Config"))
 local BoardShake = require(PatternMatch:WaitForChild("BoardShake"))
 local remotes = PatternMatch:WaitForChild("Remotes")
 local patternUI = remotes:WaitForChild("PatternUI")
-local ticketPick = remotes:WaitForChild("TicketPick")
+local ticketCycle = remotes:WaitForChild("TicketCycle")
+local TicketStack = require(PatternMatch:WaitForChild("TicketStack"))
 local cabinet = workspace:WaitForChild("PatternCabinet")
 local localPlayer = Players.LocalPlayer
 
 local CAMERA_SHAKE_STUDS = 0.12
 local CAMERA_SHAKE_RADIANS = math.rad(0.6)
 
-local CARD_W, CARD_H = 124, 158
-local CARD_GAP = 14
-local RAIL_X, RAIL_BOTTOM = 16, 12 -- rail offset from the screen's left and bottom edges
-local RAIL_H = CARD_H + 30
-local CELL, CELL_GAP = 22, 3
+-- Ticket stack, in design pixels at 1080p (scaled with the screen height).
+local STACK_W, STACK_H = 220, 200
+local CARD_W, CARD_H = 100, 110    -- the face-up card: a bit over half the old rail card's area (124 x 158)
+local ARROW_W = 24
+local EDGE_STEP = 5                -- each waiting card peeks out this far up and to the right
+local SWAP_REACH = UDim2.fromOffset(48, -14) -- a swapping card slides this far out from behind the pile
+local CELL, CELL_GAP = 15, 2
 local PAPER = Color3.fromRGB(252, 247, 234)
 local PAPER_EDGE = Color3.fromRGB(214, 202, 178)
 local INK = Color3.fromRGB(46, 36, 28)
@@ -43,8 +49,8 @@ local EMPTY_CELL = Color3.fromRGB(228, 220, 202)
 local HIDDEN_CELL = Color3.fromRGB(150, 150, 150)
 local ACTIVE_BORDER = Color3.fromRGB(255, 138, 30)
 local GOOD = Color3.fromRGB(90, 220, 120)
-local SLIDE = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local SHIFT = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SWAP = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TUCK = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local FLY = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 local screen = script.Parent
@@ -79,71 +85,118 @@ local function corner(parent, radius)
 	return c
 end
 
--- Ticket rail -----------------------------------------------------------------------------------------
+-- Ticket stack ----------------------------------------------------------------------------------------
+-- One small stack in the bottom left. Sizes are design pixels at 1080p; a UIScale on the stack follows the
+-- screen height, so it stays about 220 x 200 at 1080p and scales with the screen.
 
-local rail = Instance.new("Frame")
-rail.Name = "Rail"
-rail.BackgroundTransparency = 1
-rail.AnchorPoint = Vector2.new(0, 1)
-rail.Position = UDim2.new(0, RAIL_X, 1, -RAIL_BOTTOM)
-rail.Size = UDim2.fromOffset(Config.ticketRailMax * (CARD_W + CARD_GAP) + CARD_GAP, RAIL_H)
-rail.Parent = root
-
-local bar = Instance.new("Frame") -- the metal rail the tickets hang from
-bar.Name = "Bar"
-bar.BorderSizePixel = 0
-bar.BackgroundColor3 = Color3.fromRGB(70, 74, 82)
-bar.Position = UDim2.new(0, 0, 1, -8) -- along the bottom; the cards stand on it
-bar.Size = UDim2.new(1, 0, 0, 8)
-bar.ZIndex = 5
-bar.Parent = rail
-corner(bar, 4)
-local barShine = Instance.new("UIGradient")
-barShine.Color = ColorSequence.new(Color3.fromRGB(200, 205, 214), Color3.fromRGB(70, 74, 82))
-barShine.Rotation = 90
-barShine.Parent = bar
-
-local cards = {}      -- ticket id -> { button, cells = { cell -> { bottom, top, badge } }, points, age, stroke, scale }
-local lastOrderSeq = nil -- seq of the last ORDER UP shown; set from the first payload without animating
-
-local function slotPosition(index, active)
-	return UDim2.fromOffset(CARD_GAP + (index - 1) * (CARD_W + CARD_GAP), RAIL_H - 8 - CARD_H - (active and 10 or 2))
+local stack = Instance.new("Frame")
+stack.Name = "Stack"
+stack.BackgroundTransparency = 1
+stack.AnchorPoint = Vector2.new(0, 1)
+stack.Position = UDim2.new(0, 12, 1, -12)
+stack.Size = UDim2.fromOffset(STACK_W, STACK_H)
+stack.Visible = false
+stack.Parent = root
+local stackScale = Instance.new("UIScale")
+stackScale.Parent = stack
+local function fitToScreen()
+	local camera = workspace.CurrentCamera
+	local height = camera and camera.ViewportSize.Y or 1080
+	stackScale.Scale = math.clamp(height / 1080, 0.5, 2)
+end
+fitToScreen()
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(fitToScreen)
+if workspace.CurrentCamera then
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitToScreen)
 end
 
-local function newCard(ticket)
+local FRONT = UDim2.fromOffset(ARROW_W + 6, STACK_H - CARD_H - 2) -- the face-up card's place
+local function backPosition(k) -- the k-th waiting card, peeking out up and to the right
+	return FRONT + UDim2.fromOffset(k * EDGE_STEP, -k * EDGE_STEP)
+end
+
+local edges = {} -- the waiting cards' peeking edges, made once
+for k = 1, TicketStack.MAX_EDGES do
+	local edge = Instance.new("Frame")
+	edge.Name = "Edge" .. k
+	edge.BackgroundColor3 = PAPER
+	edge.BorderSizePixel = 0
+	edge.Position = backPosition(k)
+	edge.Size = UDim2.fromOffset(CARD_W, CARD_H)
+	edge.ZIndex = 10 - k
+	edge.Visible = false
+	edge.Parent = stack
+	corner(edge, 5)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = PAPER_EDGE
+	stroke.Thickness = 1.5
+	stroke.Parent = edge
+	edges[k] = edge
+end
+
+local function arrow(name, glyph, key, x)
 	local button = Instance.new("TextButton")
-	button.Name = "Ticket" .. ticket.id
-	button.Text = ""
-	button.AutoButtonColor = false
+	button.Name = name
+	button.Text = glyph
+	button.Font = Enum.Font.GothamBlack
+	button.TextSize = 22
+	button.TextColor3 = INK
+	button.AutoButtonColor = true
 	button.BackgroundColor3 = PAPER
-	button.BorderSizePixel = 0
-	button.Size = UDim2.fromOffset(CARD_W, CARD_H)
-	button.ZIndex = 2
+	button.Position = UDim2.fromOffset(x, FRONT.Y.Offset + CARD_H / 2 - 26)
+	button.Size = UDim2.fromOffset(ARROW_W, 38)
+	button.ZIndex = 20
+	button.Parent = stack
 	corner(button, 6)
+	text(button, "Key", { Text = key, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(230, 230, 240),
+		Position = UDim2.fromOffset(0, 40), Size = UDim2.fromOffset(ARROW_W, 14), ZIndex = 20 })
+	return button
+end
+local prevButton = arrow("Prev", "<", "Q", 0)
+local nextButton = arrow("Next", ">", "E", ARROW_W + 6 + CARD_W + TicketStack.MAX_EDGES * EDGE_STEP + 4)
+
+local badge = text(stack, "Waiting", { Font = Enum.Font.GothamBlack, TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
+	BackgroundTransparency = 0, BackgroundColor3 = Color3.fromRGB(214, 98, 24), AnchorPoint = Vector2.new(1, 1),
+	Position = backPosition(TicketStack.MAX_EDGES) + UDim2.fromOffset(CARD_W, -3), Size = UDim2.fromOffset(78, 18), Visible = false, ZIndex = 25 })
+-- (just above the pile's top edge, so it never covers the face-up card)
+corner(badge, 10)
+local badgeScale = Instance.new("UIScale")
+badgeScale.Parent = badge
+
+local chip = text(stack, "NewTicket", { Text = "NEW TICKET", Font = Enum.Font.GothamBlack, TextSize = 12, TextColor3 = INK,
+	BackgroundTransparency = 0, BackgroundColor3 = Color3.fromRGB(255, 214, 60), AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.fromOffset(FRONT.X.Offset + CARD_W / 2, FRONT.Y.Offset - TicketStack.MAX_EDGES * EDGE_STEP - 46),
+	Size = UDim2.fromOffset(92, 20), Visible = false, ZIndex = 25 })
+corner(chip, 10)
+
+local front = nil       -- { id, card }: the face-up (active) ticket
+local known = {}        -- ticket ids seen this shift, to spot arrivals
+local lastWaiting = 0
+local lastOrderSeq = nil -- seq of the last ORDER UP shown; set from the first payload without animating
+local chipToken = 0
+local inShiftNow = false
+
+-- The face-up card: ticket number, points, mini 4 x 3 grid, age. Not clickable; cycling is Q / E or < >.
+local function newCard(ticket)
+	local frame = Instance.new("Frame")
+	frame.Name = "Ticket" .. ticket.id
+	frame.BackgroundColor3 = PAPER
+	frame.BorderSizePixel = 0
+	frame.Size = UDim2.fromOffset(CARD_W, CARD_H)
+	frame.ZIndex = 12
+	corner(frame, 6)
 	local edge = Instance.new("UIStroke")
-	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	edge.Color = PAPER_EDGE
-	edge.Thickness = 2
-	edge.Parent = button
+	edge.Color = ACTIVE_BORDER
+	edge.Thickness = 2.5
+	edge.Parent = frame
 	local scale = Instance.new("UIScale")
-	scale.Parent = button
+	scale.Parent = frame
 
-	local clip = Instance.new("Frame") -- the clip holding the ticket on the rail
-	clip.Name = "Clip"
-	clip.BorderSizePixel = 0
-	clip.BackgroundColor3 = Color3.fromRGB(150, 155, 165)
-	clip.AnchorPoint = Vector2.new(0.5, 1)
-	clip.Position = UDim2.new(0.5, 0, 1, 8) -- holds the card's foot on the rail
-	clip.Size = UDim2.fromOffset(26, 14)
-	clip.ZIndex = 6
-	clip.Parent = button
-	corner(clip, 3)
-
-	text(button, "Number", { Text = "#" .. ticket.id, Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = INK,
-		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(9, 9), Size = UDim2.fromOffset(50, 18), ZIndex = 3 })
-	local points = text(button, "Points", { Text = ticket.points .. " pts", Font = Enum.Font.GothamBlack, TextSize = 15,
+	text(frame, "Number", { Text = "#" .. ticket.id, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = INK,
+		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(7, 5), Size = UDim2.fromOffset(40, 14), ZIndex = 13 })
+	local points = text(frame, "Points", { Text = ticket.points .. " pts", Font = Enum.Font.GothamBlack, TextSize = 12,
 		TextColor3 = Color3.fromRGB(196, 92, 20), TextXAlignment = Enum.TextXAlignment.Right,
-		Position = UDim2.new(1, -64, 0, 9), Size = UDim2.fromOffset(55, 18), ZIndex = 3 })
+		Position = UDim2.new(1, -49, 0, 5), Size = UDim2.fromOffset(42, 14), ZIndex = 13 })
 
 	local gridW = Config.gridCols * CELL + (Config.gridCols - 1) * CELL_GAP
 	local gridH = Config.gridRows * CELL + (Config.gridRows - 1) * CELL_GAP
@@ -151,10 +204,10 @@ local function newCard(ticket)
 	grid.Name = "Grid"
 	grid.BackgroundTransparency = 1
 	grid.AnchorPoint = Vector2.new(0.5, 0)
-	grid.Position = UDim2.new(0.5, 0, 0, 34)
+	grid.Position = UDim2.new(0.5, 0, 0, 24)
 	grid.Size = UDim2.fromOffset(gridW, gridH)
-	grid.ZIndex = 3
-	grid.Parent = button
+	grid.ZIndex = 13
+	grid.Parent = frame
 	local cellParts = {}
 	for row = 1, Config.gridRows do
 		for col = 1, Config.gridCols do
@@ -166,7 +219,7 @@ local function newCard(ticket)
 			square.Position = UDim2.fromOffset((col - 1) * (CELL + CELL_GAP), (row - 1) * (CELL + CELL_GAP))
 			square.Size = UDim2.fromOffset(CELL, CELL)
 			square.ClipsDescendants = true
-			square.ZIndex = 3
+			square.ZIndex = 13
 			square.Parent = grid
 			corner(square, 3)
 			local top = Instance.new("Frame") -- top half: the level 1 block of a stacked cell
@@ -174,34 +227,20 @@ local function newCard(ticket)
 			top.BorderSizePixel = 0
 			top.Size = UDim2.fromScale(1, 0.5)
 			top.Visible = false
-			top.ZIndex = 4
+			top.ZIndex = 14
 			top.Parent = square
-			local badge = text(square, "Badge", { Text = "2", Font = Enum.Font.GothamBlack, TextSize = 10,
+			local cellBadge = text(square, "Badge", { Text = "2", Font = Enum.Font.GothamBlack, TextSize = 8,
 				TextColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0, BackgroundColor3 = INK,
-				AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(10, 10),
-				Visible = false, ZIndex = 5 })
-			cellParts[name] = { square = square, top = top, badge = badge }
+				AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(8, 8),
+				Visible = false, ZIndex = 15 })
+			cellParts[name] = { square = square, top = top, badge = cellBadge }
 		end
 	end
 
-	local age = text(button, "Age", { Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Color3.fromRGB(110, 98, 84),
-		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 9, 1, -24), Size = UDim2.fromOffset(70, 16), ZIndex = 3 })
-	local activeTag = text(button, "Active", { Text = "ACTIVE", Font = Enum.Font.GothamBlack, TextSize = 12,
-		TextColor3 = ACTIVE_BORDER, TextXAlignment = Enum.TextXAlignment.Right,
-		Position = UDim2.new(1, -64, 1, -24), Size = UDim2.fromOffset(55, 16), Visible = false, ZIndex = 3 })
-
-	button.Activated:Connect(function()
-		ticketPick:FireServer(ticket.id)
-	end)
-	button.MouseEnter:Connect(function()
-		TweenService:Create(scale, TweenInfo.new(0.1), { Scale = scale:GetAttribute("Base") and scale:GetAttribute("Base") + 0.03 or 1.03 }):Play()
-	end)
-	button.MouseLeave:Connect(function()
-		TweenService:Create(scale, TweenInfo.new(0.1), { Scale = scale:GetAttribute("Base") or 1 }):Play()
-	end)
-
-	button.Parent = rail
-	return { button = button, cells = cellParts, points = points, age = age, edge = edge, scale = scale, activeTag = activeTag, ticket = ticket }
+	local age = text(frame, "Age", { Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Color3.fromRGB(110, 98, 84),
+		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 7, 1, -17), Size = UDim2.fromOffset(50, 13), ZIndex = 13 })
+	frame.Parent = stack
+	return { frame = frame, cells = cellParts, points = points, age = age, scale = scale }
 end
 
 local function paintCard(card, ticket, hidden)
@@ -225,31 +264,109 @@ local function paintCard(card, ticket, hidden)
 	card.age.TextColor3 = age >= 40 and Color3.fromRGB(200, 60, 40) or Color3.fromRGB(110, 98, 84)
 end
 
-local function setActiveLook(card, active)
-	card.edge.Color = active and ACTIVE_BORDER or PAPER_EDGE
-	card.edge.Thickness = active and 4 or 2
-	card.activeTag.Visible = active
-	card.button.ZIndex = active and 4 or 2
-	card.scale:SetAttribute("Base", active and 1.06 or 1)
-	TweenService:Create(card.scale, SHIFT, { Scale = active and 1.06 or 1 }):Play()
-end
-
 -- The completed card gets an "ORDER UP! +points" stamp and flies up and off the screen. The big
 -- "ORDER UP! +points" itself pops in above the boards in 3D (PatternMatch.Celebrate on the server, the same
 -- moment as the attract demo's COMPLETE!), so the HUD doesn't repeat it.
 local function orderUp(info, card)
-	if card then
-		local stamp = text(card.button, "Stamp", { Text = "ORDER UP!\n+" .. info.points, Font = Enum.Font.GothamBlack, TextSize = 20,
-			TextColor3 = Color3.fromRGB(30, 150, 60), Rotation = -12, BackgroundTransparency = 0.15, BackgroundColor3 = PAPER,
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(CARD_W - 10, 60), ZIndex = 8 })
-		corner(stamp, 6)
-		task.delay(0.35, function()
-			local p = card.button.Position
-			TweenService:Create(card.button, FLY, { Position = p + UDim2.fromOffset(60, -1400), Rotation = 18 }):Play() -- up and out
-			task.delay(0.95, function() card.button:Destroy() end)
-		end)
+	card.frame.ZIndex = 30
+	local stamp = text(card.frame, "Stamp", { Text = "ORDER UP!\n+" .. info.points, Font = Enum.Font.GothamBlack, TextSize = 16,
+		TextColor3 = Color3.fromRGB(30, 150, 60), Rotation = -12, BackgroundTransparency = 0.15, BackgroundColor3 = PAPER,
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(CARD_W - 10, 46), ZIndex = 31 })
+	corner(stamp, 6)
+	task.delay(0.35, function()
+		local p = card.frame.Position
+		TweenService:Create(card.frame, FLY, { Position = p + UDim2.fromOffset(40, -1400), Rotation = 18 }):Play() -- up and out
+		task.delay(0.95, function() card.frame:Destroy() end)
+	end)
+end
+
+-- A new ticket: a small card flies in and tucks onto the back of the pile; the badge pulses and the
+-- "NEW TICKET" chip flashes for 1 s. The active (face-up) ticket doesn't change.
+local function arrive(waiting)
+	local mini = Instance.new("Frame")
+	mini.Name = "Arriving"
+	mini.BackgroundColor3 = PAPER
+	mini.BorderSizePixel = 0
+	mini.Size = UDim2.fromOffset(CARD_W * 0.5, CARD_H * 0.5)
+	mini.Position = UDim2.fromOffset(STACK_W + 260, -120)
+	mini.Rotation = 20
+	mini.ZIndex = 5
+	mini.Parent = stack
+	corner(mini, 4)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = PAPER_EDGE
+	stroke.Thickness = 1.5
+	stroke.Parent = mini
+	local dest = backPosition(math.max(1, TicketStack.pileEdges(waiting)))
+	TweenService:Create(mini, TUCK, { Position = dest, Size = UDim2.fromOffset(CARD_W, CARD_H), Rotation = 0 }):Play()
+	task.delay(TUCK.Time + 0.02, function() mini:Destroy() end)
+
+	badgeScale.Scale = 1.4
+	TweenService:Create(badgeScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	chipToken += 1
+	local mine = chipToken
+	chip.Visible = true
+	chip.BackgroundTransparency, chip.TextTransparency = 0, 0
+	task.delay(1, function()
+		if chipToken == mine then
+			chip.Visible = false
+		end
+	end)
+end
+
+-- The active ticket changed: the old face-up card slides behind the pile (or flies off on an ORDER UP)
+-- and the new one slides to the front, about 0.2 s.
+local function swapFront(ticket, flyInfo)
+	local previous = front
+	local card = newCard(ticket)
+	card.frame.Position = FRONT + SWAP_REACH
+	card.scale.Scale = 0.94
+	TweenService:Create(card.frame, SWAP, { Position = FRONT }):Play()
+	TweenService:Create(card.scale, SWAP, { Scale = 1 }):Play()
+	front = { id = ticket.id, card = card }
+	if previous then
+		if flyInfo then
+			orderUp(flyInfo, previous.card)
+		else
+			local old = previous.card
+			old.frame.ZIndex = 8 -- under the incoming card and the pile's edges
+			TweenService:Create(old.frame, SWAP, { Position = FRONT + SWAP_REACH }):Play()
+			TweenService:Create(old.scale, SWAP, { Scale = 0.94 }):Play()
+			task.delay(SWAP.Time + 0.02, function() old.frame:Destroy() end)
+		end
 	end
 end
+
+local function clearStack()
+	if front then
+		front.card.frame:Destroy()
+		front = nil
+	end
+	table.clear(known)
+	lastWaiting = 0
+	for _, edge in ipairs(edges) do
+		edge.Visible = false
+	end
+	badge.Visible = false
+	chip.Visible = false
+end
+
+local function cycle(dir)
+	if inShiftNow and lastWaiting > 0 then
+		ticketCycle:FireServer(dir)
+	end
+end
+prevButton.Activated:Connect(function() cycle(TicketStack.ARROWS.Prev) end)
+nextButton.Activated:Connect(function() cycle(TicketStack.ARROWS.Next) end)
+UserInputService.InputBegan:Connect(function(input)
+	if UserInputService:GetFocusedTextBox() then
+		return -- typing in chat
+	end
+	local dir = TicketStack.KEYS[input.KeyCode]
+	if dir then
+		cycle(dir)
+	end
+end)
 
 -- Status panel ----------------------------------------------------------------------------------------
 
@@ -350,48 +467,57 @@ end
 
 -- Payload ---------------------------------------------------------------------------------------------
 
-local function updateRail(p)
+local function updateStack(p)
+	local tickets = p.tickets or {}
 	local hidden = p.revealPhase == "hide"
-	local present = {}
-	for index, ticket in ipairs(p.tickets or {}) do
+	local waiting = TicketStack.waitingCount(#tickets)
+	local present, active = {}, nil
+	for _, ticket in ipairs(tickets) do
 		present[ticket.id] = true
-		local card = cards[ticket.id]
-		local active = ticket.id == p.activeId
-		if not card then
-			card = newCard(ticket)
-			cards[ticket.id] = card
-			-- slide in from the right end of the rail
-			card.button.Position = slotPosition(index, active) + UDim2.fromOffset(CARD_W * 2, 40)
-			card.button.Rotation = 8
-			TweenService:Create(card.button, SLIDE, { Position = slotPosition(index, active), Rotation = 0 }):Play()
-		else
-			TweenService:Create(card.button, SHIFT, { Position = slotPosition(index, active) }):Play()
-		end
-		paintCard(card, ticket, hidden)
-		if card.isActive ~= active then
-			card.isActive = active
-			setActiveLook(card, active)
+		if ticket.id == p.activeId then
+			active = ticket
 		end
 	end
-	-- Cards that left the rail: the ORDER UP one flies off with its stamp, any other just goes.
+	active = active or tickets[1]
+
 	local info = p.orderUp
 	local newOrder = info ~= nil and info.seq ~= lastOrderSeq
-	local flown = false
-	for id, card in pairs(cards) do
-		if not present[id] then
-			cards[id] = nil
-			if newOrder and info.id == id then
-				orderUp(info, card)
-				flown = true
-			else
-				card.button:Destroy()
+
+	-- Arrivals: tickets not seen before that aren't the face-up one (the first ticket of a shift, or the
+	-- one an empty rail gets right after an ORDER UP, goes straight to the front instead).
+	local firstLook = next(known) == nil
+	for _, ticket in ipairs(tickets) do
+		if not known[ticket.id] then
+			known[ticket.id] = true
+			if not firstLook and (active == nil or ticket.id ~= active.id) then
+				arrive(waiting)
 			end
 		end
 	end
+
+	if active and (front == nil or front.id ~= active.id) then
+		local flown = newOrder and front ~= nil and info.id == front.id and not present[front.id]
+		swapFront(active, flown and info or nil)
+	elseif active == nil and front ~= nil then
+		front.card.frame:Destroy()
+		front = nil
+	end
+	if front and active then
+		paintCard(front.card, active, hidden)
+	end
+
+	local edgeCount = TicketStack.pileEdges(waiting)
+	for k, edge in ipairs(edges) do
+		edge.Visible = k <= edgeCount
+	end
+	local badgeText = TicketStack.badgeText(waiting)
+	badge.Visible = badgeText ~= nil
+	badge.Text = badgeText or ""
+	prevButton.TextTransparency = waiting > 0 and 0 or 0.7
+	nextButton.TextTransparency = waiting > 0 and 0 or 0.7
+	lastWaiting = waiting
+
 	if newOrder then
-		if not flown then
-			orderUp(info, nil)
-		end
 		bonusLabel.Text = "+" .. (info.bonus or Config.ticketTimeBonus) .. "s"
 		bonusLabel.TextTransparency = 0
 		TweenService:Create(bonusLabel, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }):Play()
@@ -412,14 +538,12 @@ patternUI.OnClientEvent:Connect(function(p)
 	root.Visible = not (p.state == "ModeSelect" and p.chooserUserId == localPlayer.UserId)
 
 	local inShift = p.state == "Shift"
-	rail.Visible = inShift
+	inShiftNow = inShift
+	stack.Visible = inShift
 	if inShift then
-		updateRail(p)
+		updateStack(p)
 	else
-		for id, card in pairs(cards) do
-			card.button:Destroy()
-			cards[id] = nil
-		end
+		clearStack()
 	end
 
 	modeLabel.Text = (p.mode and (string.upper(p.mode) .. " MODE   ") or "") .. (inShift and "SHIFT" or string.upper(p.state))
