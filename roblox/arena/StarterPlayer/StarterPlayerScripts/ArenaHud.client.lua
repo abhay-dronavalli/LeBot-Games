@@ -366,6 +366,7 @@ Remotes.Hud.OnClientEvent:Connect(function(payload)
 	timer.Text = ("%d:%02d"):format(math.floor(left / 60), math.floor(left % 60))
 	-- The pulse itself runs on RenderStepped below. Driving it from this handler would step it at
 	-- the payload rate (8 Hz), which reads as a stutter rather than a pulse.
+	slamStuds = payload.slamStuds or slamStuds
 	timerUrgent = left <= 10 and payload.state == "Round"
 	timer.TextColor3 = timerUrgent and C.UiDanger or C.UiText
 	if not timerUrgent then
@@ -459,6 +460,182 @@ local function aerialCFrame(): CFrame?
 	return CFrame.lookAt(centre + Vector3.new(0, height, back), centre)
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- The operator's aiming aids
+--
+-- The operator flies a real 3D arm from a flat overhead view. From up there, "directly above that
+-- player" and "thirty studs short of them" look the same, and there is no cue at all for height -
+-- so without help they are aiming blind, which is not a skill problem to be overcome.
+--
+-- This does not break hard rule 1. That rule forbids telegraphs on the PLAYERS' screens, so that
+-- players dodge by watching the dragon instead of reading a marker that says where the strike will
+-- land. Everything below shows where the jaw is RIGHT NOW - the same class of thing as the
+-- dragon's own shadow, which rule 1 explicitly allows - and all of it is built here, on the
+-- operator's client, so it does not replicate and no player ever sees it.
+--
+-- Three cues, because they answer three different questions:
+--   the disc    - where on the floor am I? turns red when a player is under me
+--   the line    - how high am I? its length IS the height, which is the cue overhead view destroys
+--   the readout - the numbers, plus who I am over
+-- ---------------------------------------------------------------------------------------------
+
+local aim = nil :: any
+local slamStuds = 5          -- replaced by the server's converted figure on the first payload
+
+local function buildAim()
+	local folder = Instance.new("Folder")
+	folder.Name = "OperatorAim"
+	folder.Parent = workspace
+
+	local function fx(name: string, size: Vector3, colour: Color3, shape: Enum.PartType?): BasePart
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Material = Enum.Material.Neon
+		p.Color = colour
+		p.Size = size
+		if shape then
+			p.Shape = shape
+		end
+		p.Parent = folder
+		return p
+	end
+
+	local disc = fx("Disc", Vector3.new(0.4, 1, 1), C.DragonEye, Enum.PartType.Cylinder)
+	disc.Transparency = 0.72
+	local dot = fx("Dot", Vector3.new(0.5, 2.5, 2.5), C.WhiteHot, Enum.PartType.Cylinder)
+	local line = fx("Drop", Vector3.new(0.7, 0.7, 1), C.DragonEye)
+	line.Transparency = 0.45
+
+	return { folder = folder, disc = disc, dot = dot, line = line }
+end
+
+local readout = text(gui, Theme.Font.Display, 22, C.UiText)
+readout.AnchorPoint = Vector2.new(0.5, 1)
+readout.Position = UDim2.new(0.5, 0, 1, -16)
+readout.Size = UDim2.new(0, 560, 0, 28)
+readout.Text = ""
+readout.Visible = false
+
+-- The jaw tips, read off the replicated dragon. The head segment spans wrist_roll -> tip and is
+-- centred on its own pivot, so half its length forward along the local Z axis is the tip - the
+-- same point the server calls arm.tip.
+local function dragonTip(): Vector3?
+	local dragon = workspace:FindFirstChild("Dragon")
+	local head = dragon and dragon:FindFirstChild("Head")
+	local core = head and head:FindFirstChild("Core")
+	if not (core and core:IsA("BasePart")) then
+		return nil
+	end
+	return (core.CFrame * CFrame.new(0, 0, core.Size.Z / 2)).Position
+end
+
+local function floorTopY(): number?
+	local arenaModel = workspace:FindFirstChild("Arena")
+	local floor = arenaModel and arenaModel:FindFirstChild("Floor")
+	if not (floor and floor:IsA("BasePart")) then
+		return nil
+	end
+	return floor.Position.Y + floor.Size.Y / 2
+end
+
+local function updateAim()
+	if not aim then
+		return
+	end
+	local tip = dragonTip()
+	local floorY = floorTopY()
+	if not tip or not floorY then
+		aim.folder.Parent = nil
+		readout.Text = ""
+		return
+	end
+	aim.folder.Parent = workspace
+
+	local ground = Vector3.new(tip.X, floorY + 0.08, tip.Z)
+	local height = math.max(tip.Y - floorY, 0)
+
+	-- Who is under the jaw. Measured flat, ignoring height, because that is exactly the question
+	-- the overhead view cannot answer by itself.
+	local radius = ArenaConfig.AIM_RETICLE_RADIUS
+	local over: Player? = nil
+	local nearest = math.huge
+	for _, p in Players:GetPlayers() do
+		local char = p.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if root and root:IsA("BasePart") and hum and hum.Health > 0 then
+			local flat = (Vector3.new(root.Position.X, 0, root.Position.Z)
+				- Vector3.new(ground.X, 0, ground.Z)).Magnitude
+			if flat < nearest then
+				nearest = flat
+				if flat <= radius then
+					over = p
+				end
+			end
+		end
+	end
+
+	-- Warm throughout: this is the dragon's own aim, and rule 7 keeps the cool colours for the
+	-- players. Red for "someone is under you", white-hot for "low enough to land a slam".
+	local inRange = height <= slamStuds
+	local colour = C.DragonEye
+	if over then
+		colour = C.UiDanger
+	elseif inRange then
+		colour = C.WhiteHot
+	end
+
+	aim.disc.Size = Vector3.new(0.4, radius * 2, radius * 2)
+	aim.disc.CFrame = CFrame.new(ground) * CFrame.Angles(0, 0, math.pi / 2)
+	aim.disc.Color = colour
+	aim.disc.Transparency = over and 0.5 or 0.72
+
+	aim.dot.CFrame = CFrame.new(ground + Vector3.new(0, 0.02, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+	aim.dot.Color = colour
+
+	-- The line's length is the height. That is the whole point of it: an overhead view destroys
+	-- depth, and a bar that visibly shortens as the head comes down puts it back.
+	-- Floored a little above the ground. At the bottom of a slam the tip IS the floor, and
+	-- CFrame.lookAt with two coincident points produces a NaN CFrame - which would blow up the
+	-- operator's view at the exact moment they most need it.
+	local top = Vector3.new(tip.X, math.max(tip.Y, floorY + 0.3), tip.Z)
+	aim.line.Size = Vector3.new(0.7, 0.7, math.max(height, 0.1))
+	aim.line.CFrame = CFrame.lookAt(ground:Lerp(top, 0.5), top)
+	aim.line.Color = colour
+
+	local where
+	if over then
+		where = "OVER " .. string.upper(over.Name)
+	elseif nearest < math.huge then
+		where = string.format("NEAREST %d", math.floor(nearest))
+	else
+		where = "NO TARGET"
+	end
+	readout.Text = string.format("HEIGHT %d    %s%s", math.floor(height), where,
+		inRange and "    STRIKE RANGE" or "")
+	readout.TextColor3 = colour
+end
+
+local function setAimVisible(on: boolean)
+	if on and ArenaConfig.AIM_SHOW then
+		if not aim then
+			aim = buildAim()
+		end
+		readout.Visible = true
+	else
+		if aim then
+			aim.folder:Destroy()
+			aim = nil
+		end
+		readout.Visible = false
+	end
+end
+
 local function setAerial(on: boolean)
 	if on == aerial then
 		return
@@ -482,6 +659,7 @@ local function setAerial(on: boolean)
 		hint.Text = "V — PLAYER VIEW"
 		bar.Visible = false              -- the ability bar is the players' tool
 		opText.Visible = true
+		setAimVisible(true)
 
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CFrame = view
@@ -507,6 +685,7 @@ local function setAerial(on: boolean)
 					camera.CameraType = Enum.CameraType.Scriptable
 				end
 				camera.CFrame = aerialView
+				updateAim()
 			end
 		end))
 	else
@@ -515,6 +694,7 @@ local function setAerial(on: boolean)
 		hint.Text = "V — AERIAL VIEW"
 		bar.Visible = true
 		opText.Visible = false
+		setAimVisible(false)
 		for _, c in aerialConns do
 			c:Disconnect()
 		end

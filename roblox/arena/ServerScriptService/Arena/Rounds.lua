@@ -19,6 +19,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Theme = require(ReplicatedStorage.Arena.Theme)
 local ArenaConfig = require(ReplicatedStorage.Arena.ArenaConfig)
 local Remotes = require(ReplicatedStorage.Arena.Remotes)
+local Mapping = require(script.Parent.Parent.Mapping)
+
+-- The operator's aiming aids need to show height against the slam threshold, which is in
+-- millimetres. Mapping lives in ServerScriptService and the HUD is a LocalScript, so the converted
+-- figure rides along in the payload rather than the client hardcoding a scale that would then
+-- silently disagree with Mapping the first time anyone retunes it.
+local SLAM_HEIGHT_STUDS = ArenaConfig.SLAM_HEIGHT_MM * Mapping.STUDS_PER_MM
 
 local Rounds = {}
 Rounds.__index = Rounds
@@ -296,6 +303,7 @@ function Rounds.broadcast(self)
 		total = math.max(total, survivors),
 		effects = chips,
 		dormant = self.dragon:isDormant(),
+		slamStuds = SLAM_HEIGHT_STUDS,
 	}
 
 	-- The slot bar is per player, so the payload is finished per client rather than broadcast.

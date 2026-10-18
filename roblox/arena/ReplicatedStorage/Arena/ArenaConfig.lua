@@ -148,6 +148,18 @@ ArenaConfig.AERIAL_HEIGHT_FRAC = 0.62
 ArenaConfig.AERIAL_BACK_FRAC = 0.38
 ArenaConfig.AERIAL_FOV = 55           -- degrees; lower zooms in without moving the camera
 
+-- The operator's aiming aids, drawn on the aerial view only.
+--
+-- These do not break hard rule 1. That rule forbids telegraphs on the PLAYERS' screens, because
+-- players must dodge by watching the dragon rather than reading a marker that says where the next
+-- strike lands. The operator's problem is the opposite one and is not about fairness at all: they
+-- are flying a real 3D arm from a flat overhead view, where "directly above you" and "thirty studs
+-- short" look identical, so without a height cue they are aiming blind. What is drawn here is the
+-- arm's CURRENT position - the same class of thing as the dragon's own shadow, which rule 1
+-- explicitly allows - and it is built on the operator's client, so no player ever sees it.
+ArenaConfig.AIM_RETICLE_RADIUS = 14   -- studs; inside this counts as "over" a player
+ArenaConfig.AIM_SHOW = true           -- false strips the aids back to a bare overhead camera
+
 -- Lighting levels, separate from the colours in Theme. The style guide asks for a dark arena lit
 -- almost entirely by lava, and these are the knobs for deciding how far to take that. Dark enough
 -- that the fire reads, bright enough to see the dragon's armour and where you are standing.

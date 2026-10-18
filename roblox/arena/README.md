@@ -107,6 +107,28 @@ Use the key, not the name, when you are setting up screens in a hurry: in Play S
 named after your Roblox account rather than `Player1`, so a name match is exactly the thing that
 fails right when you are trying to get a second display up.
 
+### Aiming aids
+
+The operator flies a real 3D arm from a flat overhead view, where "directly above that player" and
+"thirty studs short of them" look identical and there is no height cue at all. Three things are
+drawn to fix that, on the operator's client only:
+
+- **A disc on the floor** under the jaw tip — where you are. It turns `UiDanger` red when a player
+  is inside it (`AIM_RETICLE_RADIUS`, 14 studs).
+- **A vertical line** from the disc up to the tip. Its *length* is the height, which is the cue the
+  overhead view destroys. It shortens visibly as the head comes down.
+- **A readout** at the bottom: `HEIGHT 38   OVER PLAYER2   STRIKE RANGE`. "Strike range" means the
+  tip is low enough that a fast enough descent registers as a slam, converted from
+  `SLAM_HEIGHT_MM` by the server so it cannot drift from `Mapping`.
+
+Set `AIM_SHOW = false` in `ArenaConfig` for a bare overhead camera.
+
+**This does not break hard rule 1.** That rule forbids telegraphs on the *players'* screens, so
+that players dodge by watching the dragon rather than reading a marker that says where the strike
+will land. These show where the jaw is *right now* — the same class of thing as the dragon's own
+shadow, which rule 1 explicitly allows — and they are built on the operator's client, so they do
+not replicate and no player ever sees them.
+
 If `V` reports `NO ARENA YET — START THE ROBOT PROCESS`, the floor does not exist because no
 `hello` frame has arrived. That is the robot process not running, not the keybind.
 
