@@ -10,3 +10,19 @@ __pycache__/
 
 # gemini_namer.py reads GEMINI_API_KEY from here. Never commit it.
 .env
+# Roblox place files are binary and don't diff or merge -- one person owns the place,
+# and the Luau source is mirrored into roblox/ as text instead (see roblox/README.md).
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS cruft
+.DS_Store
+Thumbs.db
