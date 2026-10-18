@@ -38,13 +38,21 @@ Config.MalfunctionGraceAfterBayChange = 3
 Config.CrateConfirmDelay = 0.2
 Config.CrateRemoveDelay = 0.4
 
--- Bay 1 saw wall -- the advancing wall IS this obstacle's clock, so this single number sets
--- the whole bay's difficulty. Budget check: one reachAndPlace is ~5.5s of arm animation and
--- the job queue serializes them, so three placements cost ~17s before the player has climbed
--- anything. At 30 the brake crate is effectively compulsory; nearer 45 it becomes a choice.
-Config.SawWallSeconds = 30
+-- Bay 1 saw wall -- the closing wall IS this obstacle's clock, so this single number sets the
+-- whole bay's difficulty. Budget check: one reachAndPlace is ~5.5s of arm animation and the job
+-- queue serializes them, so this bay's three placements cost ~17s before the player has climbed
+-- anything. 30 played too fast once the no-place band went in, since stalling is no longer
+-- available to buy that time back.
+Config.SawWallSeconds = 60
 Config.SawWallBrakeEnabled = true
-Config.SawWallGrindFactor = 0.25 -- speed multiplier while live blades chew through a crate
+
+-- You cannot drop a crate in front of live blades to stall the wall: a cell within this many
+-- studs of the blades, or already past them, refuses the placement outright. Stalling only
+-- becomes possible once Lever A has killed the blades, which is what makes the spare cube a
+-- reward for finishing Lever A rather than a way to skip it.
+Config.SawWallNoPlaceBand = 4
+
+Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
