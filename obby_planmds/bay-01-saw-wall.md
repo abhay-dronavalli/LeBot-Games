@@ -71,8 +71,10 @@ is a **reward for killing them, never a way to skip that step**:
 
 - **Blades live** → the wall cuts straight through without slowing, *and* a crate cannot
   even be placed within `SawWallNoPlaceBand` studs of the blades. The delivery is refused.
-- **Blades dead** (after Lever A) → nothing cuts, so the first crate in the path **jams
-  the wall solid**.
+- **Blades dead** (after Lever A) → nothing cuts, so the first crate in the path **jams the
+  wall** — but only for `SawWallStallSeconds` (10), and **each crate's stall is spent once**.
+  When the timer runs out the wall grinds past that crate at full speed and will not jam on it
+  again.
 
 The band is measured from the blades, so placing a crate *early*, while the wall is still
 far away, is fine. It's only dropping one just in front of live blades that gets turned
@@ -82,9 +84,15 @@ A refusal is **deferred, not discarded** — the operator's cube is still on the
 `BlockSync` parks it and `retryRejected()` delivers it the moment Lever A changes the
 answer.
 
-This also makes the Lever B stack a **shield** once A is thrown, so the player is never
-killed standing on the block that saved them. (From the original brief: *"obv make it
-make sense so my cahracter doesnt jst die standing on the block."*)
+Because the stall is per crate, the spare cube buys a **second** 10s reprieve further down
+the lane — roughly 20s of extra time across the two, which is the real budget for getting
+Lever B done.
+
+⚠️ **A crate is a reprieve, not a shield.** This is a deliberate softening of the
+*"doesnt jst die standing on the block"* rule: standing on a jammed crate is safe only while
+its stall is running. Once spent, the wall resumes and will crush you there. The on-screen
+`WALL STALLED - Ns` countdown is the warning, so the death is never unsignalled — but it is a
+real way to die on top of your own block, which no other bay allows.
 
 ---
 
@@ -134,12 +142,9 @@ Bay 1 spans `z = 0..24`, `x = 0..32`. Entrance at `z = 0`.
 
 The wall travels **far end → entrance**. Two things follow from that:
 
-1. It reaches row 1 before row 0, so **Lever A is the timed one** and Lever B stays
-   reachable.
-2. Once A kills the blades, the wall jams on A's own crate at `z≈15.1` and **never
-   reaches row 0** — so the finish is unhurried by design.
-
-If you want B under pressure too, move it deeper in `BayData` and the wall will reach it.
+1. It reaches row 1 before row 0, so **Lever A is the timed one** and Lever B is reached last.
+2. A's crate jams the wall at `z≈15.1`, but only for 10s — so the finish stays a race.
+   Dropping the spare cube further down the lane buys another 10s.
 
 Lever housings are 3.5 studs wide and **jut into the bay**. Flush with the wall they'd
 sit a couple of studs short of the crate's edge and be unreachable.
@@ -204,7 +209,8 @@ gets a *different instance* and proves nothing.
 | Crate clear of the wall | delivered normally |
 | Lever A via E-hold | threw; blades dead, B's prompt enabled |
 | Parked rejection after A | delivered by `retryRejected` |
-| Jam after A | 0.000 studs/s, held at z=15.1 |
+| Stall after A | held at z=15.09 for ~10s, then resumed at 0.314 studs/s |
+| Stall spent once | wall passed the same crate without re-jamming |
 
 ---
 
@@ -240,7 +246,7 @@ gets a *different instance* and proves nothing.
 
 ## 11. Open
 
-- **60s is unvalidated.** Needs a real teleop run to tune.
+- **60s and the 10s stall are unvalidated.** Both need a real teleop run to tune.
 - **Lever heights (8.6 / 11.8) are unplaytested.** The `minStand` gate is what actually
   enforces the cube cost, so the heights are cosmetic within a range — but they should
   still feel right.
