@@ -146,6 +146,10 @@ local current = label("Bay 01  -  Saw", 12, COLD)
 local startBtn = button("START RUN HERE  (fresh state)", root, Color3.fromRGB(32, 78, 48))
 local resetBtn = button("RESET THIS BAY", root)
 local resetAllBtn = button("RESET ALL BAYS", root)
+-- Distinct from RESET ALL BAYS, which rebuilds the course and leaves you standing wherever
+-- you were -- usually mid-bay, mid-hazard, sometimes dead. This one also puts you back on the
+-- spawn with a fresh body, which is the state a demo wants to start from.
+local fullResetBtn = button("RESET EVERYTHING  (F2)", root, Color3.fromRGB(86, 34, 40))
 
 -- Player 2 ------------------------------------------------------------
 local sep = label("WHO PLACES BLOCKS  (switching resets everything)", 11,
@@ -170,6 +174,9 @@ resetBtn.MouseButton1Click:Connect(function()
 end)
 resetAllBtn.MouseButton1Click:Connect(function()
 	DebugCommand:FireServer("resetAll")
+end)
+fullResetBtn.MouseButton1Click:Connect(function()
+	DebugCommand:FireServer("fullReset")
 end)
 -- Switching is a hard reset of the whole course, so say so rather than surprising anyone.
 feedBtn.MouseButton1Click:Connect(function()
@@ -212,6 +219,9 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 	if input.KeyCode == Enum.KeyCode.F1 then
 		root.Visible = not root.Visible
+	elseif input.KeyCode == Enum.KeyCode.F2 then
+		-- Reachable with the panel hidden, which is how you would actually be playing.
+		DebugCommand:FireServer("fullReset")
 	end
 end)
 

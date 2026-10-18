@@ -43,6 +43,12 @@ local function remote(name, className)
 end
 
 local DebugCommand = remote("DebugCommand")
+local GhostToggle = remote("GhostToggle")
+
+-- Bumped by a full reset. Clients that hold view state of their own -- the overseer's zoom
+-- and pan -- watch this rather than guessing from the bay number, which does not change when
+-- you full-reset while already standing on bay 1.
+local resetToken = 0
 local DebugStatus = remote("DebugStatus")
 local BayCells = remote("BayCells")
 
@@ -89,6 +95,7 @@ local function snapshot()
 		activeBay = RunControl.activeBay,
 		feedMode = RunControl.feedMode,
 		hasOverseer = RunControl.hasOverseer(),
+		resetToken = resetToken,
 	}
 end
 
@@ -165,6 +172,49 @@ local function setActiveBay(i)
 	return RunControl.setActiveBay(i)
 end
 
+-- The course start, not bay 1's doorway. StartSpawn is where the place drops you on join,
+-- so a full reset ending anywhere else is not actually "back to the beginning".
+local function startCFrame()
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d:IsA("SpawnLocation") then
+			return d.CFrame + Vector3.new(0, 3.5, 0)
+		end
+	end
+	return CFrame.new(Config.BayWidth / 2, 4, -(Config.EntranceBuffer or 10) + 4)
+end
+
+-- Everything back to how the place loads. Not a teleport: a FRESH CHARACTER.
+--
+-- A run leaves marks a teleport does not clear -- ghost mode's transparency and infinite
+-- health, PlatformStand left on by the fly controller, a hazard's weld, whatever velocity you
+-- died with. Those travel with the character, so the only reliable way to be rid of all of
+-- them at once is to throw the character away and take a new one.
+local function fullReset(player)
+	setActiveBay(1)
+	for i = 1, Config.NumBays do
+		if RunControl.rebuildBay then
+			RunControl.rebuildBay(i)       -- obstacle rebuilt + every crate wiped
+		end
+		task.wait()
+	end
+
+	ObjectiveEvent:FireClient(player, nil)
+	player:LoadCharacter()
+	local character = player.Character or player.CharacterAdded:Wait()
+	local hrp = character:WaitForChild("HumanoidRootPart", 5)
+	if hrp then
+		hrp.CFrame = startCFrame()
+		hrp.AssemblyLinearVelocity = Vector3.zero
+	end
+	-- The new character is solid, but the ghost HUD survives respawn (ResetOnSpawn = false)
+	-- and would still read GHOST ON over a body that can die.
+	GhostToggle:FireClient(player, false)
+
+	print("[DebugMenu] FULL RESET -- every bay rebuilt, fresh character on the spawn")
+	resetToken += 1
+	pushStatus()
+end
+
 local function startRun(player, i)
 	i = math.clamp(math.floor(i or RunControl.activeBay), 1, Config.NumBays)
 	setActiveBay(i)
@@ -197,6 +247,9 @@ DebugCommand.OnServerEvent:Connect(function(player, action, arg)
 		ObjectiveEvent:FireClient(player, nil)
 		print(("[DebugMenu] Bay %02d reset in place"):format(RunControl.activeBay))
 		pushStatus()
+
+	elseif action == "fullReset" then
+		fullReset(player)
 
 	elseif action == "resetAll" then
 		for i = 1, Config.NumBays do

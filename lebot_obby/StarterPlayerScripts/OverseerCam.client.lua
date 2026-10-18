@@ -450,7 +450,7 @@ end
 local function refreshBanner()
 	banner.Text = ("OVERSEER VIEW   -   BAY %02d   -   %s"):format(activeBay, bayName:upper())
 	local n = #(solveCells or {})
-	sub.Text = ("%s   -   scroll zoom, right-drag pan, G walls %s, V back to the runner"):format(
+	sub.Text = ("%s   -   scroll or -/= zoom, right-drag pan, G walls %s, V back to the runner"):format(
 		(n > 0) and ("%d cells want a block"):format(n) or "cleared by an action, not by cells",
 		xray and "see-through" or "solid")
 end
@@ -475,6 +475,34 @@ local function setXray(on)
 	end
 end
 
+-- ZOOM IS BOUND THE SAME WAY, AND FOR THE SAME REASON. Roblox's own camera module claims the
+-- mouse wheel through ContextActionService, so by the time a wheel turn reaches
+-- InputChanged it is already flagged handled and a gameProcessedEvent guard eats it --
+-- CameraType = Scriptable stops the module MOVING the camera, it does not stop it listening.
+-- Binding above it is the only way to get the wheel.
+--
+-- The - and = keys do the same job. A wheel is not a given -- half of demoing this happens on
+-- a laptop trackpad -- and a contested input with no alternative is one that just fails.
+local function stepZoom(by)
+	zoom = math.clamp(zoom + by, ZOOM_MIN, ZOOM_MAX)
+	aimCamera()
+end
+
+ContextActionService:BindActionAtPriority("OverseerZoom", function(_, state, input)
+	if not active then
+		return Enum.ContextActionResult.Pass
+	end
+	if input.UserInputType == Enum.UserInputType.MouseWheel then
+		if state == Enum.UserInputState.Change and input.Position.Z ~= 0 then
+			stepZoom(-input.Position.Z * 0.12)
+		end
+	elseif state == Enum.UserInputState.Begin then
+		stepZoom(input.KeyCode == Enum.KeyCode.Minus and 0.18 or -0.18)
+	end
+	return Enum.ContextActionResult.Sink
+end, false, Enum.ContextActionPriority.High.Value,
+	Enum.UserInputType.MouseWheel, Enum.KeyCode.Minus, Enum.KeyCode.Equals)
+
 ContextActionService:BindActionAtPriority("OverseerXray", function(_, state)
 	if not active then
 		-- the runner is driving; G is none of this script's business
@@ -495,8 +523,16 @@ recenterBtn.MouseButton1Click:Connect(function()
 	aimCamera()
 end)
 
+local resetToken = nil
+
 DebugStatus.OnClientEvent:Connect(function(status)
-	local moved = status.activeBay ~= activeBay
+	-- A full reset puts the course back to bay 1, which usually reads as a bay change -- but
+	-- not when you full-reset while already on bay 1, and then the camera kept whatever zoom
+	-- and pan the last run left it with. The token changes either way.
+	local wasReset = resetToken ~= nil and status.resetToken ~= resetToken
+	resetToken = status.resetToken
+
+	local moved = status.activeBay ~= activeBay or wasReset
 	activeBay = status.activeBay or activeBay
 	local info = status.bays and status.bays[activeBay]
 	solveCells = info and info.solveCells or nil
@@ -552,15 +588,13 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
--- Scroll to zoom, right-drag to pan.
-UserInputService.InputChanged:Connect(function(input, processed)
+-- Right-drag to pan. No processed guard: the drag starts over the middle of the screen,
+-- where the objective panel and the mini grid both live. (Zoom is a bound action, above.)
+UserInputService.InputChanged:Connect(function(input)
 	if not active then
 		return
 	end
-	if input.UserInputType == Enum.UserInputType.MouseWheel and not processed then
-		zoom = math.clamp(zoom - input.Position.Z * 0.12, ZOOM_MIN, ZOOM_MAX)
-		aimCamera()
-	elseif panning and input.UserInputType == Enum.UserInputType.MouseMovement then
+	if panning and input.UserInputType == Enum.UserInputType.MouseMovement then
 		-- The camera looks down -Z-ish, so screen-right is world +X and screen-up is world
 		-- +Z. Scaled by zoom so a drag covers the same amount of SCREEN at any zoom.
 		panX -= input.Delta.X * PAN_PER_PIXEL * zoom
