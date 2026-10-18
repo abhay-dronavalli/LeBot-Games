@@ -17,9 +17,9 @@ two crates the operator puts down for you to jump between.
 
 | Step | What happens |
 |---|---|
-| You walk up | The HUD names the first cell: `RED x1 → COL 1, ROW 0` |
+| You walk up | The HUD names the first cell: `BLOCK → COL 1, ROW 0` |
 | Operator places it | A crate lands in the void and becomes footing |
-| HUD advances | `RED x1 → COL 1, ROW 1`, hint: *one more block, then jump from block to block* |
+| HUD advances | `BLOCK → COL 1, ROW 1`, hint: *one more block, then jump from block to block* |
 | Operator places it | Bay solves; edge striping turns green; `CLEARED` |
 
 **The point:** bay 1 tests placing accurately *under time pressure*. This bay strips the
@@ -43,7 +43,7 @@ Gravity 196.2 , JumpHeight 7.2 , WalkSpeed 16
 The void over rows 0–1 is **16 studs** — nearly twice that. So the crates can't be
 skipped, and there is no need to widen the void to all three rows or raise the far side.
 Keeping row 2's floor also gives the player somewhere to land, and keeps the bay solvable
-on **2 red cubes**, which is the entire red budget.
+on **2 cubes**, which is what every bay is designed around.
 
 Verified by raycasting the route rather than trusting the arithmetic:
 
@@ -65,19 +65,19 @@ project wants.
 
 ## 3. The cube budget
 
-Two red cubes, which is the whole red allowance, spent on two level-1 cells:
+Two cubes, any colour, on two level-1 cells:
 
 ```
-red #1  ->  cell (1,0)   stepping stone 1
-red #2  ->  cell (1,1)   stepping stone 2
+cube 1  ->  cell (1,0)   stepping stone 1
+cube 2  ->  cell (1,1)   stepping stone 2
 ```
 
 Nothing spare. Both cells are column 1 so the route is a straight line down the middle of
 the bay — a zig-zag would have been prettier but costs reach accuracy for no gameplay gain.
 
-A four-block version (2 red + 2 blue, still legal since the budget is per colour) was
-considered and rejected: it needs `checkSolved` extended to per-cell colours, and the
-extra hops don't make the bay teach anything new.
+A four-block version was considered and rejected: the extra hops don't make the bay teach
+anything new. (It was once rejected partly because it needed per-cell colours in
+`checkSolved`; that objection no longer applies, but the design one still does.)
 
 ---
 
@@ -103,17 +103,18 @@ instead, which is exactly what the player needs to shout at the operator:
 | State | Task line | Tone |
 |---|---|---|
 | outside the bay | *hidden* | — |
-| nothing placed | `RED x1 → COL 1, ROW 0` | danger |
-| one placed | `RED x1 → COL 1, ROW 1` | warn |
+| nothing placed | `BLOCK → COL 1, ROW 0` | danger |
+| one placed | `BLOCK → COL 1, ROW 1` | warn |
 | solved | `CLEARED` | ok |
 
 The hint under it reads *"No floor for 16 studs. Call out both cells — the crates are the
 bridge."*, then *"One more block, then jump from block to block."*, then *"The bridge is in
 — jump across to the exit."*
 
-In world, each unfilled solve cell carries a **crate-sized hologram** tinted the colour the
-cell wants, labelled `RED (1,0)`, so the cell can be read off the floor without the debug
-grid. Each one vanishes as its cell is filled.
+In world, each unfilled solve cell carries a **crate-sized hologram**, amber, labelled
+`BLOCK (1,0)`, so the cell can be read off the floor without the debug grid. Each one vanishes
+as its cell is filled. It used to be tinted to the colour the cell wanted; with any block
+accepted, that would have been sending the operator after a cube they don't need.
 
 ---
 
@@ -202,16 +203,17 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes, not by requiring mod
 | Floor cut back | `32 x 1 x 8`, z 46..54, collidable |
 | Void empty before placing | 0 collidable parts in z 30..46 |
 | Crate delivered to the right bay | Bay01=0, **Bay02=2** (was the hard-coded bug) |
-| Crate at rest | base y=2.00, top=4.00, `CanCollide=true`, rgb 210,50,50 |
+| Crate at rest | base y=2.00, top=4.00, `CanCollide=true` |
 | Delivery time | 3.7s and 4.4s per crate |
 | Route gaps | 2.0 / 3.5 / 1.5 studs — all under the 8.67 jump |
 | Gap uncrossable unplaced | 16 studs vs 8.67 |
 | Kill plane | dropped at (16,6,38) → dead in 0.8s |
-| HUD on approach, unsolved | 14/14 payloads `RED x1 → COL 1, ROW 0`, **zero** interleaved clears |
-| HUD after one crate | `RED x1 → COL 1, ROW 1`, tone warn |
+| HUD on approach, unsolved | 14/14 payloads `COL 1, ROW 0`, **zero** interleaved clears |
+| HUD after one crate | `COL 1, ROW 1`, tone warn |
 | HUD solved | `CLEARED`, tone ok |
 | Lips on solve | 16 green / 0 amber, holograms hidden |
-| Un-solve (recolour (1,1) red→blue) | lips 0 green / 16 amber, 1 hologram back, HUD reverts |
+| Un-solve (clearing (1,1)) | lips 0 green / 16 amber, 1 hologram back, HUD reverts |
+| Re-verified after colour requirements were dropped | solved on **2 blue crates**, seated y=2.00, 16 green lips |
 | Bay 1 regression | `LEVER A — KILL THE BLADES`, countdown live at 57.1s |
 | Bay with no driver (bay 4) | HUD hidden |
 | Returning to bay 2 | bay 2 takes the channel back, 14/14 clean |
@@ -242,8 +244,9 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes, not by requiring mod
 ## 11. Open
 
 - **Crates read as white, not as their colour**, because of bloom off their neon stripe
-  (§10.4). Affects every bay and the whole game is colour-coded, so it is worth a look:
-  shrink the stripe, drop `Bloom.Intensity`, or raise `Bloom.Threshold`.
+  (§10.4). Affects every bay. It no longer breaks anything — no obstacle requires a colour —
+  but the crates look washed out: shrink the stripe, drop `Bloom.Intensity`, or raise
+  `Bloom.Threshold`.
 - **Rapid colour cycling can strand a crate.** Cycling one cell through 7 colours in ~2s
   left an orphaned teal crate parked in the cell. `BlockSync`'s `onArrive` guards on
   `crateModel.Parent`, but a job already *in flight* when it is superseded parents the crate

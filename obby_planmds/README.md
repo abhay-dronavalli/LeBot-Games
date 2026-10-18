@@ -5,7 +5,7 @@ plan is the original intent and has diverged.
 
 | Doc | What it is |
 |---|---|
-| [obby_plan.md](obby_plan.md) | The master plan. Numbered sections (0–21) that the Luau comments cite — "Section 7", "Section 10.2" etc. refer to it. **§4.1–4.2 are superseded**; Part III (robot/vision/protocol) is still accurate and untouched. |
+| [obby_plan.md](obby_plan.md) | The master plan. Numbered sections (0–21) that the Luau comments cite — "Section 7", "Section 10.2" etc. refer to it. **§4.1–4.2 are superseded**, and so is every colour requirement in it; Part III (robot/vision/protocol) is still accurate and untouched. |
 | [bay-01-saw-wall.md](bay-01-saw-wall.md) | Bay 1, built and verified end to end. |
 | [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
 | [bay-03-laser-walk.md](bay-03-laser-walk.md) | Bay 3, built and verified end to end. |
@@ -73,26 +73,34 @@ shape — **one** crate, moved repeatedly, where the cell it sits in is the only
 and the route is randomised per run. Bays 4–9 are still the older sketch of that model and
 have not had a design pass.
 
-| # | Obstacle | Colour | Lvl | Solve | Redesigned |
-|---|---|---|---|---|---|
-| 1 | **Saw Wall** | orange + red | 1 + 2 | **two levers, hold E** | ✅ built & verified |
-| 2 | **Void** | red | 1 | cells (1,0) (1,1) | ✅ built & verified |
-| 3 | **Laser Walk** | yellow | 1 | **walk one crate along a random 6–8 cell route** | ✅ built & verified |
-| 4 | Lava | blue | 1 | cells (1,0) (1,1) | ❌ |
-| 5 | Crusher roof | green | 2 | cell (1,1) | ❌ |
-| 6 | Mobs | purple | 1 | cells (0,1) (3,1) | ❌ |
-| 7 | Arrow turrets | yellow | 1 | cells (1,1) (2,1) | ❌ |
-| 8 | Dark zone | teal | 1 | cells (1,1) (2,1) | ❌ |
-| 9 | Ice (finale) | red | 1 | cells (0,1) (3,1) | ❌ |
+No bay requires a colour any more — **any block satisfies any cell** — so the old Colour
+column has been replaced by what a bay actually costs in cubes.
+
+| # | Obstacle | Cubes | Solve | Redesigned |
+|---|---|---|---|---|
+| 1 | **Saw Wall** | 3 (1 + a stack of 2) | **two levers, hold E** | ✅ built & verified |
+| 2 | **Void** | 2 | cells (1,0) (1,1) | ✅ built & verified |
+| 3 | **Laser Walk** | **1**, moved repeatedly | **walk it along a random 6–8 cell route** | ✅ built & verified |
+| 4 | Lava | 2 | cells (1,0) (1,1) | ❌ |
+| 5 | Crusher roof | 2 (one L2 cell) | cell (1,1) | ❌ |
+| 6 | Mobs | 2 | cells (0,1) (3,1) | ❌ |
+| 7 | Arrow turrets | 2 | cells (1,1) (2,1) | ❌ |
+| 8 | Dark zone | 2 | cells (1,1) (2,1) | ❌ — **its mechanic was the teal glow; needs a rethink** |
+| 9 | Ice (finale) | 2 | cells (0,1) (3,1) | ❌ |
 
 ---
 
 ## Rules that apply to every bay
 
-**Cube budget.** The physical rig has **two cubes per colour**. A cell holds one colour at
-level 1 (1 cube) or level 2 (2 cubes) — never two colours in one cell. So a bay may ask for at
-most 2 of a colour: one L2 cell, or two L1 cells, or one L1 cell. Anything more is unsolvable
-on the real table. **Three-high stacks do not exist.**
+**Blocks are interchangeable.** No obstacle requires a particular colour — the operator places
+whichever cube is to hand, and any block satisfies any cell. Crates still *spawn* in their
+colours, and the debug editor still picks one, but that is appearance: there is no colour test
+anywhere in the solve path. **Don't add one.**
+
+**Cube budget.** `level` is still enforced, because it is a cube *count*: level 1 is one cube
+in the cell, level 2 is two stacked. **Three-high stacks do not exist.** The rig owns 14 cubes
+in total, and every bay is designed around 1 or 2 — a ceiling inherited from when the limit was
+two cubes *per colour*, and now self-imposed rather than physical.
 
 **Safe footing.** The blocks that solve an obstacle are also the player's footing. Nothing
 may kill the player while they're standing on the thing that solved it. *(Bay 1 is the one
@@ -110,15 +118,16 @@ must mirror it, so no obstacle may destroy a crate. Resolve contact some other w
 **Two ways a bay can be solved**
 
 1. **Placement** (bays 2–9, the default) — `checkSolved` watches `BlockSync.CellsChanged` and
-   marks the bay solved when every `solveCell` holds a crate of the right colour at or above
-   the required level.
+   marks the bay solved when every `solveCell` holds a crate at or above the required level.
+   Colour is not checked.
 2. **Action** (`solveMode = "switches"` in bay 1, `"action"` in bay 3) — the obstacle owns
    `state.solved` and sets it itself; `ownsItsSolve(info)` makes `checkSolved` skip the bay,
    and `solveCells` degrades to a hint or can be omitted entirely. Use this whenever the
    crates are the *means* rather than the goal, or when the cells are decided at runtime.
 
-An action bay should set its own `info.banner`; the default describes a placement bay
-(`"<COLOUR> x<N>"`), and switch-mode bays used to inherit bay 1's `THROW BOTH LEVERS`.
+An action bay should set its own `info.banner`; the default describes a placement bay via
+`blockReq(level)` (`SAW  -  BLOCK`, `CRUSHERROOF  -  STACK x2`), and switch-mode bays used to
+inherit bay 1's `THROW BOTH LEVERS`.
 
 Both go through one `state.setSolved`, which owns the label and the edge-triggered `onSolved`.
 A switch-mode bay **cannot be un-solved by clearing cells** — the R hotkey resets every bay.

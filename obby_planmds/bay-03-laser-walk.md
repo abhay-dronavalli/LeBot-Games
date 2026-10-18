@@ -14,8 +14,8 @@
 
 ## 1. The scenario
 
-Every cell of the 4×3 grid is lethal. There is exactly **one** yellow crate, and whatever cell
-it sits in is the only safe ground in the bay. You cross by having the operator walk that one
+Every cell of the 4×3 grid is lethal. There is exactly **one** crate — any colour, the bay does
+not care — and whatever cell it sits in is the only safe ground in the bay. You cross by having the operator walk that one
 crate ahead of you, cell by cell, along a route **only they can see**.
 
 Three rules make it a puzzle rather than a chore:
@@ -94,10 +94,12 @@ outbound bridge:
 
 ```lua
 Bridge.send({
-    t = "target", bay = 3, color = "yellow", level = 1,
+    t = "target", bay = 3, level = 1,
     col = 2, row = 1, step = 3, of = 8, done = false,
 })
 ```
+
+No colour is sent, because any cube will do — the overlay only has to say *where*.
 
 `done = true` with no `col`/`row` means the route is finished.
 
@@ -165,7 +167,7 @@ the player arm it from the catwalk, read the callout, and wait for the first pla
 | State | Task | Tone |
 |---|---|---|
 | on the approach, unarmed | `STEP ONTO THE GRID` | danger |
-| route running | `YELLOW x1 → COL c, ROW r` + `Step k of n` | danger / warn |
+| route running | `BLOCK → COL c, ROW r` + `Step k of n` | danger / warn |
 | route exhausted | `STAND ON THE LAST CELL` | warn |
 | solved | `CLEARED` | ok |
 
@@ -199,6 +201,7 @@ Driven through the real `CellEdit` / `DebugHotkey` remotes.
 | Grid lethal before arming | 12/12 pads live |
 | Arms from the catwalk | armed at z=57, route generated, target published |
 | Wrong cell refused | no crate delivered, **pad stayed LIVE**, target unchanged |
+| Any colour accepted | a **blue** crate requested into all four row-0 cells: the route's start cell took it and seated it, the other three refused (11/12 pads still LIVE) |
 | Refusal flash | `NOT THE NEXT CELL - COL 3, ROW 0` |
 | Correct cell | crate seated in 4.6s, pad → SAFE, HUD advanced to step 2 |
 | Cooldown | vacated cell `5.7 → 3.8 → 1.8 → LIVE` (configured 6s) |

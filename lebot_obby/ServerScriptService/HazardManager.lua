@@ -32,6 +32,15 @@ local function bayCenter(i)
 	return Vector3.new(Config.BayWidth / 2, 0, bayZStart(i) + Config.BayDepth / 2)
 end
 
+-- Blocks are INTERCHANGEABLE. An obstacle cares how many cubes are in a cell -- the stack
+-- height -- and never what colour they are, because the operator grabs whichever cube is to
+-- hand on the real table. So a requirement only ever reads "a block here" or "a stack of N",
+-- and every colour test has been stripped out of the solve path. Crates still SPAWN in their
+-- colours; that is appearance, and the debug editor still picks one.
+local function blockReq(level)
+	return ((level or 1) > 1) and string.format("STACK x%d", level) or "BLOCK"
+end
+
 local function newPart(name, size, pos, color, material, parent, props)
 	local p = Instance.new("Part")
 	p.Name = name
@@ -879,15 +888,18 @@ BUILDERS.Void = function(i, folder, info, state)
 	-- Placement holograms: a crate-sized ghost at each solveCell, so the player can read the
 	-- cell to call out instead of guessing it off the debug grid. One disappears as its cell
 	-- is filled, which makes "what is left to do" visible in world as well as on the HUD.
+	--
+	-- Amber rather than tinted to a required colour: any block fits, so a coloured ghost would
+	-- be telling the operator to go and find a cube they do not need.
 	----------------------------------------------------------------
-	local tint = BlockSync.colorRGB(info.color) or AMBER
+	local tint = AMBER
 	local ghosts = {}
 	for _, sc in ipairs(info.solveCells or {}) do
 		local col, row = sc[1], sc[2]
 		local c = cellCenter(i, col, row)
 		local box = newPart("GhostCrate", Vector3.new(4, 4, 4), Vector3.new(c.X, 2, c.Z),
 			tint, Enum.Material.ForceField, folder, {Transparency = 0.55, CanQuery = false})
-		local label = addLabel(folder, string.format("%s  (%d,%d)", info.color:upper(), col, row),
+		local label = addLabel(folder, string.format("%s  (%d,%d)", blockReq(info.level), col, row),
 			Vector3.new(c.X, 6.5, c.Z), tint)
 		ghosts[col .. "," .. row] = {box = box, label = label}
 	end
@@ -949,10 +961,10 @@ BUILDERS.Void = function(i, folder, info, state)
 				end
 			end
 			if sc then
-				p.task = string.format("%s x%d  ->  COL %d, ROW %d",
-					info.color:upper(), info.level, sc[1], sc[2])
+				p.task = string.format("%s  ->  COL %d, ROW %d",
+					blockReq(info.level), sc[1], sc[2])
 			else
-				p.task = string.format("%s x%d", info.color:upper(), info.level)
+				p.task = blockReq(info.level)
 			end
 			p.hint = (remaining > 1)
 				and string.format("No floor for %d studs. Call out both cells -- the crates are the bridge.", span)
@@ -970,7 +982,7 @@ BUILDERS.Void = function(i, folder, info, state)
 		end
 		filled = {}
 		for _, c in ipairs(cellsList) do
-			if c.color == info.color and (c.level or 1) >= info.level then
+			if (c.level or 1) >= info.level then
 				filled[c.col .. "," .. c.row] = true
 			end
 		end
@@ -1196,7 +1208,6 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 			Bridge.send({
 				t = "target",
 				bay = i,
-				color = info.color,
 				level = info.level,
 				col = n and n[1] or nil,
 				row = n and n[2] or nil,
@@ -1245,10 +1256,6 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 	----------------------------------------------------------------
 	if bay then
 		BlockSync.setPlacementGuard(bay, function(cell)
-			if cell.color ~= info.color then
-				return false, string.format("NEEDS %s - NOT %s",
-					info.color:upper(), tostring(cell.color):upper())
-			end
 			local n = nextCell()
 			if not n then
 				return false, "ROUTE COMPLETE"
@@ -1285,7 +1292,7 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 		if bayModel ~= bay or not running then
 			return
 		end
-		if cell.color ~= info.color or (cell.level or 1) < info.level then
+		if (cell.level or 1) < info.level then
 			return
 		end
 		local landed = keyOf(cell.col, cell.row)
@@ -1322,8 +1329,8 @@ BUILDERS.LaserWalk = function(i, folder, info, state)
 		else
 			local n = nextCell()
 			if n then
-				p.task = string.format("%s x%d  ->  COL %d, ROW %d",
-					info.color:upper(), info.level, n[1], n[2])
+				p.task = string.format("%s  ->  COL %d, ROW %d",
+					blockReq(info.level), n[1], n[2])
 				p.hint = string.format("Step %d of %d. Only that cell will take the crate.",
 					step + 1, #route)
 				p.tone = (step == 0) and "danger" or "warn"
@@ -1959,7 +1966,6 @@ local function buildBay(i)
 
 	CollectionService:AddTag(folder, "Obstacle")
 	folder:SetAttribute("Obstacle", info.obstacle)
-	folder:SetAttribute("Color", info.color)
 	folder:SetAttribute("Level", info.level)
 
 	local c = bayCenter(i)
@@ -1967,7 +1973,7 @@ local function buildBay(i)
 	-- the default used to be hard-coded to bay 1's levers, which was wrong for every other
 	-- action bay. The default still describes a placement bay, which is most of them.
 	state.banner = info.banner
-		or string.format("%s  -  %s x%d", info.obstacle:upper(), info.color:upper(), info.level)
+		or string.format("%s  -  %s", info.obstacle:upper(), blockReq(info.level))
 	state.label = addLabel(folder, state.banner,
 		Vector3.new(c.X, 11, c.Z), Color3.fromRGB(255, 180, 90))
 
@@ -1988,10 +1994,11 @@ local function checkSolved(info, cellsList)
 	for _, c in ipairs(cellsList) do
 		byKey[c.col .. "," .. c.row] = c
 	end
+	-- Colour is deliberately not checked: any block satisfies a cell. The level test stays,
+	-- because that is a cube COUNT -- a level-2 cell still wants two cubes stacked.
 	for _, sc in ipairs(info.solveCells) do
 		local c = byKey[sc[1] .. "," .. sc[2]]
 		if not c then return false end
-		if c.color ~= info.color then return false end
 		if (c.level or 1) < info.level then return false end
 	end
 	return true
