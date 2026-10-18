@@ -202,3 +202,126 @@ BUILDERS.Void = function(i, folder, info, state)
 	function state.onSolved() end
 end
 
+-- LASER: red, semi-transparent beam across row 1. A block stops the beam, so everything past
+-- the block is safe to walk through.
+-- LASER GRID: a heist-movie lattice of red beams filling the whole bay volume. Because the
+-- beams span the bay there's no walkable gap to carve, so the yellow mirror crate cuts power
+-- to the whole grid instead of interrupting a single shot.
+BUILDERS.Laser = function(i, folder, info, state)
+	local z0 = bayZStart(i)
+	-- Pure saturated red, kept fairly opaque. Semi-transparent neon picks up whatever is behind
+	-- it, and the warm warehouse lighting was turning these salmon/orange.
+	local RED = Color3.fromRGB(255, 0, 0)
+	local beams, emitters, movers = {}, {}, {}
+	local beamCount = 0
+
+	local function beamBetween(a, b, thickness)
+		local delta = b - a
+		local mid = a + delta / 2
+		local p = newPart("LaserBeam", Vector3.new(thickness, thickness, delta.Magnitude), mid,
+			RED, Enum.Material.Neon, folder, {Transparency = 0.15})
+		p.CFrame = CFrame.lookAt(mid, b)
+		makeLethalPart(p)
+		table.insert(beams, p)
+
+		-- a few beams carry their own red light so the bay is lit red rather than orange
+		beamCount += 1
+		if beamCount % 5 == 0 then
+			local l = Instance.new("PointLight")
+			l.Color = Color3.fromRGB(255, 20, 20)
+			l.Range = 14
+			l.Brightness = 2.2
+			l.Parent = p
+		end
+		return p
+	end
+
+	local function emitter(pos)
+		local e = newPart("Emitter", Vector3.new(1.1, 1.1, 1.1), pos,
+			Color3.fromRGB(38, 38, 44), Enum.Material.Metal, folder)
+		local l = Instance.new("PointLight")
+		l.Color = Color3.fromRGB(255, 50, 50)
+		l.Range = 9
+		l.Brightness = 1.6
+		l.Parent = e
+		table.insert(emitters, e)
+		return e
+	end
+
+	local heights = {1.6, 4.0, 6.4, 8.8}
+	local zLines = {3, 8, 12, 16, 21}
+
+	-- beams running across the bay, wall to wall
+	for _, zo in ipairs(zLines) do
+		local z = z0 + zo
+		for hi, y in ipairs(heights) do
+			local b = beamBetween(Vector3.new(0, y, z), Vector3.new(Config.BayWidth, y, z), 0.22)
+			-- every other beam slowly sweeps up and down like a scanner
+			if (hi + zo) % 2 == 0 then
+				table.insert(movers, {part = b, baseY = y, x = Config.BayWidth / 2, z = z,
+					phase = (zo + hi) * 0.7})
+			end
+		end
+		emitter(Vector3.new(-0.9, heights[1], z))
+		emitter(Vector3.new(Config.BayWidth + 0.9, heights[#heights], z))
+	end
+
+	-- beams running the length of the bay
+	for col = 0, 3 do
+		local x = col * CELL + CELL / 2
+		for _, y in ipairs({2.8, 5.2, 7.6}) do
+			beamBetween(Vector3.new(x, y, z0), Vector3.new(x, y, z0 + Config.BayDepth), 0.2)
+		end
+	end
+
+	-- corner-to-corner diagonals to break up the regular lattice
+	beamBetween(Vector3.new(0, 1.2, z0), Vector3.new(Config.BayWidth, 9.2, z0 + Config.BayDepth), 0.2)
+	beamBetween(Vector3.new(Config.BayWidth, 1.2, z0), Vector3.new(0, 9.2, z0 + Config.BayDepth), 0.2)
+	beamBetween(Vector3.new(0, 9.2, z0), Vector3.new(Config.BayWidth, 1.2, z0 + Config.BayDepth), 0.2)
+
+	-- live flicker + scanner sweep
+	task.spawn(function()
+		while folder.Parent do
+			if not state.solved then
+				local t = os.clock()
+				local flicker = 0.16 + math.sin(t * 5) * 0.07
+				for _, b in ipairs(beams) do
+					if b:GetAttribute("Live") == true then
+						b.Transparency = flicker
+					end
+				end
+				for _, m in ipairs(movers) do
+					if m.part.Parent then
+						local y = m.baseY + math.sin(t * 0.9 + m.phase) * 1.1
+						m.part.CFrame = CFrame.lookAt(
+							Vector3.new(m.x, y, m.z),
+							Vector3.new(Config.BayWidth, y, m.z))
+					end
+				end
+			end
+			task.wait(0.04)
+		end
+	end)
+
+	function state.onSolved()
+		-- staggered power-down, so the grid dies in a sweep rather than all at once
+		task.spawn(function()
+			for idx, b in ipairs(beams) do
+				b:SetAttribute("Live", false)
+				TweenService:Create(b, TweenInfo.new(0.3), {Transparency = 1}):Play()
+				if idx % 3 == 0 then
+					task.wait(0.04)
+				end
+			end
+			for _, e in ipairs(emitters) do
+				e.Color = Color3.fromRGB(70, 70, 76)
+				for _, l in ipairs(e:GetChildren()) do
+					if l:IsA("PointLight") then
+						l.Enabled = false
+					end
+				end
+			end
+		end)
+	end
+end
+
