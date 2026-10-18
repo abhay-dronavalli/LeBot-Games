@@ -178,3 +178,25 @@ DebugHotkey.OnServerEvent:Connect(function(player, key)
 end)
 
 ----------------------------------------------------------------
+-- Mock arm (Section 10.1) -- drives the six joints with a gentle sine wave, so later
+-- steps (Sky Arm) have a fake feed to render without the real robot.
+----------------------------------------------------------------
+local armState = {
+	shoulder_pan = 0, shoulder_lift = 0, elbow_flex = 0,
+	wrist_flex = 0, wrist_roll = 0, gripper = 0,
+}
+
+task.spawn(function()
+	while Config.DebugMode do
+		local t = os.clock()
+		armState.shoulder_pan = math.sin(t * 0.3) * 30
+		armState.shoulder_lift = math.sin(t * 0.25 + 1) * 20 - 20
+		armState.elbow_flex = math.sin(t * 0.4 + 2) * 25 + 40
+		armState.wrist_flex = math.sin(t * 0.5 + 3) * 15
+		armState.wrist_roll = math.sin(t * 0.2) * 10
+		armState.gripper = (math.sin(t * 0.6) + 1) * 25
+		task.wait(1 / 20) -- ~20 Hz, matching the planned WebSocket rate
+	end
+end)
+
+print("[DebugMode] fake Bridge source + cell editor backend online")
