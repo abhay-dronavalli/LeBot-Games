@@ -53,3 +53,54 @@ local function buildCellsList()
 	return list
 end
 
+local function keyFor(c)
+	return c.col .. "," .. c.row
+end
+
+local function diffCells(oldList, newList)
+	local oldByKey, newByKey = {}, {}
+	for _, c in ipairs(oldList) do
+		oldByKey[keyFor(c)] = c
+	end
+	for _, c in ipairs(newList) do
+		newByKey[keyFor(c)] = c
+	end
+
+	local added, removed, changed = {}, {}, {}
+	for key, c in pairs(newByKey) do
+		local old = oldByKey[key]
+		if not old then
+			table.insert(added, c)
+		elseif old.color ~= c.color or old.level ~= c.level then
+			table.insert(changed, c)
+		end
+	end
+	for key, c in pairs(oldByKey) do
+		if not newByKey[key] then
+			table.insert(removed, c)
+		end
+	end
+	return added, removed, changed
+end
+
+local function applyAndBroadcast()
+	local newList = buildCellsList()
+	local added, removed, changed = diffCells(previousCellsList, newList)
+	if #added > 0 or #removed > 0 or #changed > 0 then
+		print(string.format("[DebugMode] cells diff: +%d -%d ~%d", #added, #removed, #changed))
+		for _, c in ipairs(added) do
+			print(string.format("  + (%d,%d) %s L%d", c.col, c.row, c.color, c.level))
+		end
+		for _, c in ipairs(changed) do
+			print(string.format("  ~ (%d,%d) %s L%d", c.col, c.row, c.color, c.level))
+		end
+		for _, c in ipairs(removed) do
+			print(string.format("  - (%d,%d) %s L%d", c.col, c.row, c.color, c.level))
+		end
+	end
+	previousCellsList = newList
+	CellsUpdated:FireAllClients(newList)
+	BlockSync.applyCells(targetBay, newList)
+	return newList
+end
+
