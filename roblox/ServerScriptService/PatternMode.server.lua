@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Game = require(PatternMatch.Game)
 local BoardSpinner = require(PatternMatch.BoardSpinner)
+local TwinDriver = require(ReplicatedStorage:WaitForChild("ArmTwin"):WaitForChild("Driver"))
 local Core = ReplicatedStorage:WaitForChild("Core")
 local StateStore = require(Core:WaitForChild("StateStore"))
 local Events = require(Core:WaitForChild("Events"))
@@ -27,6 +28,7 @@ local remotes = getOrCreate(PatternMatch, "Folder", "Remotes")
 local patternUI = getOrCreate(remotes, "RemoteEvent", "PatternUI")          -- server -> clients: HUD payload
 local patternPick = getOrCreate(remotes, "RemoteEvent", "PatternPick")      -- chooser -> server: "easy" / "hard"
 local patternState = getOrCreate(remotes, "BindableEvent", "PatternState")  -- server only: state changes
+local armPose = getOrCreate(remotes, "UnreliableRemoteEvent", "ArmPose")    -- server -> clients: arm angles, 20 Hz
 
 local cabinet = workspace:WaitForChild("PatternCabinet")
 local prompt = cabinet:WaitForChild("Entry"):WaitForChild("PlayPrompt")
@@ -61,6 +63,11 @@ for _, name in ipairs({ "TargetBoard", "LiveBoard" }) do
 		spinner:request()
 	end)
 end
+
+-- The arm twin: clients drive their copy of the rig from these samples (StarterPlayerScripts.ArmTwinClient).
+TwinDriver.serve(armPose, function()
+	return StateStore.get().arm
+end, 20)
 
 -- A player who joins mid-game gets the current HUD state right away.
 Players.PlayerAdded:Connect(function(player)

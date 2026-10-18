@@ -1,19 +1,23 @@
 -- Edit-time build script for Workspace.PatternCabinet (placeholder floor on a rough island, Entry pad
--- with the "Play Pattern Match" prompt, TargetBoard and LiveBoard with click-to-spin detectors).
--- Not part of the game: run it once in Studio's command bar (or via the MCP execute_luau tool).
--- Refuses to run if PatternCabinet already exists. Undo with Ctrl+Z.
+-- with the "Play Pattern Match" prompt, TargetBoard and LiveBoard with click-to-spin detectors, and a
+-- clone of ReplicatedStorage.ArmTwin on an apron at the LiveBoard's row A edge).
+-- Not part of the game: run it once in Studio's command bar (or via the MCP execute_luau tool), after
+-- build_arm_twin.lua. Refuses to run if PatternCabinet already exists. Undo with Ctrl+Z.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 
 assert(not workspace:FindFirstChild("PatternCabinet"), "Workspace.PatternCabinet already exists")
+local twinTemplate = ReplicatedStorage:FindFirstChild("ArmTwin")
+assert(twinTemplate and twinTemplate:FindFirstChild("Base"), "ReplicatedStorage.ArmTwin is not built; run build_arm_twin.lua first")
 
 -- Require a clone so edit-time require caching never hands back stale module code.
 local PatternMatch = ReplicatedStorage.PatternMatch:Clone()
 local Config = require(PatternMatch.Config)
 local Grid = require(PatternMatch.Grid)
 
-local CELL_PITCH = 4         -- studs per cell on the boards
+local CELL_PITCH = Config.boardCellStuds -- studs per cell on the boards (also the twin's cm -> stud scale)
+local STUDS_PER_CM = CELL_PITCH / Config.cellSizeCm
 local CELL_GAP = 0.3         -- studs between neighboring cell tiles
 local CELL_THICKNESS = 0.2
 local STAND_HEIGHT = 2.5
@@ -111,9 +115,26 @@ for i, spec in ipairs({ { "TargetBoard", "TARGET" }, { "LiveBoard", "LIVE" } }) 
 		CFrame.new(x, floorTop + STAND_HEIGHT / 2, center.Z), Color3.fromRGB(90, 90, 90), board)
 	local base = part("Base", baseSize, CFrame.new(x, floorTop + STAND_HEIGHT + baseSize.Y / 2, center.Z),
 		Color3.fromRGB(45, 45, 45), board)
-	-- Base's +Z face is the row A edge (arm side, where the arm twin will sit), facing the spawn.
-	-- Column 1 (tag 0 side) is at the -X end. Grid.worldPositionOf owns this layout.
-	label(base, Enum.NormalId.Back, spec[2] .. "   (row A edge, arm side)", { TextColor3 = Color3.new(1, 1, 1) })
+	-- Base's +Z face is the row A edge (arm side), facing the spawn. Column 1 (tag 0 side) is at the -X
+	-- end. Grid.worldPositionOf owns this layout.
+	local labelPart = base
+	if spec[1] == "LiveBoard" then
+		-- Apron: the table in front of row A where the real arm stands. The twin's base sits on it,
+		-- Config.twinBaseOffsetCm from the grid's edge, centered on the board's width.
+		local apronDepth = math.ceil((Config.twinBaseOffsetCm + 6) * STUDS_PER_CM)
+		local apron = part("Apron", Vector3.new(baseSize.X, baseSize.Y, apronDepth),
+			base.CFrame * CFrame.new(0, 0, baseSize.Z / 2 + apronDepth / 2), base.Color, board)
+		labelPart = apron
+		local twin = twinTemplate:Clone()
+		for _, child in ipairs(twin:GetChildren()) do
+			if child:IsA("LuaSourceContainer") then
+				child:Destroy() -- the Rig and Driver modules stay on the template only
+			end
+		end
+		twin:PivotTo(base.CFrame * CFrame.new(0, baseSize.Y / 2, baseSize.Z / 2 + Config.twinBaseOffsetCm * STUDS_PER_CM))
+		twin.Parent = board
+	end
+	label(labelPart, Enum.NormalId.Back, spec[2] .. "   (row A edge, arm side)", { TextColor3 = Color3.new(1, 1, 1) })
 
 	for _, cell in ipairs(Grid.allCells()) do
 		local pos = Grid.worldPositionOf(cell, base)

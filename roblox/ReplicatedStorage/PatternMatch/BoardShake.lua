@@ -1,7 +1,10 @@
 -- ReplicatedStorage.PatternMatch.BoardShake
 -- Tremor board shake, run on each client (StarterGui.PatternHud): jitters the board Models every frame
--- and, on stop, puts every part back exactly where it was. The moves are local to that client; the
+-- and, on stop, puts them back exactly where they were. The moves are local to that client; the
 -- server's copy of the boards never changes.
+-- Restore pivots the whole Model back, then sets each anchored part's exact saved CFrame. Unanchored
+-- parts (the arm twin's links, which hang off its anchored base through Motor6Ds) are only moved by
+-- the pivot, so the arm keeps whatever pose it reached during the shake.
 --   local shake = BoardShake.start({ targetBoardModel, liveBoardModel })
 --   shake:stop()
 
@@ -19,7 +22,7 @@ function BoardShake.start(boards, rng)
 	for _, board in ipairs(boards) do
 		pivots[board] = board:GetPivot()
 		for _, part in ipairs(board:GetDescendants()) do
-			if part:IsA("BasePart") then
+			if part:IsA("BasePart") and part.Anchored then
 				saved[part] = part.CFrame
 			end
 		end
@@ -31,7 +34,7 @@ function BoardShake.start(boards, rng)
 			board:PivotTo(pivot * offset)
 		end
 	end)
-	return setmetatable({ saved = saved, connection = connection }, BoardShake)
+	return setmetatable({ saved = saved, pivots = pivots, connection = connection }, BoardShake)
 end
 
 function BoardShake:stop()
@@ -40,6 +43,9 @@ function BoardShake:stop()
 	end
 	self.connection:Disconnect()
 	self.connection = nil
+	for board, pivot in pairs(self.pivots) do
+		board:PivotTo(pivot)
+	end
 	for part, cframe in pairs(self.saved) do
 		part.CFrame = cframe
 	end

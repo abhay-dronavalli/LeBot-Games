@@ -171,12 +171,27 @@ local function fakeStep()
 	return blocks, msg
 end
 
--- Stores a new state message around the given block list.
-local function publish(blocks)
+-- Stores a new state message around the given block list (and arm angles, else the current ones).
+local function publish(blocks, arm)
 	StateStore.update({
 		t = "state", seq = state.seq + 1, ts = DateTime.now().UnixTimestampMillis / 1000,
-		arm = state.arm, tip = state.tip, blocks = blocks,
+		arm = arm or state.arm, tip = state.tip, blocks = blocks,
 	})
+end
+
+-- Fake arm: slow sine waves on every joint (degrees, gripper 0..100), at different speeds, in ranges
+-- that keep the twin's hand above the board. The Debug "arm" command replaces it with a fixed pose.
+local FAKE_ARM_HZ = 20
+local fixedArm = nil
+local function fakeArm(t)
+	return {
+		shoulder_pan = 30 * math.sin(t * 0.50),
+		shoulder_lift = 60 + 8 * math.sin(t * 0.37),
+		elbow_flex = -55 + 10 * math.sin(t * 0.61),
+		wrist_flex = -95 + 12 * math.sin(t * 0.83),
+		wrist_roll = 45 * math.sin(t * 0.29),
+		gripper = 50 + 45 * math.sin(t * 0.97),
+	}
 end
 
 -- Blocks at the target's cells (centers plus jitter) in the target's colors.
@@ -234,9 +249,13 @@ end
 --   { op = "add", cell = "B2", color = "red" } add a block at that cell's center
 --   { op = "remove", cell = "B2" }             remove the fake blocks on that cell
 --   { op = "solve" }                           replace every block with the current round's target
+--   { op = "arm", angles = { shoulder_pan = 0, ... } }  hold the fake arm at exact joint angles (degrees,
+--                                              gripper 0..100); angles = nil goes back to the sine waves
 local function debugCommand(cmd)
 	if cmd.op == "pause" then
 		debugPaused = cmd.on ~= false
+	elseif cmd.op == "arm" then
+		fixedArm = cmd.angles
 	elseif cmd.op == "add" then
 		local row, col = string.byte(cmd.cell) - 64, tonumber(string.sub(cmd.cell, 2))
 		local x, y = cellCenterCm(col, row)
@@ -265,6 +284,13 @@ if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
 	debugEvent.Name = "Debug"
 	debugEvent.Event:Connect(debugCommand)
 	debugEvent.Parent = script
+	task.spawn(function()
+		local started = os.clock()
+		while true do
+			task.wait(1 / FAKE_ARM_HZ)
+			publish(state.blocks, fixedArm or fakeArm(os.clock() - started))
+		end
+	end)
 	task.spawn(function()
 		while true do
 			task.wait(FAKE_INTERVAL)

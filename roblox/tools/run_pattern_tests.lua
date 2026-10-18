@@ -3,6 +3,17 @@
 -- and never gets stale cached module code. Returns "N passed, M failed" plus one line per check.
 
 local RS = game:GetService("ReplicatedStorage")
+
+-- Studio's command-bar require cache keeps the first version of a module it loaded this session.
+-- ArmTwin.Rig and Core.StateStore require PatternMatch.Config by path, so swap Config for an identical
+-- copy first; everything else below is required through clones.
+do
+	local old = RS.PatternMatch.Config
+	local copy = old:Clone()
+	old:Destroy()
+	copy.Parent = RS.PatternMatch
+end
+
 local pm = RS.PatternMatch:Clone()
 local Config = require(pm.Config)
 local Grid = require(pm.Grid)
@@ -434,17 +445,24 @@ if cab then
 	local baseStart = board.LiveBoard.Base.CFrame
 	local tileStart = board.TargetBoard.C4.CFrame
 	local targetBlockStart = board.TargetBoard.Blocks.B2.CFrame
+	local twinPart = board.LiveBoard:FindFirstChild("ArmTwin") and board.LiveBoard.ArmTwin:FindFirstChild("UpperArm")
+	local twinStart = twinPart and twinPart.CFrame
 	local shake = BoardShake.start({ board.TargetBoard, board.LiveBoard })
-	local moved = false
+	local moved, twinMoved = false, false
 	for _ = 1, 10 do
 		task.wait()
 		if board.LiveBoard.Base.CFrame ~= baseStart then moved = true end
+		if twinPart and twinPart.CFrame ~= twinStart then twinMoved = true end
 	end
-	table.insert(lines, "     (boards moved while shaking: " .. tostring(moved) .. ")")
+	table.insert(lines, "     (boards moved while shaking: " .. tostring(moved) .. ", arm twin moved with them: " .. tostring(twinMoved) .. ")")
 	shake:stop()
 	check("after stop: LiveBoard.Base and TargetBoard.C4 exactly restored",
 		board.LiveBoard.Base.CFrame == baseStart and board.TargetBoard.C4.CFrame == tileStart, true)
 	check("after stop: TargetBoard block B2 exactly restored too", board.TargetBoard.Blocks.B2.CFrame == targetBlockStart, true)
+	if twinPart then
+		check("after stop: the twin's (unanchored) UpperArm is back within 0.001 studs",
+			(twinPart.Position - twinStart.Position).Magnitude < 0.001, true)
+	end
 
 	section("22. mode select: only the starter picks, only during ModeSelect, only once")
 	local alice, bob = { Name = "Alice", UserId = 101 }, { Name = "Bob", UserId = 202 }
@@ -532,8 +550,77 @@ if cab then
 	check("TargetBoard spin: A1 / C3 target blocks still shown, B2 still empty",
 		board.TargetBoard.Blocks.A1.Color == Config.colors.red and board.TargetBoard.Blocks.C3.Color == Config.colors.teal
 		and board.TargetBoard.Blocks.A1.Transparency == 0 and board.TargetBoard.Blocks.B2.Transparency == 1, true)
+	if board.LiveBoard:FindFirstChild("ArmTwin") then
+		local twinSpinner = BoardSpinner.new(board.LiveBoard)
+		local baseRel = board.LiveBoard.Base.CFrame:ToObjectSpace(board.LiveBoard.ArmTwin.Base.CFrame)
+		twinSpinner:request()
+		waitIdle(twinSpinner, 2)
+		local baseRelAfter = board.LiveBoard.Base.CFrame:ToObjectSpace(board.LiveBoard.ArmTwin.Base.CFrame)
+		check("LiveBoard spin carries the arm twin (same offset from the board's Base)",
+			(baseRel.Position - baseRelAfter.Position).Magnitude < 0.001, true)
+		twinSpinner:destroy()
+	end
 	targetSpinner:destroy()
 	board:Destroy()
+end
+
+section("24. arm twin forward kinematics (ArmTwin.Rig / Driver; rest pose = horizontal reach forward)")
+local twinTemplate = RS:FindFirstChild("ArmTwin")
+if twinTemplate then
+	local twinCopy = twinTemplate:Clone() -- Driver finds Rig through script.Parent
+	local Rig = require(twinCopy.Rig)
+	local Driver = require(twinCopy.Driver)
+	local L = Config.twinLinksCm
+	local reach = L.upperArm + L.forearm + L.wrist + L.gripper
+	local shoulderY = L.baseHeight + L.shoulderHeight
+	local function tipCm(arm, tuning)
+		return Rig.forward(Driver.rigAngles(arm, tuning), true).Position
+	end
+	local function near(v, x, y, z)
+		return (v - Vector3.new(x, y, z)).Magnitude < 0.01
+	end
+	local sin, cos = math.sin, math.cos
+	table.insert(lines, string.format("     (links cm: shoulder height %.1f, reach from shoulder %.1f; scale %.4f studs/cm)", shoulderY, reach, Rig.studsPerCm()))
+	check("all joints 0: tip straight ahead at shoulder height", near(tipCm({}), 0, shoulderY, -reach), true)
+	check("pan +90: tip a quarter turn left around the base", near(tipCm({ shoulder_pan = 90 }), -reach, shoulderY, 0), true)
+	check("pan -90: a quarter turn right", near(tipCm({ shoulder_pan = -90 }), reach, shoulderY, 0), true)
+	check("lift +90: arm points straight up", near(tipCm({ shoulder_lift = 90 }), 0, shoulderY + reach, 0), true)
+	check("lift +30: tip in the vertical plane, raised by reach*sin30", near(tipCm({ shoulder_lift = 30 }), 0, shoulderY + reach * sin(math.rad(30)), -reach * cos(math.rad(30))), true)
+	check("elbow -90: forearm+wrist+gripper hang straight down from the elbow",
+		near(tipCm({ elbow_flex = -90 }), 0, shoulderY - (L.forearm + L.wrist + L.gripper), -L.upperArm), true)
+	check("wrist_flex +90 only moves the hand", near(tipCm({ wrist_flex = 90 }), 0, shoulderY + L.wrist + L.gripper, -(L.upperArm + L.forearm)), true)
+	check("wrist_roll alone leaves the tip where it is (it's on the roll axis)", near(tipCm({ wrist_roll = 123 }), 0, shoulderY, -reach), true)
+	check("pan +90 then lift +30 keep the tip in the rotated plane",
+		near(tipCm({ shoulder_pan = 90, shoulder_lift = 30 }), -reach * cos(math.rad(30)), shoulderY + reach * sin(math.rad(30)), 0), true)
+	local flipped = table.clone(Config.twinJoints)
+	flipped.shoulder_lift = { sign = -1, offset = 0 }
+	check("sign -1 on shoulder_lift: lift +30 now goes down", tipCm({ shoulder_lift = 30 }, flipped).Y < shoulderY, true)
+	flipped.shoulder_pan = { sign = -1, offset = 0 }
+	check("sign -1 on shoulder_pan: pan +90 turns right instead", near(tipCm({ shoulder_pan = 90 }, flipped), reach, shoulderY, 0), true)
+	local offs = table.clone(Config.twinJoints)
+	offs.shoulder_pan = { sign = 1, offset = 90 }
+	check("offset 90 on shoulder_pan: real 0 reads as +90", near(tipCm({}, offs), -reach, shoulderY, 0), true)
+	local ga = Driver.rigAngles({ gripper = 100 }).gripper
+	check("gripper 100 -> fully open, 0 -> closed, 150 clamps", ga == Rig.GRIPPER_OPEN and Driver.rigAngles({ gripper = 0 }).gripper == 0
+		and Driver.rigAngles({ gripper = 150 }).gripper == Rig.GRIPPER_OPEN, true)
+	check("scale: studs per cm = boardCellStuds / cellSizeCm", math.abs(Rig.studsPerCm() - Config.boardCellStuds / Config.cellSizeCm) < 1e-9, true)
+
+	local motorCount = 0
+	for _, d in ipairs(twinTemplate:GetDescendants()) do
+		if d:IsA("Motor6D") then motorCount += 1 end
+	end
+	check("ReplicatedStorage.ArmTwin has the six Motor6Ds", motorCount, 6)
+	local tipAtt = twinTemplate:FindFirstChild("Tip", true)
+	check("built rig: Tip attachment sits on the FK rest tip (studs)",
+		tipAtt ~= nil and (twinTemplate:GetPivot():PointToWorldSpace(Rig.forward({}).Position) - tipAtt.WorldPosition).Magnitude < 0.01, true)
+	check("built rig: only the Base is anchored", (function()
+		for _, d in ipairs(twinTemplate:GetDescendants()) do
+			if d:IsA("BasePart") and d.Anchored ~= (d.Name == "Base") then return false end
+		end
+		return true
+	end)(), true)
+else
+	check("ReplicatedStorage.ArmTwin exists", false, true)
 end
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

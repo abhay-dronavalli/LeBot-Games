@@ -95,10 +95,14 @@ ReplicatedStorage
   PatternMatch.PatternEvents (ModuleScript) event scheduler + vanish / tremor / inverted
   PatternMatch.TargetBoard (ModuleScript) target colors, Hard-mode hidden look
   PatternMatch.Remotes: PatternState (BindableEvent, server-only state changes)
-  ArmTwin (Model), TwinDriver (ModuleScript)
+  ArmTwin (Model, parts-built SO-101) with Rig (geometry, FK, builder) and Driver (server broadcast,
+    client easing + Motor6D Transforms) ModuleScripts; the LiveBoard holds a clone without the modules
+  PatternMatch.Remotes: ArmPose (UnreliableRemoteEvent, arm angles 20 Hz, server -> clients)
   Remotes: PatternUI (server -> client), PatternPick (client -> server)
 ServerScriptService
   PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
+StarterPlayer.StarterPlayerScripts
+  ArmTwinClient (LocalScript)              eases the LiveBoard's arm twin toward ArmPose samples
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
   PatternHud (ScreenGui + LocalScript)     timer, round, event banner
@@ -117,6 +121,11 @@ return {
   cellTolerance = 0.7,                 -- a block counts only inside the middle 70% of a cell
                                        -- stacked blocks (level > 0) count as extra; 2+ table blocks in a cell = doubled
   ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
+  boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeCm this is the cm -> stud scale
+  twinBaseOffsetCm = 9,                -- arm twin base center, measured from the grid's row A edge toward the operator
+  -- SO-101 link lengths in cm: joint-to-joint distances from TheRobotStudio's so101_new_calib.urdf
+  twinLinksCm = { baseHeight = 6.2, shoulderHeight = 5.4, upperArm = 11.6, forearm = 13.5, wrist = 6.4,
+                  jawHinge = 3.6, gripper = 9.8 },
   -- Target generation only uses colors listed here. Remove an entry if vision can't separate it.
   colors = { purple = Color3.fromRGB(128,0,255), red = Color3.fromRGB(255,0,0), yellow = Color3.fromRGB(255,220,0),
              orange = Color3.fromRGB(255,120,0), teal = Color3.fromRGB(0,160,160), skyblue = Color3.fromRGB(100,180,255) },
