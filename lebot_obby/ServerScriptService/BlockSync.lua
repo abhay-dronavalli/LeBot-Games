@@ -95,7 +95,18 @@ local function spawnShockwave(bayModel, worldCFrame, level, color)
 	Debris:AddItem(ring, 0.5)
 end
 
+-- ONE crate size for both paths.
+--
+-- This built a 4 stud Base with a 3 stud Topper, from when a crate was a prop rather than a
+-- cube. The live path builds real 6.72 stud cubes (Mapping.cubeStuds, from the 48 mm cube at
+-- the mat-to-bay scale), and bay 1's lever gate is tuned to those heights -- so solo play had
+-- crates topping out at 4.00 and 7.00 against a gate wanting 6.72 and 13.44. Lever A squeaked
+-- through on tolerance and **Lever B could never be thrown at all**: the bay was unsolvable
+-- unless the real robot was driving it.
+--
+-- A level-2 crate is now two identical cubes, which is what the real table has.
 local function buildCrateModel(color, level)
+	local w = Mapping.cubeStuds()
 	local model = Instance.new("Model")
 	model.Name = "Crate"
 
@@ -105,8 +116,9 @@ local function buildCrateModel(color, level)
 	base.CanCollide = true
 	base.Material = Enum.Material.CorrodedMetal
 	base.Color = COLOR_RGB[color] or Color3.fromRGB(200, 200, 200)
-	base.Size = Vector3.new(4, 4, 4)
+	base.Size = Vector3.new(w, w, w)
 	base.Parent = model
+	base:SetAttribute("IsCrate", true)
 	model.PrimaryPart = base
 
 	local stripe = Instance.new("Part")
@@ -116,7 +128,7 @@ local function buildCrateModel(color, level)
 	stripe.CanQuery = false
 	stripe.Material = Enum.Material.Neon
 	stripe.Color = COLOR_RGB[color] or Color3.fromRGB(255, 255, 255)
-	stripe.Size = Vector3.new(4.05, 0.4, 4.05)
+	stripe.Size = Vector3.new(w * 1.01, w * 0.09, w * 1.01)
 	stripe.Parent = model
 
 	local gui = Instance.new("SurfaceGui")
@@ -139,12 +151,14 @@ local function buildCrateModel(color, level)
 		topper.CanCollide = true
 		topper.Material = Enum.Material.CorrodedMetal
 		topper.Color = COLOR_RGB[color] or Color3.fromRGB(200, 200, 200)
-		topper.Size = Vector3.new(3, 3, 3)
+		-- the same cube again, not a smaller cap: two cubes stacked is what level 2 means
+		topper.Size = Vector3.new(w, w, w)
 		topper.Parent = model
+		topper:SetAttribute("IsCrate", true)
 
 		local topperStripe = stripe:Clone()
 		topperStripe.Name = "TopperStripe"
-		topperStripe.Size = Vector3.new(3.05, 0.3, 3.05)
+		topperStripe.Size = Vector3.new(w * 1.01, w * 0.08, w * 1.01)
 		topperStripe.Parent = model
 	end
 

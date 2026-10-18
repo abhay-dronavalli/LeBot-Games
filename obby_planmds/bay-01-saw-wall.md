@@ -1,6 +1,7 @@
 # Bay 1 — Saw Wall
 
-**Status:** built and verified in Studio. Solvable end to end.
+**Status:** built and **solved end to end in Studio** — both levers thrown by a real E-hold,
+wall sunk, exit walked. Timings still need a real teleop run.
 **Shared systems used:** objective HUD, placement guards, reach gating — all described in
 [README.md](README.md) so other bays can reuse them.
 **Code:** `lebot_obby/ServerScriptService/HazardManager.lua` → `BUILDERS.Saw`
@@ -275,6 +276,12 @@ gets a *different instance* and proves nothing.
 | **Exact-level gate** | A: floor ✗, 1 crate ✓, 2 stacked ✗ · B: floor ✗, 1 ✗, 2 ✓ |
 | **Sink depth** | wall top ends at −1.5, below the floor |
 | **HUD checklist** | both levers listed with state; `1:15` counting down |
+| **One crate size everywhere** | solo and live both build 6.72-stud cubes; L2 is two of them |
+| **FULL SOLVE (E-held)** | block → stand → hold E → `Lever A thrown, blades dead` (8/8 blades) |
+| | stack → stand → hold E → `Lever B thrown, wall halted and lowering` → **`Saw SOLVED`** |
+| Wall after lever B | sank to top −1.50, below the floor, `CanCollide = false` |
+| Exit lane | z 14–26 clear of collidable parts at knee height; player alive |
+| HUD on clear | `CLEARED`, both steps `[x] done` |
 | HUD countdown | `0:58` → `0:56` over 2s, and `STALLED 0:10` during a jam |
 | Refusal flash | `BLADES LIVE - CANNOT DROP THERE` |
 | Lever swing axis | knob moves in X, Z unchanged |
@@ -315,12 +322,15 @@ gets a *different instance* and proves nothing.
 
 - **75s and the 10s stall are unvalidated.** Both need a real teleop run to tune. The wall
   speed was measured at the old 60 s and has not been re-measured since.
+- **The stall and the no-place band have not been re-verified** since the wall was rebuilt at
+  16 studs in side channels. They were verified against the old 7.4-stud full-width wall, and
+  the geometry they key off has changed.
 - **Lever heights (9.12 / 15.84) are unplaytested.** They are derived from `standLevel` and
   the real cube size rather than chosen, so they should be right by construction — but the
   *feel* of reaching them is untested.
-- **The levers still have advisory `color` fields** in `BayData`. The gate is height-only,
-  which is what makes this bay immune to the vision system misnaming a cube. Do not be
-  tempted to gate on colour as well.
+- The gate is **height-only** — no colour anywhere, matching the project-wide rule that any
+  block satisfies any cell. That is also what makes this bay immune to the vision system
+  misnaming a cube. Do not be tempted to add a colour test.
 - **No checkpoint.** Dying respawns at world spawn; you walk back through the bays.
   `GameState` doesn't exist yet.
 - **`ActiveBayTracker` doesn't exist**; `RunControl.activeBay` stands in and the debug menu
