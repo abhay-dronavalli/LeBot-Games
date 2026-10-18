@@ -327,3 +327,28 @@ RunService.Heartbeat:Connect(function(dt)
 		shakeUntil = 0
 	end
 end)
+
+------------------------------------------------------------------ debug: jump between games
+
+-- Alt+1..4 jumps straight to that bay's game, ending whatever is running. The server ignores
+-- this outside Studio (ArcadeManager), so it is safe to leave in. Alt is what keeps it clear of
+-- the number keys the games themselves use.
+local UserInputService = game:GetService("UserInputService")
+local switchRemote = arcadeState:WaitForChild("ArcadeSwitch")
+
+local BAY_KEYS = {
+	[Enum.KeyCode.One] = 1, [Enum.KeyCode.Two] = 2,
+	[Enum.KeyCode.Three] = 3, [Enum.KeyCode.Four] = 4,
+	[Enum.KeyCode.KeypadOne] = 1, [Enum.KeyCode.KeypadTwo] = 2,
+	[Enum.KeyCode.KeypadThree] = 3, [Enum.KeyCode.KeypadFour] = 4,
+}
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	local bay = BAY_KEYS[input.KeyCode]
+	if bay and (UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)) then
+		switchRemote:FireServer(bay)
+	end
+end)

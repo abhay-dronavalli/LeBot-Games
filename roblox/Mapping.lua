@@ -40,17 +40,17 @@ function Mapping.point(p: { x: number, y: number, z: number }): Vector3
 	return Mapping.ORIGIN + Vector3.new(p.x * s, p.z * s, p.y * s)
 end
 
--- A block's platform centre. Height comes from its stack level, not its scaled mm, except
--- while it is held: then the real carry height is the whole point, so use z directly.
+-- A block's platform centre. Height comes from its stack level, never from its scaled mm.
+--
+-- There used to be a second case here for a held block, which used `b.z` so that a cube in
+-- the gripper rendered at its true carry height. Nothing is tracked mid-carry any more: a
+-- vision model reads the printed grid after the gripper opens, so every block Python sends is
+-- resting in a cell at a whole number of levels, `held` is always false, and `z` is just
+-- `level` times the cube size. One case is all there is.
 function Mapping.blockPosition(b, cubeMm: number): Vector3
 	local s = Mapping.STUDS_PER_MM
 	local w = Mapping.cubeStuds(cubeMm)
-	local y
-	if b.held then
-		y = b.z * s + w / 2
-	else
-		y = b.level * w + w / 2     -- cubes stack on each other, so one level is one cube tall
-	end
+	local y = b.level * w + w / 2    -- cubes stack on each other, so one level is one cube tall
 	return Mapping.ORIGIN + Vector3.new(b.x * s, y, b.y * s)
 end
 

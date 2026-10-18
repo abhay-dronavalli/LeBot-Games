@@ -151,6 +151,12 @@ while running:
 - **Debug window:** draw the markers, grid, block IDs, held state and FK tip dot. Put it on a second monitor during the demo, since judges like seeing the "robot's eyes."
 
 ### 3.3 World model: held, lifted and stacked blocks (`server/world.py`, `server/kinematics.py`)
+
+> **Superseded, 2026-10-18.** This section describes frame-to-frame block tracking, which was
+> built as `bridge/world.py` and then removed. Blocks are now read as cell labels by a vision
+> model two seconds after the gripper opens, and nothing is tracked mid-carry. See
+> `HANDOFF.md` and `bridge/README.md`. The rest of this section is kept as the record of why
+> the tracking approach was tried.
 An overhead camera can't see height, and the gripper covers the marker while holding a block. Solve both with **forward kinematics (FK)**:
 - **FK:** the SO-101 is a base rotation plus a planar chain (shoulder_lift → elbow_flex → wrist_flex → tip). About 20 lines of numpy using link lengths from the SO-101 URDF (TheRobotStudio SO-ARM100 repo) or a ruler. Recent LeRobot versions may also include a kinematics helper; use it if yours has one.
 - **Robot ↔ table calibration:** touch the gripper tip to 3–4 known points on the mat, then fit a 2D rotation + offset (plus a z offset). This takes about 5 minutes and is a script, `calibrate_robot_to_table.py`.

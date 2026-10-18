@@ -161,6 +161,18 @@ end
 Mode.WinsToUnlock = 0
 Mode.Finished = Instance.new("BindableEvent")
 
+-- The arcade's watchdog: it gives up on a mode that hasn't fired Finished by now and drags
+-- everyone back to the workshop. Derived from the slowest difficulty rather than written down,
+-- so raising a round time in FloodConfig can't silently leave the round being cut short -- which
+-- is exactly what a bare 180 s default would do to a 300 s Hard round.
+Mode.MaxDuration = (function()
+	local longest = Config.ROUND_TIME
+	for _, d in pairs(Config.DIFFICULTY) do
+		longest = math.max(longest, d.time)
+	end
+	return longest + Config.GRACE_TIME + Config.COUNTDOWN + Config.RESULT_TIME + 30
+end)()
+
 local s -- the running session, nil when Flood isn't running
 
 ------------------------------------------------------------------ helpers

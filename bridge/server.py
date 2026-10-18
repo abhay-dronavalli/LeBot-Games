@@ -32,9 +32,10 @@ VIEWER_DIR = Path(__file__).resolve().parent.parent / "viewer"
 class Hub:
     """The connected clients, and what to do with what they send."""
 
-    def __init__(self, bus, inbox, effects, space, source):
+    def __init__(self, bus, inbox, effects, space, source, board=None):
         self.bus, self.inbox, self.effects = bus, inbox, effects
         self.space, self.source = space, source
+        self.board = board or {}
         self.clients = set()
         self.sent = 0
 
@@ -44,7 +45,8 @@ class Hub:
         print(f"  client connected: {peer}  ({len(self.clients)} total)")
         try:
             await conn.send(json.dumps(protocol.hello(
-                self.space, self.source, effects=sorted(self.effects.LIMITS))))
+                self.space, self.source, effects=sorted(self.effects.LIMITS),
+                board=self.board)))
             async for raw in conn:
                 await self._on_message(conn, raw)
         except websockets.ConnectionClosed:
@@ -133,8 +135,9 @@ def viewer_server(bus, effects, port, ws_port):
 
 
 async def serve(bus, inbox, effects, space, source, stop, ws_port=protocol.WS_PORT,
+                board=None,
                 hz=protocol.STATE_HZ):
-    hub = Hub(bus, inbox, effects, space, source)
+    hub = Hub(bus, inbox, effects, space, source, board=board)
     async with websockets.serve(hub.handle, "0.0.0.0", ws_port, ping_interval=20,
                                 max_queue=8):
         await hub.broadcast(stop, hz)

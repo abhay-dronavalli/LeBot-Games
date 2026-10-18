@@ -53,14 +53,30 @@
     background: #2d2410; border: 1px solid var(--warn); color: var(--warn); font-size: 11px;
   }
   #blocks td:first-child { color: var(--ink); }
-  .held { color: var(--warn) !important; }
   .stale { opacity: .45; }
   code { color: var(--accent); }
+
+  /* A board that stopped updating looks exactly like a working one, so when the reason is
+     something a human can fix in a minute - an empty OpenAI account - it gets said loudly
+     and in the middle of the screen, not logged to a console nobody has open. */
+  #alert {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+    padding: 12px 16px; display: none;
+    background: #3d1618; border-bottom: 2px solid var(--bad); color: #ffd7d5;
+    font-size: 12px; line-height: 1.6;
+  }
+  #alert.show { display: block; }
+  #alert.warn { background: #33280c; border-bottom-color: var(--warn); color: #f2e2b8; }
+  #alert b { color: #fff; display: block; font-size: 13px; margin-bottom: 2px; }
+  #alert a { color: var(--accent); }
+  #alert .what { color: #e8b4b1; }
+  #alert.warn .what { color: #d8c79a; }
 </style>
 </head>
 <body>
 <div id="stage">
   <canvas id="c"></canvas>
+  <div id="alert"></div>
   <div id="badge">
     <span id="conn" class="off">connecting</span> &nbsp;·&nbsp;
     seq <b id="seq">0</b> &nbsp;·&nbsp; <b id="rate">0</b> Hz &nbsp;·&nbsp;
@@ -77,6 +93,9 @@
 
   <h2>Link</h2>
   <table id="link"></table>
+
+  <h2>Board</h2>
+  <table id="board"></table>
 
   <h2>Blocks</h2>
   <table id="blocks"></table>
@@ -96,16 +115,22 @@
 // ---------------------------------------------------------------------------
 // The mm -> studs conversion a Roblox script would do. Sheet frame is +x right,
 // +y down the page, +z up. Roblox is Y-up, so sheet y becomes Roblox Z.
-// xy and height scale independently on purpose: see bridge/main.py.
+// One scale on all three axes, matching roblox/Mapping.lua.
 // ---------------------------------------------------------------------------
-let SCALE = 0.46;       // studs per mm, horizontal
-let LEVEL = 6.5;        // studs per stack level
+let SCALE = 0.46;       // studs per mm, all three axes
 
-const toRoblox = (b, cube) => ({
-  X: +(b.x * SCALE).toFixed(1),
-  Z: +(b.y * SCALE).toFixed(1),
-  Y: +(b.level * LEVEL + (cube * SCALE) / 2).toFixed(1),
-});
+// Must match roblox/Mapping.lua's blockPosition, or this panel lies about what Studio got.
+// It drifted once already: height here was `level * 6.5` while Mapping had moved to one cube
+// per level, so the viewer reported a Y the game never used. One scale applies to every axis,
+// so a stack level is exactly one cube tall.
+const toRoblox = (b, cube) => {
+  const w = cube * SCALE;             // a cube is a true cube: 48 mm -> ~22 studs
+  return {
+    X: +(b.x * SCALE).toFixed(1),
+    Z: +(b.y * SCALE).toFixed(1),
+    Y: +(b.level * w + w / 2).toFixed(1),
+  };
+};
 
 const COLORS = {
   red: "#e5484d", orange: "#f76b15", yellow: "#ffe629", green: "#46a758",
@@ -151,36 +176,51 @@ function poly(pts, fill, stroke, width = 1) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke(); }
 }
 
+// The sheet and its grid, both taken from the hello frame.
+//
+// This used to hardcode a 3x3 grid and the portrait sheet it came on, so after the sheet was
+// regenerated as a 3x4 landscape one the viewer still drew nine cells labelled A1..C3 - and
+// blocks the server correctly reported in column 4 landed outside the drawn grid entirely.
+// The hello frame has carried `grid.rows` and `grid.cols` the whole time; the fallbacks below
+// are only for the moments before it arrives.
 function drawSheet(space) {
-  const W = space?.sheet?.w_mm ?? 215.9, H = space?.sheet?.h_mm ?? 279.4;
+  const W = space?.sheet?.w_mm ?? 279.4, H = space?.sheet?.h_mm ?? 215.9;
   poly([project(0, 0, 0), project(W, 0, 0), project(W, H, 0), project(0, H, 0)],
        "#1b2130", "#39445a", 1.5);
 
   const g = space?.grid;
   if (!g) return;
   const [ox, oy] = g.origin_mm, c = g.cell_mm;
+  const rows = g.rows ?? ["A", "B", "C"], cols = g.cols ?? [1, 2, 3];
+  const nR = rows.length, nC = cols.length;
+
   ctx.strokeStyle = "#2f3a4a";
   ctx.lineWidth = 1;
-  for (let i = 0; i <= 3; i++) {
-    let a = project(ox + i * c, oy, 0), b = project(ox + i * c, oy + 3 * c, 0);
-    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
-    a = project(ox, oy + i * c, 0); b = project(ox + 3 * c, oy + i * c, 0);
+  for (let i = 0; i <= nC; i++) {          // column lines, full height
+    const a = project(ox + i * c, oy, 0), b = project(ox + i * c, oy + nR * c, 0);
     ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
   }
+  for (let j = 0; j <= nR; j++) {          // row lines, full width
+    const a = project(ox, oy + j * c, 0), b = project(ox + nC * c, oy + j * c, 0);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+
+  // The same labels that are printed on the paper, which is what the vision model reads.
   ctx.fillStyle = "#54607a"; ctx.font = "11px ui-monospace";
-  for (let r = 0; r < 3; r++) for (let col = 0; col < 3; col++) {
+  for (let r = 0; r < nR; r++) for (let col = 0; col < nC; col++) {
     const p = project(ox + (col + .5) * c, oy + (r + .5) * c, 0);
-    ctx.fillText("ABC"[r] + (col + 1), p[0] - 7, p[1] + 4);
+    ctx.fillText(String(rows[r]) + String(cols[col]), p[0] - 7, p[1] + 4);
   }
 }
 
 function drawCube(b, cube) {
   const h = cube, half = cube / 2;
   const x0 = b.x - half, x1 = b.x + half, y0 = b.y - half, y1 = b.y + half;
-  const z0 = b.held ? b.z : b.level * cube, z1 = z0 + h;
+  // Height is always the stack level: nothing is tracked mid-carry, so there is no carried
+  // block at some in-between height to draw any more.
+  const z0 = b.level * cube, z1 = z0 + h;
   const base = COLORS[b.color] || "#9aa4b2";
   const a = ctx.globalAlpha;
-  if (!b.visible && !b.held) ctx.globalAlpha = a * 0.5;
 
   // Only three faces of a cube are ever visible in this projection.
   poly([project(x0, y1, z0), project(x1, y1, z0), project(x1, y1, z1), project(x0, y1, z1)],
@@ -188,13 +228,11 @@ function drawCube(b, cube) {
   poly([project(x1, y0, z0), project(x1, y1, z0), project(x1, y1, z1), project(x1, y0, z1)],
        shade(base, -0.18), "#00000055");
   poly([project(x0, y0, z1), project(x1, y0, z1), project(x1, y1, z1), project(x0, y1, z1)],
-       base, b.held ? "#d29922" : "#00000055", b.held ? 2 : 1);
+       base, "#00000055", 1);
 
-  if (b.held) {   // a dropped line to the paper, so the carry height reads at a glance
-    ctx.strokeStyle = "#d2992288"; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(...project(b.x, b.y, 0)); ctx.lineTo(...project(b.x, b.y, z0));
-    ctx.stroke(); ctx.setLineDash([]);
-  }
+  // A dropped dashed line to the paper used to be drawn under a carried block, to make its
+  // height read at a glance. Blocks only ever rest in a cell now, so there is no height to
+  // explain: a level-1 block is plainly sitting on the level-0 one beneath it.
   ctx.globalAlpha = a;
 }
 
@@ -264,6 +302,82 @@ function resizeIfNeeded() {
 
 const row = (k, v, cls = "") => `<tr class="${cls}"><td>${k}</td><td>${v}</td></tr>`;
 
+// ---------------------------------------------------------------------------
+// The board, and why it is or is not updating.
+//
+// Blocks no longer arrive ten times a second: a vision model reads the printed grid two
+// seconds after the gripper opens, and the same board is republished until the next read. So
+// a block list tens of seconds old is healthy, and "blocks age" is no longer a fault light.
+//
+// What IS a fault is the read itself failing, and the failure worth shouting about is an
+// OpenAI account with no credits left - the one cause a human can clear in a minute, and the
+// one that is otherwise indistinguishable from a dead camera. Hence a banner across the
+// stage rather than a line in a console nobody has open.
+// ---------------------------------------------------------------------------
+const ALERTS = {
+  no_credits: {
+    level: "bad",
+    title: "OpenAI credits exhausted — the board has stopped updating",
+    what: "The arm and the Sky Arm are unaffected. Blocks are frozen at the last board that was read successfully.",
+    fix: "Add credits, then release a block (or just wait ~20 s) — the read retries on its own.",
+  },
+  no_key: {
+    level: "bad",
+    title: "No OpenAI API key — the board cannot be read",
+    what: "Blocks will stay empty for the whole session.",
+    fix: "Put OPENAI_API_KEY in the environment or in a .env at the repo root, then restart the bridge.",
+  },
+  auth: {
+    level: "bad",
+    title: "OpenAI rejected the API key",
+    what: "Blocks are frozen at the last board that was read successfully.",
+    fix: "Check OPENAI_API_KEY, then restart the bridge.",
+  },
+  rate_limit: {
+    level: "warn",
+    title: "Rate-limited by OpenAI — the board is behind",
+    what: "This clears on its own; the read retries in about 20 seconds.",
+  },
+  error: {
+    level: "warn",
+    title: "The board read failed",
+    what: "Usually the camera. The read retries in about 20 seconds.",
+  },
+};
+
+function board(st, h) {
+  const b = st?.notes?.board;
+  const el = document.getElementById("alert");
+  const a = b && ALERTS[b.state];
+
+  if (a) {
+    el.className = "show" + (a.level === "warn" ? " warn" : "");
+    el.innerHTML =
+      `<b>${a.title}</b>` +
+      `<span class="what">${a.what}</span>` +
+      (b.message ? `<br><span class="what">${b.message}</span>` : "") +
+      (a.fix ? `<br>${a.fix}` : "") +
+      (b.url ? ` <a href="${b.url}" target="_blank" rel="noreferrer">${b.url}</a>` : "");
+  } else {
+    el.className = "";
+  }
+
+  const dash = "–";
+  const reader = b?.model ?? h?.board?.reader;
+  const since = b?.since_read;
+  document.getElementById("board").innerHTML =
+    row("reader", reader ?? "<span style='color:var(--dim)'>not reading</span>") +
+    row("state", b?.state
+      ? `<span class="${b.state === "ok" ? "on" : b.state === "reading" ? "" : "off"}">${b.state}</span>`
+      : dash) +
+    row("reads", b?.reads ?? dash) +
+    row("last read", since == null ? dash : since.toFixed(0) + " s ago") +
+    row("trigger", b?.trigger ?? h?.board?.trigger ?? dash) +
+    row("cells", b?.cells ?? dash) +
+    (b?.clamped ? row("<span style='color:var(--warn)'>over-tall</span>",
+                      b.clamped.join(", ")) : "");
+}
+
 function paint() {
   const st = state, sp = hello?.space;
   document.getElementById("seq").textContent = st?.seq ?? 0;
@@ -276,23 +390,26 @@ function paint() {
     row("source", hello?.source ?? "–") +
     row("protocol", "v" + (hello?.v ?? "?")) +
     row("arm age", armAge == null ? "–" : armAge.toFixed(2) + " s", armAge > 0.5 ? "stale" : "") +
-    row("blocks age", blkAge == null ? "–" : blkAge.toFixed(2) + " s", blkAge > 1.0 ? "stale" : "") +
+    row("blocks age", blkAge == null ? "–" : blkAge.toFixed(2) + " s") +
     row("gripper", st?.arm?.joints?.gripper?.toFixed(1) ?? "–") +
     row("tip z", st?.arm?.tip ? st.arm.tip.z.toFixed(0) + " mm" : "–");
 
   document.getElementById("blocks").innerHTML = (st?.blocks || []).map((b) => {
     const r = toRoblox(b, sp?.cube_mm ?? 48);
-    const tag = b.held ? " HELD" : b.visible ? "" : " lost";
-    return row(`<span class="${b.held ? "held" : ""}">#${b.id} ${b.color}${tag}</span>`,
-               `L${b.level} · ${r.X},${r.Y},${r.Z}`,
-               !b.visible && !b.held ? "stale" : "");
-  }).join("") || row("<span style='color:var(--dim)'>none detected</span>", "");
+    // Blocks are read in cells now, so the cell is the useful label, and there is no held or
+    // lost state left to show: the board is whatever the last read said until the next one.
+    return row(`#${b.id} ${b.color}`,
+               `${b.cell ?? "?"} · L${b.level} · ${r.X},${r.Y},${r.Z}`);
+  }).join("") || row("<span style='color:var(--dim)'>board is empty</span>", "");
+
+  board(st, hello);
 
   document.getElementById("active").innerHTML = (st?.effects || [])
     .map((e) => `<span class="chip">${e.name} ${e.intensity} · ${e.remaining}s</span>`).join("");
 
   document.getElementById("map").innerHTML =
-    row("studs / mm", SCALE) + row("studs / level", LEVEL) +
+    row("studs / mm", SCALE) +
+    row("studs / level", sp ? (sp.cube_mm * SCALE).toFixed(1) : "\u2013") +
     row("sheet", sp ? `${(sp.sheet.w_mm * SCALE).toFixed(0)} × ${(sp.sheet.h_mm * SCALE).toFixed(0)} studs` : "–") +
     row("cube", sp ? `${(sp.cube_mm * SCALE).toFixed(1)} studs wide` : "–") +
     row("arm base", sp ? sp.arm_base_mm.join(", ") + " mm" : "–");
