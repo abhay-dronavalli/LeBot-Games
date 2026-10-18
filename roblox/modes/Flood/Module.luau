@@ -140,7 +140,7 @@ local function rollDifficulty()
 end
 
 local Mode = {}
-Mode.DisplayName = "Rising Flood"
+Mode.DisplayName = "Sewer Surge"
 Mode.Tip = describe(rollDifficulty())
 
 -- show the next difficulty on every bay that runs Flood (ArcadeManager sets it once at startup)

@@ -8,7 +8,7 @@ local Views = script.Parent.Parent:WaitForChild("Views")
 
 return {
 	id = "Flood",
-	name = "Rising Flood",
+	name = "Sewer Surge",
 	lobby = false,
 	playerView = Views:WaitForChild("EmptyView"),
 	robotView = Views:WaitForChild("FloodRobotView"),

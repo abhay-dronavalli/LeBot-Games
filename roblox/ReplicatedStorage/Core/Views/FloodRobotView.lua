@@ -245,7 +245,7 @@ local function buildGui()
 	panelLook(bar, 10)
 	bar.Parent = screen
 	label(bar, "Game", { Position = UDim2.new(0, 0, 0, 6), Size = UDim2.new(1, 0, 0, 18), Font = Enum.Font.GothamBold,
-		TextColor3 = MUTED, TextStrokeTransparency = 1, Text = "RISING FLOOD  ·  ROBOT" })
+		TextColor3 = MUTED, TextStrokeTransparency = 1, Text = "SEWER SURGE  ·  ROBOT" })
 	local status = label(bar, "Status", { Position = UDim2.new(0, 12, 0, 26), Size = UDim2.new(1, -24, 0, 46), Text = "" })
 	local detail = label(bar, "Detail", { Position = UDim2.new(0, 12, 0, 76), Size = UDim2.new(1, -24, 0, 22),
 		Font = Enum.Font.GothamBold, Text = "" })
@@ -430,7 +430,7 @@ local function updateStatus(ui, showPath, hasArena)
 	local steps = string.format("%d/%d squares", math.min(progress, #cells), #cells)
 	ui.status.TextColor3 = Color3.new(1, 1, 1)
 	if not hasArena then
-		ui.status.Text = "RISING FLOOD"
+		ui.status.Text = "SEWER SURGE"
 		ui.detail.Text = "Loading the chamber..."
 	elseif state == "Countdown" then
 		ui.status.Text = "GET READY  " .. tostring(Flood:GetAttribute("Countdown") or "")
@@ -458,7 +458,7 @@ local function updateStatus(ui, showPath, hasArena)
 		ui.status.Text = "FLOODED"
 		ui.detail.Text = "Heading back to the workshop..."
 	else
-		ui.status.Text = "RISING FLOOD"
+		ui.status.Text = "SEWER SURGE"
 		ui.detail.Text = "Starting..."
 	end
 end
