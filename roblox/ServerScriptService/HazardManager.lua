@@ -752,3 +752,45 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 	end
 end
 
+-- ICE: frictionless floor. You slide through a pinch point with lethal drops either side;
+-- the blocks are guard rails that cover them.
+BUILDERS.Ice = function(i, folder, info, state)
+	local centre = bayCenter(i)
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	local floor = bay and bay:FindFirstChild("Floor")
+	if floor then
+		floor.Material = Enum.Material.Ice
+		floor.Color = Color3.fromRGB(165, 225, 255)
+		-- low friction, heavily weighted so it wins over the character's own properties
+		floor.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.02, 0.1, 50, 1)
+	end
+
+	-- frosty sheen over the lane
+	newPart("Frost", Vector3.new(Config.BayWidth - 1, 0.12, Config.BayDepth - 1),
+		Vector3.new(centre.X, 0.08, centre.Z), Color3.fromRGB(210, 245, 255),
+		Enum.Material.Glass, folder, {Transparency = 0.55, CanQuery = false})
+
+	-- the pinch point: lethal drops at the outer cells of the middle row
+	for _, col in ipairs({0, 3}) do
+		local c = cellCenter(i, col, 1)
+		local drop = newPart("ColdDrop", Vector3.new(CELL - 0.5, 0.5, CELL - 0.5),
+			Vector3.new(c.X, 0.25, c.Z), Color3.fromRGB(16, 48, 96),
+			Enum.Material.Neon, folder, {Transparency = 0.25})
+		makeLethal(drop, state)
+		newPart("DropEdge", Vector3.new(CELL - 0.5, 0.5, 0.5),
+			Vector3.new(c.X, 0.35, c.Z - CELL / 2), Color3.fromRGB(120, 220, 255),
+			Enum.Material.Neon, folder)
+	end
+
+	function state.onSolved()
+		-- rails are up: the drops are covered, so take the shine off them
+		for _, p in ipairs(folder:GetChildren()) do
+			if p.Name == "ColdDrop" then
+				p.Color = Color3.fromRGB(70, 110, 150)
+				p.Transparency = 0.6
+			end
+		end
+	end
+end
+
+----------------------------------------------------------------
