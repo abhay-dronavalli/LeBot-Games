@@ -97,6 +97,9 @@ fxRemote.OnClientEvent:Connect(function(kind, arg)
 	elseif kind == "quake" then
 		showBanner(arg .. " PRESSED THE BUTTON!", RED, 2.5)
 		shakeUntil = os.clock() + 3
+	elseif kind == "boardread" then
+		-- A read takes a few seconds, so say it was asked for; the blocks moving is the result.
+		showBanner(if arg then "READING THE BOARD..." else "NO ROBOT LINK", if arg then GREEN else RED, 2)
 	end
 end)
 
@@ -335,6 +338,7 @@ end)
 -- the number keys the games themselves use.
 local UserInputService = game:GetService("UserInputService")
 local switchRemote = arcadeState:WaitForChild("ArcadeSwitch")
+local readBoardRemote = arcadeState:WaitForChild("ReadBoard")
 
 local BAY_KEYS = {
 	[Enum.KeyCode.One] = 1, [Enum.KeyCode.Two] = 2,
@@ -350,5 +354,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	local bay = BAY_KEYS[input.KeyCode]
 	if bay and (UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)) then
 		switchRemote:FireServer(bay)
+	elseif input.KeyCode == Enum.KeyCode.V then
+		-- Read the board now: for a cube moved by hand, which never opens the jaw.
+		readBoardRemote:FireServer()
 	end
 end)

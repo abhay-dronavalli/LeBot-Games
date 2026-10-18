@@ -5,6 +5,7 @@
 #   ./run follower             real arm, torque OFF, move it by hand
 #   ./run follower --vision    ...and the real overhead camera
 #   ./run teleop               leader drives the real follower
+#   ./run camera               tune exposure/white balance until the block colours separate
 #   ./run test                 the checks that need no hardware
 #   ./run stop                 free the ports and exit
 #
@@ -50,6 +51,10 @@ case "$mode" in
     status=$?
     free_ports
     exit $status
+    ;;
+  camera)
+    # Re-run this after every move: the colour separation depends on the room's light.
+    exec "$PY" -m robot.scripts.tools.camera_tune "$@"
     ;;
   mock)
     free_ports
