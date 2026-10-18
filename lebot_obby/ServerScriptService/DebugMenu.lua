@@ -91,6 +91,19 @@ RunControl.FeedModeChanged:Connect(function()
 	pushStatus()
 end)
 
+-- The tracker moves the active bay without anyone issuing a command, so the panel has to be
+-- told or it shows the bay you were standing in two bays ago -- and the overseer view, which
+-- reads activeBay from the same payload, would frame the wrong bay entirely.
+RunControl.ActiveBayChanged:Connect(function()
+	pushStatus()
+end)
+
+-- A solve is also worth broadcasting: the menu greys a cleared bay and the overseer view stops
+-- marking cells it no longer wants.
+RunControl.BayReset:Connect(function()
+	pushStatus()
+end)
+
 ----------------------------------------------------------------
 -- Placement
 ----------------------------------------------------------------

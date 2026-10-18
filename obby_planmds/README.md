@@ -52,6 +52,7 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 | `SkyArm` | `ServerScriptService/SkyArm.lua` | The gantry crane. Drives crate delivery in sim mode, and follows the real arm's tip in live mode |
 | `BridgeFeed` | `ServerScriptService/BridgeFeed.lua` | The live feed wired into the bay |
 | `RunControl` | `ServerScriptService/RunControl.lua` | Which bay is live and which source owns the crates |
+| `ActiveBayTracker` | `ServerScriptService/ActiveBayTracker.lua` | The sliding window: the mat follows the runner |
 | `DebugMenu` | `ServerScriptService/DebugMenu.lua` + client | Jump to any scenario, start a clean run, toggle player 2 |
 
 **Not built:** `ActiveBayTracker`, `GameState`/checkpoints, `Events` (malfunctions), scoring,
@@ -209,10 +210,10 @@ resizes to fit, so a bay that sends neither looks exactly as it did before.
 
 ## Known gaps
 
-- **`ActiveBayTracker` doesn't exist.** `RunControl.activeBay` is the stand-in: the debug menu
-  and the number/`N` hotkeys drive it, `DebugMode` keeps per-bay cell state behind it, and every
-  bay is reachable. The real tracker — driven by where player 1 actually is, not by a hotkey —
-  is still missing, and `RunControl.setActiveBay` is the call it should make.
+- ~~`ActiveBayTracker` doesn't exist.~~ **Built.** The mat follows the runner: walk out of a
+  bay and the window moves with you, taking the crane, `Mapping`'s origin, the cell editor and
+  crate delivery with it. The catwalk counts as the bay *ahead*, so the operator is placing
+  while you approach rather than catching up once you are inside.
 - **No `GameState` / checkpoints.** Dying respawns you at world spawn. The debug menu is the
   way back to a scenario.
 - **No run clock, scoring or malfunctions** (plan §6, §9) — `Config` has placeholder values,

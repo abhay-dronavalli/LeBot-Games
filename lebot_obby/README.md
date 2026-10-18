@@ -38,6 +38,7 @@ length and byte sum so the match is proven rather than assumed.
 | `ReplicatedStorage/BayData.lua` | `ReplicatedStorage.BayData` | ModuleScript |
 | `ReplicatedStorage/Mapping.lua` | `ReplicatedStorage.Mapping` | ModuleScript |
 | `ServerScriptService/RunControl.lua` | `ServerScriptService.RunControl` | ModuleScript |
+| `ServerScriptService/ActiveBayTracker.lua` | `ServerScriptService.ActiveBayTracker` | Script |
 | `ServerScriptService/DebugMenu.lua` | `ServerScriptService.DebugMenu` | Script |
 | `ServerScriptService/BlockSync.lua` | `ServerScriptService.BlockSync` | ModuleScript |
 | `ServerScriptService/SkyArm.lua` | `ServerScriptService.SkyArm` | ModuleScript |
