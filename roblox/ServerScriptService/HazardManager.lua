@@ -372,3 +372,66 @@ BUILDERS.Lava = function(i, folder, info, state)
 	end
 end
 
+-- CRUSHER ROOF: the whole ceiling of the bay descends. A stacked pair props it; the roof
+-- halts ON the stack, leaving headroom for the player to walk under.
+BUILDERS.CrusherRoof = function(i, folder, info, state)
+	local centre = bayCenter(i)
+	local startY = 15
+	local propY = 8.2  -- rests on a stacked pair (4 + ~3.5)
+	local crushY = 1.6 -- unsolved: comes all the way down
+
+	local roof = newPart("CrusherRoof", Vector3.new(Config.BayWidth, 1.6, Config.BayDepth),
+		Vector3.new(centre.X, startY, centre.Z), Color3.fromRGB(86, 60, 38),
+		Enum.Material.Metal, folder, {CanCollide = true})
+
+	-- spikes underneath so the threat reads instantly
+	for col = 0, 3 do
+		for row = 0, 2 do
+			local cc = cellCenter(i, col, row)
+			local spike = newPart("Spike", Vector3.new(0.8, 1.4, 0.8),
+				Vector3.new(cc.X, startY - 1.4, cc.Z), Color3.fromRGB(60, 62, 68),
+				Enum.Material.Metal, folder)
+			spike:SetAttribute("Offset", -1.4)
+		end
+	end
+
+	local spikes = {}
+	for _, p in ipairs(folder:GetChildren()) do
+		if p.Name == "Spike" then
+			table.insert(spikes, p)
+		end
+	end
+
+	local currentY = startY
+	task.spawn(function()
+		while folder.Parent do
+			local goal = state.solved and propY or crushY
+			currentY = currentY + (goal - currentY) * 0.015
+			roof.CFrame = CFrame.new(centre.X, currentY, centre.Z)
+			for _, s in ipairs(spikes) do
+				s.CFrame = CFrame.new(s.Position.X, currentY - 1.5, s.Position.Z)
+			end
+
+			-- crush anything caught under a descending (unsolved) roof
+			if not state.solved and currentY < 6 then
+				for _, pl in ipairs(Players:GetPlayers()) do
+					local ch = pl.Character
+					local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+					local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+					if hrp and hum and hum.Health > 0 and not isGhost(ch) then
+						local p = hrp.Position
+						if math.abs(p.Z - centre.Z) < Config.BayDepth / 2
+							and p.X > 0 and p.X < Config.BayWidth
+							and p.Y < currentY then
+							hum.Health = 0
+						end
+					end
+				end
+			end
+			task.wait(0.05)
+		end
+	end)
+
+	function state.onSolved() end
+end
+
