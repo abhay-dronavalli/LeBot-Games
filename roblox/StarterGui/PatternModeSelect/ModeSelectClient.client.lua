@@ -1,13 +1,11 @@
 -- StarterGui.PatternModeSelect.ModeSelectClient
 -- Mode select screen for the player who pressed "Play Pattern Match" (the PatternUI payload's chooser).
--- The camera flies to a fixed shot of the cabinet on its floating island, two tiles (EASY / HARD) send
--- the pick through the PatternPick remote, and a countdown shows the auto-pick. Everyone else keeps
--- the HUD, which says who is choosing.
--- The shot hides the Baseplate and SpawnLocation on this client only (LocalTransparencyModifier), so
--- the island under the cabinet floats in open sky, and hides the sun and moon, which would otherwise
--- show below the island. All of it comes back when the camera returns.
+-- The camera flies to a fixed shot of the table inside the bedroom, two tiles (EASY / HARD) send the
+-- pick through the PatternPick remote, and a countdown shows the auto-pick. Everyone else keeps the
+-- HUD, which says who is choosing.
+-- During the shot the LocalPlayer attribute "PatternShot" is true, which makes
+-- StarterPlayerScripts.CabinetFocus blur the room behind the table more strongly.
 
-local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -20,10 +18,10 @@ local patternPick = remotes:WaitForChild("PatternPick")
 local cabinet = workspace:WaitForChild("PatternCabinet")
 local localPlayer = Players.LocalPlayer
 
-local VISTA_HIDE = { "Baseplate", "SpawnLocation" } -- hidden on this client during the shot
-local SHOT_FROM = Vector3.new(-37, 21, 35)            -- camera, relative to the cabinet floor's center: far
-                                                      -- enough back that the whole table shows on its island
-local SHOT_AT = Vector3.new(2, -4, -3)                -- look-at point, same frame
+local SHOT_FROM = Vector3.new(-24, 10, 28)            -- camera, relative to the table top's center: low
+                                                      -- front-left, so the room and its lights fill the frame
+                                                      -- around the tiles and the table sits below them
+local SHOT_AT = Vector3.new(3, 7, -4)                 -- look-at point, same frame
 local FLY = TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local RETURN = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 local HOVER = TweenInfo.new(0.12)
@@ -65,7 +63,7 @@ local function label(name, parent, text, textSize, props)
 	return l
 end
 
--- Dark edge on text drawn straight over the 3D shot, so it reads against sky and grass alike.
+-- Dark edge on text drawn straight over the 3D shot, so it reads against the room behind it.
 local function outline(textLabel)
 	local s = Instance.new("UIStroke")
 	s.Color = Color3.new(0, 0, 0)
@@ -183,33 +181,6 @@ for i, spec in ipairs(TILES) do
 	end)
 end
 
-local savedCelestial = nil -- the Sky's CelestialBodiesShown before the shot
-
-local function setVistaHidden(hidden)
-	local sky = Lighting:FindFirstChildOfClass("Sky")
-	if sky and hidden then
-		savedCelestial = sky.CelestialBodiesShown
-		sky.CelestialBodiesShown = false
-	elseif sky and savedCelestial ~= nil then
-		sky.CelestialBodiesShown = savedCelestial
-		savedCelestial = nil
-	end
-
-	local modifier = hidden and 1 or 0
-	for _, name in ipairs(VISTA_HIDE) do
-		local thing = workspace:FindFirstChild(name)
-		if thing then
-			local all = thing:GetDescendants()
-			table.insert(all, thing)
-			for _, d in ipairs(all) do
-				if d:IsA("BasePart") or d:IsA("Decal") then -- Decal covers Texture too
-					d.LocalTransparencyModifier = modifier
-				end
-			end
-		end
-	end
-end
-
 local showing = false
 local savedCFrame, savedType
 
@@ -220,15 +191,15 @@ local function open()
 	local camera = workspace.CurrentCamera
 	savedCFrame, savedType = camera.CFrame, camera.CameraType
 	camera.CameraType = Enum.CameraType.Scriptable
-	local center = cabinet:WaitForChild("Floor").Position
+	local center = cabinet:WaitForChild("Table"):WaitForChild("Top").Position
 	TweenService:Create(camera, FLY, { CFrame = CFrame.lookAt(center + SHOT_FROM, center + SHOT_AT) }):Play()
-	setVistaHidden(true)
+	localPlayer:SetAttribute("PatternShot", true)
 end
 
 local function close()
 	showing = false
 	root.Visible = false
-	setVistaHidden(false)
+	localPlayer:SetAttribute("PatternShot", nil)
 	local camera = workspace.CurrentCamera
 	local back = TweenService:Create(camera, RETURN, { CFrame = savedCFrame })
 	back.Completed:Connect(function()

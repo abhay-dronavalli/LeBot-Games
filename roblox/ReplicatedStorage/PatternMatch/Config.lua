@@ -40,4 +40,10 @@ return {
 	events = { "vanish", "tremor", "inverted" },
 	twinJoints = { shoulder_pan = {sign=1, offset=0}, shoulder_lift = {sign=1, offset=0}, elbow_flex = {sign=1, offset=0},
 	               wrist_flex = {sign=1, offset=0}, wrist_roll = {sign=1, offset=0}, gripper = {sign=1, offset=0} },
+	-- Arm twin's folded rest pose, shown while there is no arm data (no sample yet, an empty one, or none
+	-- for ArmTwin.Driver's stale timeout) and used for any joint a sample leaves out. Same units as
+	-- StateStore.arm (degrees, gripper 0..100) and run through twinJoints like a sample, so after tuning set
+	-- it to what the real arm reports at rest. Upper arm up and leaning back, forearm folded forward, hand
+	-- hanging just in front of the base: highest point ~16.2 studs above the base (elbow hub).
+	twinRestPose = { shoulder_pan = 0, shoulder_lift = 125, elbow_flex = -128, wrist_flex = -76, wrist_roll = 0, gripper = 0 },
 }

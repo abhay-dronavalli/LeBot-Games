@@ -252,6 +252,7 @@ section("13. StateStore stand-in API (edit mode, fake loop off)")
 local Store = require(RS.Core.StateStore:Clone())
 local s0 = Store.get()
 check("initial t / seq / #blocks", s0.t .. " " .. s0.seq .. " " .. #s0.blocks, "state 0 0")
+check("initial arm is nil (no arm data yet: the twin rests)", s0.arm, nil)
 local fired
 Store.changed:Connect(function(s) fired = s.seq end)
 Store.update({ t = "state", seq = 7, ts = 0, arm = s0.arm, tip = s0.tip, blocks = { block("B2") } })
@@ -272,38 +273,57 @@ if cab then
 	local liveA1 = Grid.worldPositionOf("A1", cab.LiveBoard)
 	check("LiveBoard tile A1 sits on Grid.worldPositionOf(A1)", (cab.LiveBoard.A1.Position - liveA1).Magnitude < 0.11, true)
 
-	section("14b. Apprentice styling: wooden table and slabs, paper sheet, ink grid, tags, arm colors")
+	section("14b. wooden boards on the table, arm colors, bedroom")
 	local tbl = cab:FindFirstChild("Table")
 	check("one Table model: wooden Top plus 4 Legs", tbl ~= nil and tbl.Top.Material == Enum.Material.Wood and tbl.Top.Color == Color3.fromHex("7a5638")
 		and #tbl:GetChildren() == 5, true)
-	local lb = cab.LiveBoard
-	check("boards sit on the table top", tbl ~= nil and math.abs((lb.Slab.Position.Y - lb.Slab.Size.Y / 2) - (tbl.Top.Position.Y + tbl.Top.Size.Y / 2)) < 0.001, true)
-	check("Slab: wood, darker than the table", lb.Slab.Material == Enum.Material.Wood and lb.Slab.Color ~= tbl.Top.Color
-		and lb.Slab.Color.R < tbl.Top.Color.R, true)
-	check("Paper: off-white SmoothPlastic, wider than the grid on every side", lb.Paper.Color == Color3.fromHex("f7f6f2")
-		and lb.Paper.Material == Enum.Material.SmoothPlastic
-		and lb.Paper.Size.Z > lb.Base.Size.X and lb.Paper.Size.X > lb.Base.Size.Z, true)
-	check("Base is the black ink layer, exactly the grid's size, on the paper", lb.Base.Color == Color3.fromHex("111111")
-		and lb.Base.Size.X == Config.gridCols * Config.boardCellStuds and lb.Base.Size.Z == Config.gridRows * Config.boardCellStuds
-		and math.abs((lb.Base.Position.Y - lb.Base.Size.Y / 2) - (lb.Paper.Position.Y + lb.Paper.Size.Y / 2)) < 0.001, true)
-	check("cell tiles: paper colored, 0.2 stud ink gaps, gray label top-left", lb.B2.Color == Color3.fromHex("f7f6f2")
-		and math.abs(lb.B2.Size.X - (Config.boardCellStuds - 0.2)) < 0.001
-		and lb.B2.SurfaceGui.TextLabel.TextColor3 == Color3.fromHex("555555")
-		and lb.B2.SurfaceGui.TextLabel.Position.X.Scale < 0.1 and lb.B2.SurfaceGui.TextLabel.Position.Y.Scale < 0.1, true)
-	check("tiles turned +90 so labels read upright from the row C side", math.abs(lb.B2.Orientation.Y - 90) < 0.001, true)
-	local tags = 0
-	for _, c in ipairs(lb:GetChildren()) do
-		if c.Name == "Tag" and c.Color == Color3.fromHex("111111") then tags += 1 end
+	local lb, tb = cab.LiveBoard, cab.TargetBoard
+	check("boards sit on the table top", tbl ~= nil and math.abs((lb.Slab.Position.Y - lb.Slab.Size.Y / 2) - (tbl.Top.Position.Y + tbl.Top.Size.Y / 2)) < 0.001
+		and math.abs((tb.Slab.Position.Y - tb.Slab.Size.Y / 2) - (tbl.Top.Position.Y + tbl.Top.Size.Y / 2)) < 0.001, true)
+	check("Slab: wood, lighter than the table so the board stands out", lb.Slab.Material == Enum.Material.Wood
+		and lb.Slab.Color.R + lb.Slab.Color.G + lb.Slab.Color.B > tbl.Top.Color.R + tbl.Top.Color.G + tbl.Top.Color.B, true)
+	local chess = true
+	for _, board in ipairs({ lb, tb }) do
+		for _, c in ipairs(cells) do
+			local row, col = Grid.parseCell(c)
+			local nextCol = col < Config.gridCols and Grid.cellName(row, col + 1) or Grid.cellName(row, col - 1)
+			local nextRow = row < Config.gridRows and Grid.cellName(row + 1, col) or Grid.cellName(row - 1, col)
+			if board[c].Color == board[nextCol].Color or board[c].Color == board[nextRow].Color
+				or board[c].Color ~= board[(row + col) % 2 == 0 and "A1" or "A2"].Color or board[c].Material ~= Enum.Material.Wood then
+				chess = false
+			end
+		end
 	end
-	check("four corner tags on each paper sheet", tags .. "/" .. (function()
-		local n = 0
-		for _, c in ipairs(cab.TargetBoard:GetChildren()) do if c.Name == "Tag" then n += 1 end end
-		return n
-	end)(), "4/4")
-	check("TARGET / LIVE labels on the slabs' row A edge, dark text", cab.TargetBoard.Slab.SurfaceGui.TextLabel.Text == "TARGET"
-		and lb.Slab.SurfaceGui.TextLabel.Text == "LIVE" and lb.Slab.SurfaceGui.Face == Enum.NormalId.Back
-		and lb.Slab.SurfaceGui.TextLabel.TextColor3.R < 0.2, true)
-	check("no Stand under the boards any more", lb:FindFirstChild("Stand") == nil and cab.TargetBoard:FindFirstChild("Stand") == nil, true)
+	check("12 inlaid wood squares in two alternating tones (chessboard), both boards", chess and lb.A1.Color ~= lb.A2.Color, true)
+	check("squares: 0.2 stud grooves, no labels inside", math.abs(lb.B2.Size.X - (Config.boardCellStuds - 0.2)) < 0.001
+		and lb.B2:FindFirstChildOfClass("SurfaceGui") == nil, true)
+	check("Base is the dark groove layer, exactly the grid's size, under the squares", lb.Base.Color.R < 0.15
+		and lb.Base.Size.X == Config.gridCols * Config.boardCellStuds and lb.Base.Size.Z == Config.gridRows * Config.boardCellStuds
+		and math.abs((lb.B2.Position.Y - lb.B2.Size.Y / 2) - (lb.Base.Position.Y + lb.Base.Size.Y / 2)) < 0.001, true)
+	check("no paper, ink sheet or tag squares left", lb:FindFirstChild("Paper") == nil and lb:FindFirstChild("Tag") == nil
+		and tb:FindFirstChild("Paper") == nil and tb:FindFirstChild("Tag") == nil, true)
+	local function carvedTexts(board, name)
+		local list = {}
+		for _, c in ipairs(board:GetChildren()) do
+			if c.Name == name then table.insert(list, c.SurfaceGui.TextLabel.Text) end
+		end
+		table.sort(list)
+		return table.concat(list, "")
+	end
+	check("border carvings: rows A,B,C on both sides, columns 1-4", carvedTexts(lb, "RowLabel") .. " " .. carvedTexts(lb, "ColumnLabel")
+		.. " | " .. carvedTexts(tb, "RowLabel") .. " " .. carvedTexts(tb, "ColumnLabel"), "AABBCC 1234 | AABBCC 1234")
+	local function labelAt(board, name, text)
+		for _, c in ipairs(board:GetChildren()) do
+			if c.Name == name and c.SurfaceGui.TextLabel.Text == text then return c end
+		end
+	end
+	check("row A carved on the arm side (+Z), row C toward -Z; column 1 at -X, on the row C border",
+		labelAt(lb, "RowLabel", "A").Position.Z > lb.Base.Position.Z + 3 and labelAt(lb, "RowLabel", "C").Position.Z < lb.Base.Position.Z - 3
+		and labelAt(lb, "ColumnLabel", "1").Position.X < labelAt(lb, "ColumnLabel", "4").Position.X
+		and labelAt(lb, "ColumnLabel", "1").Position.Z < lb.Base.Position.Z - lb.Base.Size.Z / 2, true)
+	check("TARGET / LIVE carved in the row A border, gold vs green accents", labelAt(tb, "BoardLabel", "TARGET") ~= nil
+		and labelAt(lb, "BoardLabel", "LIVE") ~= nil and labelAt(tb, "BoardLabel", "TARGET").Position.Z > tb.Base.Position.Z
+		and tb.Inlay.Color ~= lb.Inlay.Color and tb.Inlay.Color.R > tb.Inlay.Color.B and lb.Inlay.Color.G > lb.Inlay.Color.R, true)
 	local twin = lb:FindFirstChild("ArmTwin")
 	check("arm twin: off-white links, dark joints", twin ~= nil and twin.UpperArm.Color == Color3.fromHex("e9e6df")
 		and twin.ElbowHub.Color == Color3.fromHex("2a2d33") and twin.Base.Material == Enum.Material.SmoothPlastic, true)
@@ -311,6 +331,19 @@ if cab then
 		and math.abs((twin.Base.Position.Y - twin.Base.Size.Y / 2) - (lb.Slab.Position.Y + lb.Slab.Size.Y / 2)) < 0.001, true)
 	check("Config colors are the Apprentice palette", Config.colors.red == Color3.fromHex("e2383f") and Config.colors.teal == Color3.fromHex("16a59b")
 		and Config.colors.purple == Color3.fromHex("8a5cc7") and Config.colors.skyblue == Color3.fromHex("62bdea"), true)
+	local room = workspace:FindFirstChild("Room")
+	local spawnPad = room and room:FindFirstChildWhichIsA("SpawnLocation", true)
+	check("bedroom built; Baseplate, old SpawnLocation, sky island and cabinet floor gone", room ~= nil and workspace:FindFirstChild("Baseplate") == nil
+		and workspace:FindFirstChild("SpawnLocation") == nil and cab:FindFirstChild("Island") == nil and cab:FindFirstChild("Floor") == nil, true)
+	check("spawn inside the room, near the entry pad", spawnPad ~= nil and (spawnPad.Position - cab.Entry.Position).Magnitude < 12, true)
+	local scriptsInRoom = 0
+	for _, d in ipairs(room and room:GetDescendants() or {}) do
+		if d:IsA("LuaSourceContainer") then scriptsInRoom += 1 end
+	end
+	check("no scripts inside the room's props", scriptsInRoom, 0)
+	local focus = game:GetService("Lighting"):FindFirstChild("CabinetFocus")
+	check("Lighting: Realistic style, shadows on, CabinetFocus depth of field", game:GetService("Lighting").LightingStyle == Enum.LightingStyle.Realistic
+		and game:GetService("Lighting").GlobalShadows and focus ~= nil and focus:IsA("DepthOfFieldEffect"), true)
 	local blockMesh = RS.PatternMatch:FindFirstChild("BlockMesh")
 	table.insert(lines, "     (BlockMesh template: " .. (blockMesh and blockMesh.MeshId or "missing, plain Parts") .. ")")
 else
@@ -384,11 +417,11 @@ if cab then
 	check("show: target block shown in its color", tblock.Transparency == 0 and tblock.Color == Config.colors[tcolor], true)
 	check("show: target block outlined", tblock.TargetOutline.Visible, true)
 	check("show: non-target cell has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
-	local neutralTiles = 0
+	local woodTiles = 0
 	for _, c in ipairs(cells) do
-		if board.TargetBoard[c].Color == TargetBoard.NEUTRAL then neutralTiles += 1 end
+		if board.TargetBoard[c].Color == cab.TargetBoard[c].Color then woodTiles += 1 end
 	end
-	check("all 12 TargetBoard tiles stay neutral", neutralTiles, 12)
+	check("all 12 TargetBoard squares keep their chessboard wood colors", woodTiles, 12)
 	check("target block matches a LiveBoard block (size, material, height above its tile)",
 		tblock.Size == board.LiveBoard.Blocks[tcell].Size and tblock.Material == board.LiveBoard.Blocks[tcell].Material
 		and math.abs((tblock.Position.Y - board.TargetBoard[tcell].Position.Y) - (board.LiveBoard.Blocks[tcell].Position.Y - board.LiveBoard[tcell].Position.Y)) < 0.001, true)
@@ -399,7 +432,7 @@ if cab then
 	check("hide: target block still shown, now gray", tblock.Transparency == 0 and tblock.Color == TargetBoard.HIDDEN, true)
 	check("hide: outline stays", tblock.TargetOutline.Visible, true)
 	check("hide: non-target cell still has no block", other.Transparency == 1 and not other.TargetOutline.Visible, true)
-	check("hide: the tile under it stays neutral", board.TargetBoard[tcell].Color == TargetBoard.NEUTRAL, true)
+	check("hide: the square under it keeps its wood color", board.TargetBoard[tcell].Color == cab.TargetBoard[tcell].Color, true)
 	check("payload revealPhase / revealTimeLeft", sent[#sent].revealPhase .. " " .. sent[#sent].revealTimeLeft, "hide 5")
 	steps(20, 0.25) -- 10.0 s
 	check("10.0 s: show again", g.revealPhase, "show")
@@ -529,7 +562,8 @@ if cab then
 	for _, c in ipairs(vanishedNow) do if g.target[c] then onTarget += 1 end end
 	check("1-2 cells vanished, none on the target", #vanishedNow >= 1 and #vanishedNow <= 2 and onTarget == 0, true)
 	local v1, v2 = vanishedNow[1], vanishedNow[2]
-	check("vanished tile transparent, label hidden", board.LiveBoard[v1].Transparency == 1 and not board.LiveBoard[v1].SurfaceGui.Enabled, true)
+	check("vanished square transparent, the dark groove layer shows under it", board.LiveBoard[v1].Transparency == 1
+		and board.LiveBoard.Base.Color.R < 0.15, true)
 	check("TargetBoard unchanged", board.TargetBoard[v1].Transparency, 0)
 
 	fakeBlocks = blocksFor(g.target)
@@ -720,7 +754,7 @@ if cab then
 	board:Destroy()
 end
 
-section("24. arm twin forward kinematics (ArmTwin.Rig / Driver; rest pose = horizontal reach forward)")
+section("24. arm twin forward kinematics (ArmTwin.Rig / Driver; all-zero pose = horizontal reach forward)")
 local twinTemplate = RS:FindFirstChild("ArmTwin")
 if twinTemplate then
 	local twinCopy = twinTemplate:Clone() -- Driver finds Rig through script.Parent
@@ -775,6 +809,53 @@ if twinTemplate then
 		end
 		return true
 	end)(), true)
+
+	section("25. arm twin rest pose (Config.twinRestPose) when there is no arm data")
+	local rest = Config.twinRestPose
+	check("withRest fills missing joints from the rest pose", Driver.withRest({ shoulder_pan = 30 }).shoulder_lift == rest.shoulder_lift
+		and Driver.withRest({ shoulder_pan = 30 }).shoulder_pan == 30 and Driver.withRest(nil).elbow_flex == rest.elbow_flex, true)
+	check("hasData: nil / {} / {foo=1} false, {gripper=0} true", tostring(Driver.hasData(nil)) .. tostring(Driver.hasData({}))
+		.. tostring(Driver.hasData({ foo = 1 })) .. tostring(Driver.hasData({ gripper = 0 })), "falsefalsefalsetrue")
+	local full = { shoulder_pan = 12, shoulder_lift = 40, elbow_flex = -30, wrist_flex = 10, wrist_roll = 5, gripper = 70 }
+	local same = true
+	local plain = Driver.rigAngles(full)
+	for name, v in pairs(Driver.rigAngles(Driver.withRest(full))) do
+		if math.abs(v - plain[name]) > 1e-9 then same = false end
+	end
+	check("a full sample drives the twin exactly as before (rest fill changes nothing)", same, true)
+	-- Posed joint positions (cm, model frame), walking the same chain as Rig.forward.
+	local restAngles = Driver.rigAngles(rest)
+	local p = Rig.jointsCm()
+	local cf, prev, highest = CFrame.new(), Vector3.zero, 0
+	for _, name in ipairs(Rig.CHAIN) do
+		cf = cf * CFrame.new(p[name] - prev)
+		highest = math.max(highest, cf.Position.Y)
+		cf = cf * CFrame.fromAxisAngle(Rig.AXES[name], restAngles[name] or 0)
+		prev = p[name]
+	end
+	local restTip = Rig.forward(restAngles, true).Position
+	table.insert(lines, string.format("     (rest pose: tip (%.1f, %.1f, %.1f) cm, highest joint %.1f cm above the base)", restTip.X, restTip.Y, restTip.Z, highest))
+	check("rest pose is folded: tip above the apron and within 12 cm of the base center", restTip.Y > 0
+		and Vector2.new(restTip.X, restTip.Z).Magnitude < 12, true)
+	check("rest pose joints stay under 25 cm (about 17.5 studs above the base: below the ceiling)", highest < 25, true)
+	local poseEvent = Instance.new("BindableEvent")
+	local fakeRemote = { OnClientEvent = poseEvent.Event }
+	local twinModel = twinTemplate:Clone()
+	local handle = Driver.attach(twinModel, fakeRemote)
+	local startedResting = handle.resting()
+	poseEvent:Fire(full)
+	task.wait(0.1)
+	local tracking = not handle.resting()
+	task.wait(Driver.STALE_SECONDS + 0.3)
+	check("attach: starts resting, a sample takes over, stale data goes back to rest",
+		tostring(startedResting) .. " " .. tostring(tracking) .. " " .. tostring(handle.resting()), "true true true")
+	poseEvent:Fire(full)
+	task.wait(0.1)
+	poseEvent:Fire({})
+	task.wait(0.1)
+	check("an empty sample rests right away", handle.resting(), true)
+	handle.destroy()
+	twinModel:Destroy()
 else
 	check("ReplicatedStorage.ArmTwin exists", false, true)
 end

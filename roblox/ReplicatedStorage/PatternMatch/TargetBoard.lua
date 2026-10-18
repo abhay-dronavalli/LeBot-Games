@@ -1,17 +1,18 @@
 -- ReplicatedStorage.PatternMatch.TargetBoard
 -- Draws a target on a board as 3D blocks (PatternMatch.BlockPool, identical to the LiveBoard's): one
--- block per tower level in its color on each target cell, nothing on the others. Tiles stay the neutral
--- tile color. Hard mode outlines the target blocks, and in its hidden phase turns every level gray, so
--- the player still sees which cells need a block and how tall, but not the colors. Outlines are one
--- SelectionBox per block part, made once and shown or hidden.
+-- block per tower level in its color on each target cell, nothing on the others. Tiles keep the wooden
+-- chessboard colors tools/build_pattern_boards.lua gave them; this module never recolors them. Hard mode
+-- outlines the target blocks, and in its hidden phase turns every level gray, so the player still sees
+-- which cells need a block and how tall, but not the colors. Outlines are one SelectionBox per block
+-- part, made once and shown or hidden.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
 local BlockPool = require(script.Parent.BlockPool)
 
-local NEUTRAL = Color3.fromHex("f7f6f2")      -- tile color: the paper sheet
-local HIDDEN = Color3.fromRGB(176, 176, 176)  -- Hard mode's hidden phase: clearly gray on the paper, light
-                                              -- enough to read as gray rather than black
+local NEUTRAL = Color3.fromHex("f7f6f2")      -- the old paper tile color, kept as an export; tiles are wood now
+local HIDDEN = Color3.fromRGB(150, 150, 150)  -- Hard mode's hidden phase: a mid gray that reads as gray
+                                              -- against both the maple and the cherry squares
 local OUTLINE = Color3.fromRGB(15, 15, 15)
 
 local TargetBoard = {}
@@ -23,10 +24,6 @@ function TargetBoard.new(boardModel)
 	local self = setmetatable({ board = boardModel, cells = Grid.allCells(), outlines = {} }, TargetBoard)
 	self.blocks = BlockPool.new(boardModel)
 	for _, cell in ipairs(self.cells) do
-		local tile = boardModel[cell]
-		if tile.Color ~= NEUTRAL then
-			tile.Color = NEUTRAL
-		end
 		self.outlines[cell] = {}
 		for level = 0, self.blocks.levels - 1 do
 			local block = self.blocks:part(cell, level)

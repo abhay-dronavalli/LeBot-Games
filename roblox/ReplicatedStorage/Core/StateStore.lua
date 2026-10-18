@@ -5,6 +5,7 @@
 --                             { t = "state", seq, ts, arm = { shoulder_pan = deg, ... }, tip = {x, y, z},
 --                               blocks = { {id = number, color, x, y, z, yaw, level, held, visible, zone}, ... } }
 --                             Table cm: origin at corner marker 0, x across, y away from the operator, z up.
+--                             arm is nil until the arm reports (the arm twin then shows its rest pose).
 --   StateStore.update(msg) -> store a new state message (what the Bridge calls) and fire changed
 --   StateStore.changed     -> signal (BindableEvent.Event) fired after every state update
 -- With PatternMatch.Config.useFakeState = true, the server changes one thing every 2 s: it moves, adds
@@ -25,7 +26,7 @@ local StateStore = {}
 
 local state = {
 	t = "state", seq = 0, ts = 0,
-	arm = { shoulder_pan = 0, shoulder_lift = 0, elbow_flex = 0, wrist_flex = 0, wrist_roll = 0, gripper = 0 },
+	arm = nil, -- no arm data yet: the arm twin shows Config.twinRestPose (ArmTwin.Driver)
 	tip = { x = 0, y = 0, z = 0 },
 	blocks = {},
 }
@@ -198,26 +199,38 @@ local function fakeStep()
 	return blocks, msg
 end
 
--- Stores a new state message around the given block list (and arm angles, else the current ones).
+-- Stores a new state message around the given block list (and arm angles, else the current ones;
+-- arm = false stores no arm data).
 local function publish(blocks, arm)
+	if arm == false then
+		arm = nil
+	else
+		arm = arm or state.arm
+	end
 	StateStore.update({
 		t = "state", seq = state.seq + 1, ts = DateTime.now().UnixTimestampMillis / 1000,
-		arm = arm or state.arm, tip = state.tip, blocks = blocks,
+		arm = arm, tip = state.tip, blocks = blocks,
 	})
 end
 
--- Fake arm: slow sine waves on every joint (degrees, gripper 0..100), at different speeds, in ranges
--- that keep the twin's hand above the board. The Debug "arm" command replaces it with a fixed pose.
+-- Fake arm: an idle arm near Config.twinRestPose (degrees, gripper 0..100). Small slow sine waves at
+-- different speeds; the elbow takes back the shoulder's wave and the wrist the elbow's, so the forearm
+-- stays about level and the hand hangs in front of the base (twin stays under ~17 studs above its base,
+-- hand clear of the base and table). The gripper opens and closes between 10 and 60. The Debug "arm"
+-- command replaces it with a fixed pose or with no arm data.
 local FAKE_ARM_HZ = 20
-local fixedArm = nil
+local fixedArm = nil -- Debug: a held pose, or false for no arm data
 local function fakeArm(t)
+	local rest = Config.twinRestPose or {}
+	local lift = 4 * math.sin(t * 0.37)
+	local elbow = 4 * math.sin(t * 0.61)
 	return {
-		shoulder_pan = 30 * math.sin(t * 0.50),
-		shoulder_lift = 60 + 8 * math.sin(t * 0.37),
-		elbow_flex = -55 + 10 * math.sin(t * 0.61),
-		wrist_flex = -95 + 12 * math.sin(t * 0.83),
-		wrist_roll = 45 * math.sin(t * 0.29),
-		gripper = 50 + 45 * math.sin(t * 0.97),
+		shoulder_pan = (rest.shoulder_pan or 0) + 15 * math.sin(t * 0.50),
+		shoulder_lift = (rest.shoulder_lift or 0) + lift,
+		elbow_flex = (rest.elbow_flex or 0) - lift + elbow,
+		wrist_flex = (rest.wrist_flex or 0) - elbow + 5 * math.sin(t * 0.83),
+		wrist_roll = (rest.wrist_roll or 0) + 25 * math.sin(t * 0.29),
+		gripper = 35 + 25 * math.sin(t * 0.97),
 	}
 end
 
@@ -281,12 +294,19 @@ end
 --   { op = "remove", cell = "B2" }             remove the fake blocks on that cell, every level
 --   { op = "solve" }                           replace every block with the current round's target
 --   { op = "arm", angles = { shoulder_pan = 0, ... } }  hold the fake arm at exact joint angles (degrees,
---                                              gripper 0..100); angles = nil goes back to the sine waves
+--                                              gripper 0..100; joints left out show their rest values);
+--                                              angles = nil goes back to the sine waves
+--   { op = "arm", off = true }                 stop sending arm data (state.arm = nil): the twin eases
+--                                              back to its rest pose after ArmTwin.Driver's stale timeout
 local function debugCommand(cmd)
 	if cmd.op == "pause" then
 		debugPaused = cmd.on ~= false
 	elseif cmd.op == "arm" then
-		fixedArm = cmd.angles
+		if cmd.off then
+			fixedArm = false
+		else
+			fixedArm = cmd.angles
+		end
 	elseif cmd.op == "add" then
 		local row, col = string.byte(cmd.cell) - 64, tonumber(string.sub(cmd.cell, 2))
 		local x, y = cellCenterCm(col, row)
@@ -320,7 +340,11 @@ if Config.useFakeState and RunService:IsServer() and RunService:IsRunning() then
 		local started = os.clock()
 		while true do
 			task.wait(1 / FAKE_ARM_HZ)
-			publish(state.blocks, fixedArm or fakeArm(os.clock() - started))
+			if fixedArm == false then
+				publish(state.blocks, false)
+			else
+				publish(state.blocks, fixedArm or fakeArm(os.clock() - started))
+			end
 		end
 	end)
 	task.spawn(function()

@@ -27,7 +27,7 @@ Lobby -> enter Pattern cabinet -> MODE SELECT -> ROUND 1 -> INTERMISSION -> ROUN
 ```
 
 ### Mode select
-- Camera moves to hover over the island, blue sky behind. ScreenGui with two black tiles: Easy and Hard, each with an image.
+- Camera flies to a low front-left shot of the table inside the bedroom, the room blurred behind it (section 5, depth of field). ScreenGui with two black tiles: Easy and Hard, each with an image.
 - 15 s countdown; no pick = Easy.
 - Back button to the lobby: later, not v1.
 
@@ -68,27 +68,33 @@ Each event shows a 2 s warning banner before it starts, so the player can call i
 
 ## 5. Boards
 
-Styled after the Apprentice 3D view (github.com/NSang22/apprentice, `ui/view3d.js`): warm wood, a printed paper sheet, matte foam blocks, warm key light with a cool fill.
+The cabinet stands in a teen gamer's bedroom. Two chunky wooden game boards sit on one wooden table, with matte foam blocks, warm window daylight and purple / blue LED accents.
 
-- One wooden table (`PatternCabinet.Table`: Top plus four Legs, `#7a5638`, Wood material) that both boards sit on. Each board is a thin wooden slab (`Slab`, a shade darker, `#5f4129`) with a paper sheet on top (`Paper`, off-white `#f7f6f2`, SmoothPlastic) that runs 0.8 studs past the grid on every side. On the paper sits the black ink layer (`Base`, `#111`, exactly the grid's size) and on that the 12 paper-colored cell tiles with 0.2 stud gaps, so the gaps draw the thick grid lines. `Base` stays the part `Grid.worldPositionOf` lays the cells out from. Cell labels (A1..C4) are small gray (`#555`) text in each cell's top-left corner, upright for someone standing on the row C side; "ARM SIDE" in light gray sits in the row A margin. Four black-and-white AprilTag-style squares (`Tag`) sit at the paper's corners, decorative. "TARGET" / "LIVE" are dark text on the slab's row A edge. The LiveBoard's slab runs on toward the player as an apron, and the arm twin stands on it.
-- Blocks are rounded foam cubes 84% of a cell wide (the real 48 mm block on the 57 mm cell), very matte (SmoothPlastic): clones of the rounded-cube MeshPart `ReplicatedStorage.PatternMatch.BlockMesh` (Creator Store asset 6416975593, stored by the build tool; plain Parts if it is missing). Block colors are Apprentice's palette (section 8).
-- Arm twin colors: off-white links `#e9e6df`, dark joints `#2a2d33`, SmoothPlastic.
-- Lighting (set by the build tool): mid-afternoon sun from the player's front-left as the warm key (`ColorShift_Top` warm), slightly cool `Ambient` / `OutdoorAmbient`, `ShadowSoftness` 0.6. `Lighting.Technology = Future` must be set by hand in the Properties panel (scripts can't), so blocks cast soft shadows on the paper.
+- **Room** (`Workspace.Room`, built by `tools/build_room.lua`): four walls, ceiling, wood plank floor (top at Y = 1), a big rug under the table, one window on the -X wall with daylight coming in. Gamer props along the walls, clear of the table and the boards' spin sweep: a gaming desk with monitors and a chair, a bed, shelves, posters, lamps, a beanbag, a plant, and purple LED strips around the ceiling plus blue desk LEDs. All blocky parts, no scripts. The player spawns on a mat (`Room.Spawn.SpawnLocation`) just in front of the Entry pad. No Baseplate, no sky island.
+- **Table** (`PatternCabinet.Table`, built by `tools/build_pattern_cabinet.lua`): Top plus four Legs, `#7a5638`, Wood material. Both boards sit on it.
+- **Boards** (built by `tools/build_pattern_boards.lua`): each is one chunky raised wooden board (`Slab`, honey wood `#c28a52`, lighter than the table) with a raised, beveled border (`Frame`, `Bevel`, `BevelCorner`). The 12 cell tiles A1..C4 are inlaid wooden squares in two alternating tones, a chessboard: cherry `#9a643a` where row + column is even (A1), maple `#ead1a0` otherwise. They sit on a dark groove layer (`Base`, `#1c120b`, exactly the grid's size, the part `Grid.worldPositionOf` lays the cells out from), and the 0.2 stud gaps between tiles read as thin dark grooves. No labels inside the squares, no paper, no ink lines, no tags. Big burned-in row letters A, B, C are carved into both side borders (row A on the arm side, +Z) and column numbers 1-4 into the row C border (column 1 on the tag 0 side, -X), all readable from the row C side. Accents: TargetBoard gold `#d9a63a`, LiveBoard green `#3f9a58`, as an inlay line around the squares, a foot band, and the TARGET / LIVE word carved into the row A border (also on the slab's front face). The LiveBoard's slab runs on toward the player as an apron, and the arm twin stands on it.
+- **Blocks** are rounded foam cubes 84% of a cell wide (the real 48 mm block on the 57 mm cell), very matte (SmoothPlastic): clones of the rounded-cube MeshPart `ReplicatedStorage.PatternMatch.BlockMesh` (Creator Store asset 6416975593, stored by the cabinet build tool; plain Parts if it is missing). Block colors are Apprentice's palette (section 8).
+- **Arm twin** colors: off-white links `#e9e6df`, dark joints `#2a2d33`, SmoothPlastic.
+- **Lighting** (`tools/setup_lighting.lua`): `LightingStyle = Realistic`, `GlobalShadows` on. A warm late-afternoon sun low in the west (-X) streams through the window onto the rug and the TargetBoard; indoor ambient is a touch cool; a warm SpotLight in the ceiling lamp keeps the table bright; mild Bloom makes the Neon LED strips glow. `Lighting.Technology = Future` must be set by hand in the Properties panel (scripts can't).
+- **Depth of field** (`StarterPlayerScripts.CabinetFocus`): drives `Lighting.CabinetFocus`, a DepthOfFieldEffect, every frame. FocusDistance is the camera's distance to a point just above the table's center, and InFocusRadius (24) keeps both boards and the arm sharp while the room behind blurs softly (FarIntensity 0.18). During the mode select shot (LocalPlayer attribute `PatternShot`) it eases to a stronger blur (radius 20, far 0.5, near 0.1).
 - Two boards in the world, side by side, 3D parts, not GUI: TargetBoard and LiveBoard. Player walks around them freely.
 - Click anywhere on a board to spin it 90 degrees around its vertical center axis, 0.3 s. The ClickDetector (`SpinClick`) sits on the whole board Model, not just the base, because the tiles cover the base's top. Spins run on the server so everyone sees the same orientation, queue up, and wait while a tremor is on.
 - Both boards draw blocks from the same pool (`PatternMatch.BlockPool`): one block part per cell and level (12 cells x `maxStackGlobal` levels, named `B2` and `B2_1`), made once, each sitting one block height above the one below, recolored or hidden, never created per tick.
-- LiveBoard: 12 cell tiles plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`, which shows the ink layer as a black hole in the paper. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
-- TargetBoard: 12 paper-colored cell tiles plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns light gray (`#b0b0b0`, same blocks, recolored). Intermission and Results show full colors.
+- LiveBoard: 12 cell tiles plus a block at each cell and level with a counted block on the table, colored from `Config.colors`. Vanished cells use `Transparency = 1`: the inlaid square disappears and the dark groove layer under it shows as a hole. The white problem outline (extra, doubled, blocked) goes on the specific block part at fault; a block above the pool's top level is shown on the top part.
+- TargetBoard: 12 wooden squares (never recolored) plus a tower of blocks, identical to the LiveBoard's, on each target cell in its target colors; non-target cells have no block. In hard mode the target blocks are outlined, and in the hidden phase every level turns mid gray (150, 150, 150, same blocks, recolored), which reads as gray on both wood tones. Intermission and Results show full colors.
 
 ## 6. Robot twin (v1, parts-built)
 
 Lives in `ReplicatedStorage.ArmTwin` so every game can clone it. Six parts joined with Motor6D in the real joint order: `shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper`. A `TwinDriver` module reads `StateStore.arm` each Heartbeat and sets each Motor6D `Transform` from the angle, with per-joint sign and offset in `Config.twinJoints` so it can be tuned by moving one real joint at a time. Placed next to the LiveBoard so the arm appears to reach over the live grid.
 
+Rest pose: `Config.twinRestPose` (real-arm degrees, gripper 0..100) is a folded SO-101 at rest, upper arm up and leaning back, forearm folded forward, hand hanging just in front of the base. The client shows it whenever there is no arm data (no sample yet, an empty one, or none for `Driver.STALE_SECONDS` = 1 s) and uses it for any joint a sample leaves out. The StateStore stand-in starts with no arm data and its fake arm moves in small waves around the rest pose.
+
 ## 7. Studio layout
 
 ```
+Workspace.Room                              the bedroom: shell, window, lights, props, Spawn (SpawnLocation)
 Workspace.PatternCabinet
-  Island, Entry (ProximityPrompt "Play Pattern Match")
+  Entry (ProximityPrompt "Play Pattern Match"), Table (Top + Legs)
   TargetBoard (Model): Base, Cells A1..C4
   LiveBoard (Model): Base, Cells A1..C4, Blocks (Folder)
   ArmTwin (clone)
@@ -110,6 +116,9 @@ ServerScriptService
   PatternMode (Script)                     wires the prompt and remotes to PatternMatch.Game
 StarterPlayer.StarterPlayerScripts
   ArmTwinClient (LocalScript)              eases the LiveBoard's arm twin toward ArmPose samples
+  CabinetFocus (LocalScript)               depth of field: keeps the table sharp, blurs the room
+Lighting
+  CabinetFocus (DepthOfFieldEffect), Bloom, Atmosphere, SunRays, Sky
 StarterGui
   PatternModeSelect (ScreenGui + LocalScript)
   PatternHud (ScreenGui + LocalScript)     timer, round, event banner
@@ -157,6 +166,8 @@ return {
   events = { "vanish", "tremor", "inverted" }, -- tremor and inverted durations (4 s, 8 s) live in PatternEvents
   twinJoints = { shoulder_pan = {sign=1, offset=0}, shoulder_lift = {sign=1, offset=0}, elbow_flex = {sign=1, offset=0},
                  wrist_flex = {sign=1, offset=0}, wrist_roll = {sign=1, offset=0}, gripper = {sign=1, offset=0} },
+  -- folded rest pose, shown while there is no arm data; same units as StateStore.arm, run through twinJoints
+  twinRestPose = { shoulder_pan = 0, shoulder_lift = 125, elbow_flex = -128, wrist_flex = -76, wrist_roll = 0, gripper = 0 },
 }
 ```
 
