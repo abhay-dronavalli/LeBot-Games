@@ -93,17 +93,22 @@ have not had a design pass.
 No bay requires a colour any more — **any block satisfies any cell** — so the old Colour
 column has been replaced by what a bay actually costs in cubes.
 
+**Scope: four bays.** `Config.NumBays = 4`. The rest are parked — their `BayData` entries sit
+past that index so nothing builds them, and their geometry is in `ServerStorage.OutOfScope`.
+Raise `NumBays` and re-run `build/scope_course.lua` to bring them back; nothing was deleted.
+
+DarkZone moved from bay 8 to bay 4, because the course has to be contiguous — left at 8 you
+would walk through four empty bays to reach it.
+
 | # | Obstacle | Cubes | Solve | Redesigned |
 |---|---|---|---|---|
 | 1 | **Saw Wall** | 3 (1 + a stack of 2) | **two levers, exact stand level, hold E** | ✅ built & verified; 16-stud unvaultable wall, 75 s |
 | 2 | **Void** | 2 | cells (1,0) (1,1) | ✅ built & verified |
 | 3 | **Laser Walk** | **1**, moved repeatedly | **walk it along a random 6–8 cell route** | ✅ built & verified |
-| 4 | Lava | 2 | cells (1,0) (1,1) | ❌ |
-| 5 | Crusher roof | 2 (one L2 cell) | cell (1,1) | ❌ |
-| 6 | Mobs | 2 | cells (0,1) (3,1) | ❌ |
-| 7 | Arrow turrets | 2 | cells (1,1) (2,1) | ❌ |
-| 8 | Dark zone | 2 | cells (1,1) (2,1) | ❌ — **its mechanic was the teal glow; needs a rethink** |
-| 9 | Ice (finale) | 2 | cells (0,1) (3,1) | ❌ |
+| 4 | **Dark zone** | 2 | cells (1,1) (2,1) | ❌ — **in scope, not yet designed**: its mechanic was the teal glow, and colour is gone |
+
+**Parked (out of scope):** Lava `[5]`, Crusher roof `[6]`, Mobs `[7]`, Arrow turrets `[8]`,
+Ice `[9]`.
 
 ---
 

@@ -36,7 +36,10 @@ Config.BayGap = 6          -- catwalk studs between bays
 Config.BayWidth = Config.CellSize * Config.BayCols   -- 32
 Config.BayDepth = Config.CellSize * Config.BayRows   -- 24
 Config.BayPitch = Config.BayDepth + Config.BayGap    -- 30, Z distance from one bay's start to the next
-Config.NumBays = 9
+-- SCOPE: four obstacles -- Saw, Void, LaserWalk, DarkZone. BayData keeps the rest past this
+-- index so nothing builds them. Raise this and re-run build/scope_course.lua to bring the
+-- parked bays and their geometry back.
+Config.NumBays = 4
 
 -- Transport (Section 7, 12)
 Config.PollRateHz = 3.5

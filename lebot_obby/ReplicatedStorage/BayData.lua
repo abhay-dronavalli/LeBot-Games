@@ -16,6 +16,12 @@
 -- col 0-3, row 0-2; row 0 is nearest the bay entrance.
 -- `coverRows` limits an area obstacle to certain rows so the bay stays crossable on budget.
 return {
+	----------------------------------------------------------------
+	-- IN SCOPE: bays 1-4. Config.NumBays is 4, so only these are built.
+	--
+	-- DarkZone was bay 8 and is bay 4 now, because the course has to be contiguous -- left at
+	-- 8 you would walk through four empty bays to reach it.
+	----------------------------------------------------------------
 	[1] = {
 		obstacle = "Saw",
 		-- Solved by throwing both levers, not by filling cells: here the crates are a LADDER
@@ -89,32 +95,6 @@ return {
 			.. " after the crate lands -- that gap is your window to follow it.",
 	},
 	[4] = {
-		obstacle = "Lava",
-		level = 1,
-		coverRows = {0, 1},   -- row 2 stays dry, so 2 stepping stones is enough
-		solveCells = {{1, 0}, {1, 1}},
-		note = "Lava rises on a timer. Blocks stand proud of the max level as dry stepping stones.",
-	},
-	[5] = {
-		obstacle = "CrusherRoof",
-		level = 2,
-		solveCells = {{1, 1}},
-		note = "Ceiling descends; a stacked pair props it and the roof halts on the stack.",
-	},
-	[6] = {
-		obstacle = "Mobs",
-		level = 1,
-		solveCells = {{0, 1}, {3, 1}},
-		note = "Blocks seal the two wall spawners so the mobs stop coming; the lane stays open.",
-	},
-	[7] = {
-		obstacle = "ArrowTurrets",
-		level = 1,
-		solveCells = {{1, 1}, {2, 1}},
-		note = "Wall dispensers fire volleys across the bay. The blocks are hard cover -- arrows die"
-			.. " against them -- and placing both shuts the turrets down.",
-	},
-	[8] = {
 		obstacle = "DarkZone",
 		level = 1,
 		solveCells = {{1, 1}, {2, 1}},
@@ -123,6 +103,38 @@ return {
 		-- mechanic was tied to a specific colour. With any block accepted, either every crate
 		-- lights the dark or the bay needs a different idea.
 		note = "Lights out, with pits you cannot see. The blocks light the way.",
+	},
+
+	----------------------------------------------------------------
+	-- OUT OF SCOPE. Kept rather than deleted: these are past Config.NumBays, so HazardManager
+	-- never builds them and ActiveBayTracker never selects them. Raise NumBays and re-run
+	-- build/scope_course.lua to bring them back.
+	----------------------------------------------------------------
+	[5] = {
+		obstacle = "Lava",
+		level = 1,
+		coverRows = {0, 1},   -- row 2 stays dry, so 2 stepping stones is enough
+		solveCells = {{1, 0}, {1, 1}},
+		note = "Lava rises on a timer. Blocks stand proud of the max level as dry stepping stones.",
+	},
+	[6] = {
+		obstacle = "CrusherRoof",
+		level = 2,
+		solveCells = {{1, 1}},
+		note = "Ceiling descends; a stacked pair props it and the roof halts on the stack.",
+	},
+	[7] = {
+		obstacle = "Mobs",
+		level = 1,
+		solveCells = {{0, 1}, {3, 1}},
+		note = "Blocks seal the two wall spawners so the mobs stop coming; the lane stays open.",
+	},
+	[8] = {
+		obstacle = "ArrowTurrets",
+		level = 1,
+		solveCells = {{1, 1}, {2, 1}},
+		note = "Wall dispensers fire volleys across the bay. The blocks are hard cover -- arrows die"
+			.. " against them -- and placing both shuts the turrets down.",
 	},
 	[9] = {
 		obstacle = "Ice",
