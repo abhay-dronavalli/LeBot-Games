@@ -12,6 +12,7 @@ plan is the original intent and has diverged.
 | [bay-01-saw-wall.md](bay-01-saw-wall.md) | Bay 1, built and verified end to end. |
 | [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
 | [bay-03-laser-walk.md](bay-03-laser-walk.md) | Bay 3, built and verified end to end. |
+| [ui.md](ui.md) | The interface: the shared `UiTheme`, the three HUD layers, player 2's order card, and what happened to the floating labels. |
 | [environment.md](environment.md) | The steampunk hall: the backdrop, containment, lighting, the overseer's column and the `build/` generators that produce it all. |
 
 Every bay in scope has one. The parked bays (5–9) don't, and won't until `Config.NumBays`

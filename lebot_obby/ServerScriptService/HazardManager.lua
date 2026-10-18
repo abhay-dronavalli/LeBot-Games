@@ -19,8 +19,20 @@ local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
 local Mapping = require(ReplicatedStorage:WaitForChild("Mapping"))
 local RunControl = require(ServerScriptService:WaitForChild("RunControl"))
 
+local Ui = require(ReplicatedStorage:WaitForChild("UiTheme"))
+
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local ObjectiveEvent = Remotes:WaitForChild("Objective")
+-- The direct popup channel. ObjectiveHud turns these into a toast, or into a full-screen
+-- stamp when `big` is set. Kept separate from the objective payload because an EVENT ("that
+-- block was refused") and a STATE ("this bay wants two blocks") want different lifetimes --
+-- a state persists in every later push, which is why a flash has to be edge-detected.
+local ToastEvent = Remotes:FindFirstChild("Toast")
+if not ToastEvent then
+	ToastEvent = Instance.new("RemoteEvent")
+	ToastEvent.Name = "Toast"
+	ToastEvent.Parent = Remotes
+end
 
 local CELL = Config.CellSize
 
@@ -63,23 +75,90 @@ local function newPart(name, size, pos, color, material, parent, props)
 	return p
 end
 
+-- An in-world label, styled as a brass plate bolted to the machine.
+--
+-- TWO THINGS CHANGED AND BOTH MATTER. It used to be `AlwaysOnTop = true`, so every label in
+-- the course drew THROUGH the walls -- the dark room's "POWER BOX" plate was legible from
+-- outside the sealed room, and labels from bays you were nowhere near floated over the
+-- scenery. Now it occludes like anything else, and `MaxDistance` fades it out rather than
+-- letting the whole course shout at you at once.
+--
+-- It still returns the TextLabel, because every caller drives it by writing `.Text` and
+-- `.TextColor3` and none of them should have to care that the frame around it changed.
 local function addLabel(parent, text, pos, color)
 	local anchor = newPart("Label", Vector3.new(0.2, 0.2, 0.2), pos, nil, nil, parent,
 		{Transparency = 1, CanQuery = false})
 	local b = Instance.new("BillboardGui")
-	b.Size = UDim2.new(0, 190, 0, 40)
-	b.AlwaysOnTop = true
+	b.Size = UDim2.fromOffset(168, 32)
+	b.AlwaysOnTop = false
+	-- 55 studs is chosen, not arbitrary: it is close enough to read from anywhere inside the
+	-- bay you are standing in, and short enough that the OVERSEER -- parked 62 studs up --
+	-- never sees them at all. Player 2 has the mat card and the numbered floor pads for the
+	-- same information, and in the top-down view these plates stacked on top of each other.
+	b.MaxDistance = 55
+	b.LightInfluence = 0
 	b.Parent = anchor
+
+	local plate = Instance.new("Frame")
+	plate.Size = UDim2.fromScale(1, 1)
+	plate.BackgroundColor3 = Ui.C.ironDark
+	plate.BackgroundTransparency = 0.12
+	plate.BorderSizePixel = 0
+	plate.Parent = b
+	Ui.corner(plate, 4)
+	Ui.stroke(plate, Ui.C.brass, 2)
+	Ui.sheen(plate, 0.3)
+	-- rivets at the corners: the detail that makes it read as bolted on rather than drawn on
+	for _, a in ipairs({Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(0, 1), Vector2.new(1, 1)}) do
+		Ui.rivet(plate, Vector2.new(0.5, 0.5),
+			UDim2.new(a.X, a.X == 0 and 7 or -7, a.Y, a.Y == 0 and 7 or -7))
+	end
+
 	local l = Instance.new("TextLabel")
-	l.Size = UDim2.new(1, 0, 1, 0)
-	l.BackgroundTransparency = 0.35
-	l.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-	l.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-	l.Font = Enum.Font.SourceSansBold
+	l.AnchorPoint = Vector2.new(0.5, 0.5)
+	l.Position = UDim2.fromScale(0.5, 0.5)
+	l.Size = UDim2.new(1, -18, 1, -12)
+	l.BackgroundTransparency = 1
+	l.TextColor3 = color or Ui.C.amber
+	l.Font = Ui.F.title
 	l.TextScaled = true
+	l.TextWrapped = true
 	l.Text = text
-	l.Parent = b
+	l.ZIndex = 3
+	l.Parent = plate
 	return l
+end
+
+-- The bay nameplate, on the physical sign that was already standing beside every bay doing
+-- nothing. Two SurfaceGuis, one per face, because the sign's facing is baked geometry and
+-- guessing wrong leaves the plate pointing into the wall. The returned proxy forwards
+-- `.Text` and `.TextColor3` to both, so callers write to it exactly like a TextLabel.
+local function baySignPlate(bay, text, color)
+	local sign = bay and bay:FindFirstChild("Sign")
+	if not sign then
+		return nil
+	end
+	local labels = {}
+	for _, face in ipairs({Enum.NormalId.Front, Enum.NormalId.Back}) do
+		local old = sign:FindFirstChild("UiPlate" .. face.Name)
+		if old then
+			old:Destroy()
+		end
+		local made = Ui.plate(sign, {text = text, colour = color, face = face,
+			maxDistance = 120, ppu = 36})
+		made.gui.Name = "UiPlate" .. face.Name
+		table.insert(labels, made.label)
+	end
+	return setmetatable({}, {
+		__newindex = function(_, k, v)
+			for _, l in ipairs(labels) do
+				l[k] = v
+			end
+		end,
+		__index = function(_, k)
+			return labels[1] and labels[1][k]
+		end,
+	})
 end
 
 -- Debug ghost mode (Q) makes a character untouchable by every obstacle.
@@ -775,13 +854,10 @@ BUILDERS.Saw = function(i, folder, info, state)
 		end
 	end
 
-	local notice = addLabel(folder, "", Vector3.new(midX, 7.5, z0 + 5),
-		Color3.fromRGB(255, 140, 90))
-	notice.Text = ""
-	local noticeUntil = 0
+	-- No floating notice part any more: `flashText` already rides the next objective push and
+	-- the HUD raises it as a toast, which is the same information somewhere you are actually
+	-- looking. The billboard was a second copy of it hanging in the air above the saws.
 	function showNotice(text)
-		notice.Text = text
-		noticeUntil = os.clock() + 2.5
 		flashText, flashUntil = text, os.clock() + 2.5
 	end
 
@@ -878,9 +954,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 				end
 			end
 
-			if notice.Text ~= "" and os.clock() > noticeUntil then
-				notice.Text = ""
-			end
+			-- (the notice used to be expired here; it is a HUD toast now and expires itself)
 			if os.clock() - lastPush > 0.2 then
 				pushObjective()
 			end
@@ -2616,8 +2690,10 @@ local function buildBay(i)
 	-- action bay. The default still describes a placement bay, which is most of them.
 	state.banner = info.banner
 		or string.format("%s  -  %s", info.obstacle:upper(), blockReq(info.level))
-	state.label = addLabel(folder, state.banner,
-		Vector3.new(c.X, 11, c.Z), Color3.fromRGB(255, 180, 90))
+	-- On the bay's own sign, not floating over the middle of it. The floating version
+	-- duplicated the objective HUD word for word, hung in the air at head height, and was
+	-- the single most intrusive piece of UI in the game.
+	state.label = baySignPlate(bay, state.banner, Ui.C.amber)
 
 	states[bay] = state
 	return state
