@@ -49,7 +49,8 @@ local joinCabinet
 local joined = {}
 local lastPress = -math.huge
 local lockedNotice = {}
-local activeGame -- { mode, played, leftEarly } while a mode runs
+local activeGame -- { mode, played, gone, leftEarly } while a mode runs
+local switchTo -- a bay the debug switcher wants next; runGame hands over to it on the way out
 
 ------------------------------------------------------------------ wins
 
@@ -150,6 +151,12 @@ local function waitWithTimeout(event, timeout, stopEarly)
 	local stopped = false
 	while result == nil and os.clock() - t0 < timeout do
 		if stopEarly and stopEarly() then
+			-- Everyone is out. A mode that ends when its last player leaves reports right then (a decided
+			-- round's results still count): give that a moment to arrive.
+			local t1 = os.clock()
+			while result == nil and os.clock() - t1 < 1 do
+				task.wait(0.05)
+			end
 			stopped = true
 			break
 		end
@@ -163,8 +170,18 @@ local function waitWithTimeout(event, timeout, stopEarly)
 end
 
 -- A player in the running game stepped on an enabled Back to Lobby pad: out of the game, back to the workshop.
+-- Before the round is decided that is a loss (won = false). After it (the mode's optional IsDecided()
+-- says so: a results screen, a result banner, an escape) the player keeps the result the mode reports.
 local function leaveToLobby(g, player)
-	g.leftEarly[player] = true
+	local decided = false
+	if g.mode.IsDecided then
+		local ok, value = pcall(g.mode.IsDecided)
+		decided = ok and value == true
+	end
+	g.gone[player] = true
+	if not decided then
+		g.leftEarly[player] = true
+	end
 	returnPlayersToArcade({ player })
 	if g.mode.PlayerLeft then
 		local ok, err = pcall(g.mode.PlayerLeft, player)
@@ -222,24 +239,31 @@ for _, pad in CollectionService:GetTagged(TELEPORTER_TAG) do
 	watchTeleporter(pad)
 end
 
-local function runGame(cab, firstPlayer)
+-- `preset`, if given, is the roster to start with immediately: the debug switcher hands the
+-- players straight from one game into the next, so there is no portal to stand in and no join
+-- window to sit through.
+local function runGame(cab, firstPlayer, preset)
 	local mode = modules[cab.Name]
-	joinCabinet = cab
-	joined = { firstPlayer }
-	firstPlayer:SetAttribute("JoinedMode", cab.Name)
+	joinCabinet = if preset then nil else cab
+	joined = preset or { firstPlayer }
 	prompt.Enabled = false
 	arcadeState:SetAttribute("Busy", true)
-	arcadeState:SetAttribute("JoinMode", cab.Name)
 	arcadeState:SetAttribute("JoinTitle", mode.DisplayName)
-	setScreens(cab, "STARTING")
 
-	for t = JOIN_TIME, 1, -1 do
-		arcadeState:SetAttribute("JoinCountdown", t)
-		cab:SetAttribute("Countdown", t)
-		task.wait(1)
+	if preset then
+		setScreens(cab, "PLAYING")
+	else
+		firstPlayer:SetAttribute("JoinedMode", cab.Name)
+		arcadeState:SetAttribute("JoinMode", cab.Name)
+		setScreens(cab, "STARTING")
+		for t = JOIN_TIME, 1, -1 do
+			arcadeState:SetAttribute("JoinCountdown", t)
+			cab:SetAttribute("Countdown", t)
+			task.wait(1)
+		end
+		joinCabinet = nil
+		arcadeState:SetAttribute("JoinMode", "")
 	end
-	joinCabinet = nil
-	arcadeState:SetAttribute("JoinMode", "")
 
 	local players, played = {}, {}
 	for _, p in joined do
@@ -257,14 +281,17 @@ local function runGame(cab, firstPlayer)
 		Bridge.send({ t = "mode", name = (cab:GetAttribute("Mode") or cab.Name):lower() })
 
 		local results = {}
-		local g = { mode = mode, played = played, leftEarly = {} }
+		local g = { mode = mode, played = played, gone = {}, leftEarly = {} } -- gone: took a pad; leftEarly: before the result
 		local ok, err = pcall(mode.Start, players)
 		if ok then
 			activeGame = g
 			results = waitWithTimeout(mode.Finished, if type(mode.MaxDuration) == "number" then mode.MaxDuration else GAME_TIMEOUT,
-				function() -- everyone took a lobby pad or left the server
+				function() -- the debug switcher wants another game, or everyone took a lobby pad / left
+					if switchTo then
+						return true
+					end
 					for _, p in players do
-						if p.Parent and not g.leftEarly[p] then
+						if p.Parent and not g.gone[p] then
 							return false
 						end
 					end
@@ -279,16 +306,28 @@ local function runGame(cab, firstPlayer)
 		if not stopped then
 			warn("[Arcade] " .. cab.Name .. ".Stop failed: " .. tostring(stopErr))
 		end
-		Bridge.send({ t = "mode", name = "lobby" })
 		local stayed = {}
 		for _, p in players do
-			if not g.leftEarly[p] then
+			if not g.gone[p] then
 				table.insert(stayed, p)
 			end
 		end
+
+		-- Handing straight over to the next game. The players go from this map into that one
+		-- without a stop in the workshop, `busy` is never released so no portal can race in,
+		-- and nobody is awarded a win for a round that was cut off rather than played out.
+		local nextCab = switchTo
+		switchTo = nil
+		if nextCab and modules[nextCab.Name] and #stayed > 0 then
+			task.spawn(runGame, nextCab, stayed[1], stayed)
+			return
+		end
+
+		Bridge.send({ t = "mode", name = "lobby" })
 		returnPlayersToArcade(stayed)
 		awardWins(results, played, g.leftEarly)
 	end
+	switchTo = nil
 
 	arcadeState:SetAttribute("ActiveMode", "")
 	arcadeState:SetAttribute("Busy", false)
@@ -373,7 +412,9 @@ task.spawn(function()
 				if pad:IsA("BasePart") and pad:IsDescendantOf(workspace) and pad:GetAttribute("Enabled") == true then
 					for _, hit in workspace:GetPartBoundsInBox(pad.CFrame * CFrame.new(0, 3, 0), pad.Size + Vector3.new(0, 6, 0), overlap) do
 						local player = Players:GetPlayerFromCharacter(hit.Parent)
-						if player and g.played[player] and not g.leftEarly[player] then
+						local humanoid = hit.Parent:FindFirstChildOfClass("Humanoid")
+						-- a living body only: a dead one's broken-apart parts can land on the pad
+						if player and humanoid and humanoid.Health > 0 and g.played[player] and not g.gone[player] then
 							leaveToLobby(g, player)
 						end
 					end
@@ -390,6 +431,58 @@ Players.PlayerRemoving:Connect(function(player)
 	if i then
 		table.remove(joined, i)
 	end
+end)
+
+------------------------------------------------------------------ debug: jump between games
+
+-- Alt+1..4 in any client (ArcadeClient) jumps straight to that bay's game, ending whatever is
+-- running. Studio only, like the F8 role swap: it skips the join window, the portal and the
+-- unlock check, so it must never exist in a live server. The current round is abandoned rather
+-- than lost - nobody is awarded a win for it either way.
+local switchRemote = Instance.new("RemoteEvent")
+switchRemote.Name = "ArcadeSwitch"
+switchRemote.Parent = arcadeState
+
+local function bayByNumber(n)
+	for _, cab in cabinets:GetChildren() do
+		if cab:GetAttribute("BayNumber") == n then
+			return cab
+		end
+	end
+	return nil
+end
+
+switchRemote.OnServerEvent:Connect(function(player, n)
+	if not RunService:IsStudio() or type(n) ~= "number" then
+		return -- a debug override; never in a live server
+	end
+	local cab = bayByNumber(n)
+	if not cab then
+		return
+	end
+	if not modules[cab.Name] then
+		print(string.format("[Arcade] switch to bay %d (%s): no mode module, ignored", n, cab.Name))
+		return
+	end
+	if busy then
+		-- runGame is mid-round: ask it to wind up and hand the players over on its way out.
+		switchTo = cab
+		print(string.format("[Arcade] %s switched to %s", player.Name, cab.Name))
+		return
+	end
+	-- Nothing running, so start it here, with whoever has a character, and no join window.
+	local roster = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(roster, p)
+		end
+	end
+	if #roster == 0 then
+		return
+	end
+	busy = true
+	print(string.format("[Arcade] %s started %s (debug switch)", player.Name, cab.Name))
+	task.spawn(runGame, cab, roster[1], roster)
 end)
 
 ------------------------------------------------------------------ DON'T PRESS

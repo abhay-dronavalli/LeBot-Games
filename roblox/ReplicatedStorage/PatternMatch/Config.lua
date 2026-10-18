@@ -22,7 +22,8 @@ return {
 	cellSizeMm = 57.15,                  -- measured on the printed sheet
 	flipX = false,                       -- true mirrors columns (1 <-> 4) if the sheet or tags turn out reversed
 	flipY = false,                       -- true mirrors rows (A <-> C)
-	cellTolerance = 0.7,
+	cellTolerance = 1.0,                 -- share of a cell (centred) where a block counts: 1.0 = anywhere inside it,
+	                                     --   like the obby; lower it to ignore blocks near the cell edges
 	maxStackGlobal = 2,                  -- hard cap on tower height; a block at level >= this always counts as extra
 	ignoreZones = { tray = true },       -- block zones that never count (plan.md: the inventory tray maps to nothing)
 	boardCellStuds = 4,                  -- studs per grid cell on the boards; with cellSizeMm this is the mm -> stud scale

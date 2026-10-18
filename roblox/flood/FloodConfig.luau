@@ -1,7 +1,7 @@
 -- Studio location: ReplicatedStorage.Flood.FloodConfig (ModuleScript)
 -- Rising Flood tuning. Heights are in studs relative to the arena floor top.
 local Config = {
-	ROUND_TIME = 60, -- fallback; each difficulty sets its own round time below
+	ROUND_TIME = 180, -- fallback; each difficulty sets its own round time below
 	GRACE_TIME = 5, -- seconds before the water starts rising
 	COUNTDOWN = 3,
 	RESULT_TIME = 4, -- seconds the win/lose banner shows before everyone returns to the arcade
@@ -21,10 +21,16 @@ local Config = {
 	-- the block reaches the next square of the path, the tower grows by one. Difficulty picks the
 	-- path length and round time (Difficulty attribute on ServerStorage.Modes.Flood: Easy, Medium,
 	-- Hard, or Random = rolled for the NEXT round while players are still in the lobby).
+	-- Round times are paced for the vision board, not for a human with a mouse. One square costs
+	-- a release plus a model read (~2 s trigger delay + ~3.5 s for the call, see bridge/board.py)
+	-- on top of the time it takes to actually pick the cube up and set it down, so budget roughly
+	-- 20 s per square and leave room to fumble one. Shorten these and the tower cannot be finished
+	-- however well the pair plays. Mode.MaxDuration in modes/Flood/Module.luau must stay above the
+	-- longest of them, or the arcade times the round out from underneath it.
 	DIFFICULTY = {
-		Easy = { cells = 6, time = 60 },
-		Medium = { cells = 9, time = 75 },
-		Hard = { cells = 12, time = 90 },
+		Easy = { cells = 6, time = 180 },
+		Medium = { cells = 9, time = 240 },
+		Hard = { cells = 12, time = 300 },
 	},
 	DEFAULT_DIFFICULTY = "Easy",
 	TARGET_STEPS = 5, -- only used if the path can't be built

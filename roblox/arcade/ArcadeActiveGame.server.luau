@@ -15,7 +15,7 @@ local GameRegistry = require(ReplicatedStorage:WaitForChild("Core"):WaitForChild
 local arcade = ReplicatedStorage:WaitForChild("Arcade")
 local bays = workspace:WaitForChild("Workshop"):WaitForChild("Bays")
 
-local SELF_MANAGED = { PatternMatch = true }
+local SELF_MANAGED = { PatternMatch = true, Arena = true }
 local GAME_FOR_MODE = {} -- e.g. { RedLight = "RedLightGreenLight" }
 
 local ours = nil -- the id this script set active, or nil

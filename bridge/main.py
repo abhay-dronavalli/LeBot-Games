@@ -1,8 +1,8 @@
-"""Start the bridge: one producer thread, an optional vision thread, and the WebSocket server.
+"""Start the bridge: one producer thread, an optional board thread, and the WebSocket server.
 
-    python -m bridge.main --source mock              # no hardware at all
+    python -m bridge.main --source mock              # no hardware, no API key
     python -m bridge.main --source teleop            # leader -> follower, real arm
-    python -m bridge.main --source teleop --vision   # ...and the real camera
+    python -m bridge.main --source teleop --vision   # ...and the real camera + board reads
     python -m bridge.main --source mock --open       # mock + open the viewer in a browser
 
 Then open http://localhost:8766 for the mock Roblox viewer, or point Roblox Studio at
@@ -10,6 +10,10 @@ ws://localhost:8765 (the laptop's LAN IP if Studio is on a different machine).
 
 Press the space bar in this terminal to clear every active effect. That is the kill key: it
 stops a shake immediately without stopping the run.
+
+With `--vision`, the board is read by a vision model two seconds after the gripper opens, and
+not otherwise - the board can only change when the arm lets a block go. That needs
+OPENAI_API_KEY in the environment or in a `.env` at the repo root. See `bridge/board.py`.
 """
 
 import argparse
@@ -22,10 +26,11 @@ import webbrowser
 from robot.perception.config import CUBE_SIZE_MM, SHEET_H_MM, SHEET_W_MM
 from robot.workspace import Workspace
 
+from . import board as board_mod
 from . import protocol, server
+from .board import Board
 from .effects import EffectStack
 from .state import Inbox, StateBus
-from .world import BlockTracker
 
 
 
@@ -62,40 +67,75 @@ def space(ws):
     }
 
 
+def board_facts(args):
+    """How the board is read, for the hello frame.
+
+    A client needs this to tell "nobody has moved a block for half a minute" from "the link
+    is broken". Blocks used to arrive ten times a second, so any age was a fault; now the
+    board is read on release, and a block list that is 40 seconds old is perfectly healthy.
+    """
+    if args.source == "mock":
+        return {"reader": "mock", "trigger": "release",
+                "release_delay_s": board_mod.RELEASE_DELAY_S,
+                "max_stack": board_mod.MAX_STACK, "cells": board_mod.cells()}
+    if not args.vision:
+        return {"reader": None, "trigger": None, "note": "no --vision: no blocks are read"}
+    return {"reader": board_mod.model_name(), "trigger": "release",
+            "release_delay_s": board_mod.RELEASE_DELAY_S,
+            "poll_s": args.board_poll or None,
+            "max_stack": board_mod.MAX_STACK, "cells": board_mod.cells()}
+
+
 def kill_key(effects, stop):
-    """Space clears all effects. Windows only (msvcrt); skipped silently elsewhere."""
+    """The terminal's keys. Windows only (msvcrt); skipped silently elsewhere.
+
+        space   clear all effects (the kill key)
+        v       read the board now, without waiting for a release
+        q       quit
+    """
     try:
         import msvcrt
     except ImportError:
         return
+    from .producers import board as board_producer
+
     while not stop.is_set():
         if msvcrt.kbhit():
             key = msvcrt.getch()
             if key in (b" ",):
                 effects.clear()
                 print("  [space] all effects cleared")
+            elif key in (b"v", b"V"):
+                # A cube moved by hand never opens the jaw, so no release fires and the board
+                # keeps reporting where things used to be. This is the manual way out of that.
+                if board_producer.request_now():
+                    print("  [v] board read requested")
+                else:
+                    print("  [v] no board thread: mock mode, or started without --vision")
             elif key in (b"q", b"\x03"):
                 stop.set()
         time.sleep(0.05)
 
 
-def start_producer(args, bus, tracker, inbox, effects, stop):
+def start_producer(args, bus, board, inbox, effects, stop):
     if args.source == "mock":
         from .producers import mock
         return threading.Thread(target=mock.run, name="mock",
-                                args=(bus, tracker, inbox, effects, stop),
+                                args=(bus, board, inbox, effects, stop),
                                 kwargs={"hz": args.arm_hz}, daemon=True)
     if args.source == "follower":
         from .producers import teleop
         return threading.Thread(target=teleop.run_passive, name="passive",
-                                args=(bus, tracker, inbox, effects, stop),
-                                kwargs={"hz": args.arm_hz, "vision": args.vision}, daemon=True)
+                                args=(bus, board, inbox, effects, stop),
+                                kwargs={"hz": args.arm_hz, "vision": args.vision,
+                                        "board_poll": args.board_poll}, daemon=True)
     if args.source == "teleop":
         from .producers import teleop
         return threading.Thread(target=teleop.run, name="teleop",
-                                args=(bus, tracker, inbox, effects, stop),
+                                args=(bus, board, inbox, effects, stop),
                                 kwargs={"hz": args.arm_hz, "vision": args.vision,
-                                        "actual": args.actual}, daemon=True)
+                                        "actual": args.actual,
+                                        "board_poll": args.board_poll}, daemon=True)
     raise SystemExit(f"source {args.source!r} is not implemented yet")
 
 
@@ -105,7 +145,12 @@ def main():
                     help="mock: no hardware. follower: passive, torque off, move the arm by "
                          "hand. teleop: leader drives the real follower.")
     ap.add_argument("--vision", action="store_true",
-                    help="run the real overhead camera (ignored by --source mock, which fakes it)")
+                    help="run the real overhead camera and read the board with a vision model "
+                         "(ignored by --source mock, which fakes both)")
+    ap.add_argument("--board-poll", type=float, default=0.0, metavar="S",
+                    help="also re-read the board every S seconds. Off by default: a release "
+                         "covers every change the arm makes, so a timer only helps when "
+                         "blocks are moved by hand. Each read costs an API call.")
     ap.add_argument("--actual", action="store_true",
                     help="teleop: also read true joint positions (an extra bus read at 5 Hz; "
                          "by default the published pose is the command actually sent, which "
@@ -118,13 +163,13 @@ def main():
     args = ap.parse_args()
 
     bus, inbox, effects = StateBus(), Inbox(), EffectStack()
-    tracker = BlockTracker(cube_mm=CUBE_SIZE_MM or 48.0)
+    board = Board(cube_mm=CUBE_SIZE_MM or 48.0)
     stop = threading.Event()
 
     ws = Workspace()
     sp = space(ws)
 
-    producer = start_producer(args, bus, tracker, inbox, effects, stop)
+    producer = start_producer(args, bus, board, inbox, effects, stop)
     producer.start()
     threading.Thread(target=kill_key, args=(effects, stop), name="killkey", daemon=True).start()
 
@@ -135,8 +180,20 @@ def main():
     print(f"  viewer      http://localhost:{args.viewer_port}")
     print(f"  debug state http://localhost:{args.viewer_port}/state")
     print(f"  state rate  {args.state_hz:g} Hz    arm rate {args.arm_hz:g} Hz")
+    if args.source == "mock":
+        print("  board       faked by the mock, on the same release trigger")
+    elif args.vision:
+        print(f"  board       {board_mod.model_name()}, "
+              f"{board_mod.RELEASE_DELAY_S:g} s after the gripper opens"
+              + (f", and every {args.board_poll:g} s" if args.board_poll else ""))
+        if not board_mod.available():
+            print("              !! no OPENAI_API_KEY: put it in the environment or in a "
+                  ".env at the repo root,\n"
+                  "                 or the board will stay empty.")
+    else:
+        print("  board       not read (no --vision), so no blocks are published")
     print(f"  effects     {', '.join(sorted(effects.LIMITS))}")
-    print("  space = clear effects,  q or Ctrl-C = quit\n")
+    print("  space = clear effects,  v = read the board now,  q or Ctrl-C = quit\n")
 
     if args.open:
         webbrowser.open(f"http://localhost:{args.viewer_port}")
@@ -148,7 +205,7 @@ def main():
         except NotImplementedError:
             pass                        # Windows: KeyboardInterrupt below handles it
         await server.serve(bus, inbox, effects, sp, args.source, stop,
-                           ws_port=args.ws_port, hz=args.state_hz)
+                           board=board_facts(args), ws_port=args.ws_port, hz=args.state_hz)
 
     try:
         asyncio.run(run())

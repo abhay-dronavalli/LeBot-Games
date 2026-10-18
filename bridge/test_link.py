@@ -19,11 +19,12 @@ import websockets
 from . import protocol
 
 
-# Long enough to cover a whole mock cycle. The mock picks a block up at about t=4 s and sets
-# it down again at about t=17 s, so a short window can connect during a phase where nothing is
-# held or stacked and then fail for no reason. The sampling loop stops as soon as it has seen
-# both, so a passing run is still quick.
-SAMPLE_S = 24.0
+# Long enough to cover a whole mock cycle twice over. The board is only read a couple of
+# seconds after the fake gripper opens, so a short window can connect between releases and see
+# the starting board and nothing else - which would fail the stacking check for no reason. The
+# sampling loop stops as soon as it has seen everything it is looking for, so a passing run is
+# still quick.
+SAMPLE_S = 40.0
 
 
 async def main(url=f"ws://localhost:{protocol.WS_PORT}", seconds=SAMPLE_S):
@@ -47,13 +48,19 @@ async def main(url=f"ws://localhost:{protocol.WS_PORT}", seconds=SAMPLE_S):
         check("hello arrives first", hello.get("t") == "hello", hello.get("t"))
         check("protocol version matches", hello.get("v") == protocol.VERSION, str(hello.get("v")))
         check("hello carries sheet geometry", bool(hello.get("space", {}).get("sheet")))
+        board = hello.get("board", {})
+        check("hello says how the board is read", bool(board.get("reader")),
+              f"{board.get('reader')} / {board.get('trigger')}")
+        check("hello lists the cells", len(board.get("cells", [])) >= 9,
+              f"{len(board.get('cells', []))} cells")
         check("hello lists the effects", len(hello.get("effects", [])) >= 6,
               ", ".join(hello.get("effects", [])))
         space = hello.get("space", {})
         print(f"        source={hello.get('source')} cube={space.get('cube_mm')} mm "
               f"arm_base={space.get('arm_base_mm')} mm")
 
-        seqs, gaps, held_seen, levels_seen, ids_seen = [], [], False, set(), set()
+        seqs, gaps, levels_seen, ids_seen = [], [], set(), set()
+        cells_seen, reads_seen, held_seen = set(), set(), False
         points_len = set()
         last_t = None
         t0 = time.perf_counter()
@@ -61,8 +68,10 @@ async def main(url=f"ws://localhost:{protocol.WS_PORT}", seconds=SAMPLE_S):
         effect_seen = False
 
         while time.perf_counter() - t0 < seconds:
-            # Stop as soon as everything interesting has been observed.
-            if held_seen and max(levels_seen, default=0) > 0 and effect_seen and len(seqs) > 30:
+            # Stop as soon as everything interesting has been observed. Two board reads is
+            # the interesting number: one proves the board arrives, two prove it updates.
+            if (max(levels_seen, default=0) > 0 and len(reads_seen) >= 2
+                    and effect_seen and len(seqs) > 30):
                 break
             raw = await asyncio.wait_for(conn.recv(), timeout=4.0)
             f = json.loads(raw)
@@ -79,9 +88,13 @@ async def main(url=f"ws://localhost:{protocol.WS_PORT}", seconds=SAMPLE_S):
             arm = f.get("arm")
             if arm:
                 points_len.add(len(arm.get("points", [])))
+            note = (f.get("notes") or {}).get("board") or {}
+            if note.get("reads"):
+                reads_seen.add(note["reads"])
             for b in f.get("blocks", []):
                 ids_seen.add(b["id"])
                 levels_seen.add(b["level"])
+                cells_seen.add(b.get("cell"))
                 if b["held"]:
                     held_seen = True
 
@@ -103,9 +116,17 @@ async def main(url=f"ws://localhost:{protocol.WS_PORT}", seconds=SAMPLE_S):
             check("no frame gap over 150 ms", worst < 150, f"worst {worst:.0f} ms")
         check("arm is a 6-point stick figure", points_len == {6}, str(points_len))
         check("blocks have stable ids", ids_seen == {1, 2}, str(sorted(ids_seen)))
-        check("a held block was observed", held_seen)
+        check("every block names a grid cell", all(cells_seen) and len(cells_seen) >= 2,
+              ", ".join(sorted(c for c in cells_seen if c)))
+        # Nothing is tracked while the arm carries a block, so `held` is never true any more.
+        # It is still on the wire because roblox/BlockSync.lua reads it; if it ever goes true
+        # something has grown a tracker again.
+        check("no block is ever reported held", not held_seen)
         check("a stacked block was observed (level > 0)", max(levels_seen, default=0) > 0,
               f"levels {sorted(levels_seen)}")
+        check("the board was read more than once", len(reads_seen) >= 2,
+              f"reads {sorted(reads_seen)}")
+        check("the board reports itself healthy", note.get("state") == "ok", str(note.get("state")))
         check("the event came back as an active effect", effect_seen)
 
         await conn.send(json.dumps({"t": "event", "name": "nonsense"}))

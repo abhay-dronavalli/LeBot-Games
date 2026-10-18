@@ -1,17 +1,20 @@
 """The whole rig, faked, so Roblox work never waits on hardware.
 
 This is deliberately not sine waves on invented link lengths. It drives the *real* inverse
-kinematics and the *real* fitted calibration through a scripted pick, carry and stack, and it
-hides a block from the fake camera exactly when the jaw closes over it. So the mock exercises
-every path the live rig does, including the two that are easy to get wrong and impossible to
-test by hand: held-block tracking and stack levels.
+kinematics and the *real* fitted calibration through a scripted pick, carry and stack.
 
-What you see in the viewer is therefore the crane lift, before the arm is ever plugged in.
+It also stands in for the vision model. `bridge.board.read_board` needs a camera and an
+OpenAI key; the mock has neither, so it answers the same question from what it already knows
+- which cell each fake block is in - and hands the result to the same `Board`. So the trigger,
+the id matching, the stacking and everything downstream of them run here exactly as they do
+live, with no key and no camera. Only the model call is missing.
+
+The read is triggered the same way too: two seconds after the fake jaw opens.
 
     python -m bridge.main --source mock
 
-The cycle: pick the red block out of cell A1, carry it 150 mm up and across the sheet, stack
-it on the teal block in C3, then come back and put it where it started. Repeat.
+The cycle: pick the red block out of cell A1, carry it across the sheet, stack it on the teal
+block in C4, then come back and put it where it started. Repeat.
 """
 
 import json
@@ -23,11 +26,13 @@ import numpy as np
 from robot.perception.config import SHEET_SPEC
 from robot.workspace import Workspace
 
+from .. import board as board_mod
 from . import arm as arm_mod
 from .arm import arm_frame
 
 GRIPPER_OPEN = 50.0
-GRIPPER_CLOSED = 20.0      # on a 48 mm cube; see world.GRIP_CLOSED_PCT
+GRIPPER_CLOSED = 20.0      # on a 48 mm cube. The release trigger learns the open/closed
+                           # span from these two at runtime; see board.ReleaseTrigger.
 CARRY_H = 150.0
 HOVER_H = 110.0
 GRASP_H = 14.0
@@ -54,8 +59,9 @@ def cell(name):
 
 
 # Pick from the near-left cell and stack on the far-right one, whatever the grid's shape.
+# The labels in SCRIPT below name those two cells on the 3x4 sheet (A1 and C4).
 A1 = cell(f"{_ROWS[0]}1")
-C3 = cell(f"{_ROWS[-1]}{len(_GRID['cols'])}")
+STACK = cell(f"{_ROWS[-1]}{len(_GRID['cols'])}")
 PARK = (_SPEC["sheet"]["w_mm"] / 2, _SPEC["sheet"]["h_mm"] / 2) if "sheet" in _SPEC \
     else (115.0, 140.0)
 
@@ -67,21 +73,21 @@ SCRIPT = [
     ("descend",     A1,   GRASP_H, GRIPPER_OPEN,    1.0, None),
     ("close jaw",   A1,   GRASP_H, GRIPPER_CLOSED,  0.6, ("grab",)),
     ("lift",        A1,   CARRY_H, GRIPPER_CLOSED,  1.0, None),
-    ("carry to C3", C3,   CARRY_H, GRIPPER_CLOSED,  2.5, None),
-    ("lower on C3", C3,   STACK_H, GRIPPER_CLOSED,  1.0, None),
-    ("let go",      C3,   STACK_H, GRIPPER_OPEN,    0.6, ("release",)),
-    ("retreat",     C3,   CARRY_H, GRIPPER_OPEN,    1.0, None),
+    ("carry to C4", STACK,   CARRY_H, GRIPPER_CLOSED,  2.5, None),
+    ("lower on C4", STACK,   STACK_H, GRIPPER_CLOSED,  1.0, None),
+    ("let go",      STACK,   STACK_H, GRIPPER_OPEN,    0.6, ("release",)),
+    ("retreat",     STACK,   CARRY_H, GRIPPER_OPEN,    1.0, None),
     # ...and put it back, so the loop is a closed cycle and the demo can run unattended.
-    ("re-descend",  C3,   STACK_H, GRIPPER_OPEN,    1.2, None),
-    ("re-grip",     C3,   STACK_H, GRIPPER_CLOSED,  0.6, ("grab",)),
-    ("lift again",  C3,   CARRY_H, GRIPPER_CLOSED,  1.0, None),
+    ("re-descend",  STACK,   STACK_H, GRIPPER_OPEN,    1.2, None),
+    ("re-grip",     STACK,   STACK_H, GRIPPER_CLOSED,  0.6, ("grab",)),
+    ("lift again",  STACK,   CARRY_H, GRIPPER_CLOSED,  1.0, None),
     ("carry to A1", A1,   CARRY_H, GRIPPER_CLOSED,  2.5, None),
     ("lower on A1", A1,   GRASP_H + 4, GRIPPER_CLOSED, 1.0, None),
     ("drop",        A1,   GRASP_H + 4, GRIPPER_OPEN, 0.6, ("release",)),
     ("clear",       A1,   CARRY_H, GRIPPER_OPEN,    1.0, None),
 ]
 
-STACK_XY_MM = 35.0         # matches world.STACK_XY_MM
+STACK_XY_MM = 35.0         # within this of a block's xy is the same stack
 
 
 def _ease(u):
@@ -95,7 +101,7 @@ class MockRig:
     def __init__(self, blocks=None):
         self.ws = Workspace()
         self.synthetic = self._place_sheet_if_unreachable()
-        self.blocks = dict(blocks or {"red_cube": list(A1), "teal_cube": list(C3)})
+        self.blocks = dict(blocks or {"red_cube": list(A1), "teal_cube": list(STACK)})
         # Later in the list means resting on top. The fake camera only reports the top of a
         # stack, which is what an overhead camera actually sees.
         self.order = list(self.blocks)
@@ -186,7 +192,7 @@ class MockRig:
         return reading, label, None
 
     def step(self, t, effects=None, t_wall=None):
-        """Advance the fake world. Returns (arm frame, fake detections).
+        """Advance the fake world. Returns the arm frame.
 
         `effects` bends the scripted pose exactly as it bends the leader's command on real
         hardware, so an earthquake sent from the viewer shakes the mock arm.
@@ -213,7 +219,7 @@ class MockRig:
         if self.grabbed is not None:
             self.blocks[self.grabbed] = [tip["x"], tip["y"]]
 
-        return frame, self._detections()
+        return frame
 
     def _topmost_near(self, x, y):
         for name in reversed(self.order):
@@ -222,28 +228,43 @@ class MockRig:
                 return name
         return None
 
-    def _detections(self):
-        """What the fake overhead camera reports: every block except the one in the jaw, and
-        only the top of each stack. Those two omissions are the whole reason world.py exists,
-        so the mock has to reproduce them or it tests nothing."""
-        out = []
-        for name in self.order:
+    def board_reading(self):
+        """What the vision model would say about this fake board.
+
+        Same shape as `bridge.board.read_board`: one entry per block, with its cell and its
+        level in that cell's stack. The two things the real model does are reproduced here,
+        because they are what everything downstream has to cope with:
+
+          * **A block in the jaw is not on the board.** It is in the air and has no cell, so
+            it is simply left out - and `Board` keeps reporting it in the cell it was last
+            read in until a later read moves it. That is the whole of the carry behaviour now.
+          * **A buried block's colour is unknown.** An overhead view cannot see the colour of
+            a cube with another cube on top of it, so the lower entry says so and `Board`
+            fills it in from memory.
+        """
+        stacks = {}
+        for name in self.order:                       # self.order runs bottom to top
             if name == self.grabbed:
-                continue                                  # the jaw covers it
-            x, y = self.blocks[name]
-            if any(other != name and other != self.grabbed
-                   and self.order.index(other) > self.order.index(name)
-                   and math.hypot(self.blocks[other][0] - x, self.blocks[other][1] - y) <= STACK_XY_MM
-                   for other in self.order):
-                continue                                  # a block above it hides it
-            out.append({"name": name, "center_mm": [round(x, 1), round(y, 1)],
-                        "yaw_deg": 0.0, "score": 0.9})
+                continue                              # in the air: not on the board
+            cell = board_mod.cell_of(*self.blocks[name])
+            if cell is None:
+                continue                              # pushed off the printed grid
+            stacks.setdefault(cell, []).append(name)
+
+        out = []
+        for cell, stack in stacks.items():
+            for level, name in enumerate(stack):
+                buried = level < len(stack) - 1
+                out.append({"cell": cell, "level": level,
+                            "color": board_mod.UNKNOWN_COLOR if buried
+                                     else name.split("_cube")[0].replace("_", " ")})
         return out
 
 
-def run(bus, tracker, inbox, effects, stop, hz=30.0):
-    """Producer thread: fake arm and fake camera into the bus. Same signature as teleop.run."""
+def run(bus, board, inbox, effects, stop, hz=30.0):
+    """Producer thread: fake arm and fake board reads into the bus. Mirrors teleop.run."""
     rig = MockRig()
+    trigger = board_mod.ReleaseTrigger()
     print(f"mock: {len(SCRIPT)} keyframes solved, cycle is {rig.total:.1f} s")
     if rig.synthetic:
         print("mock: the real sheet-to-base calibration cannot reach this grid, so the "
@@ -265,10 +286,26 @@ def run(bus, tracker, inbox, effects, stop, hz=30.0):
         # visibly shakes, lags, mirrors and freezes. Without this the whole Roblox-to-robot
         # direction would be untestable until the hardware is plugged in, and `apply` is
         # also what expires a finished effect.
-        arm, detections = rig.step(now, effects=effects, t_wall=loop)
+        arm = rig.step(now, effects=effects, t_wall=loop)
         bus.publish_arm(arm)
-        bus.publish_blocks(tracker.update(detections, arm, time.time()))
         bus.note("script", rig.label)
+
+        # The board is read on exactly the same trigger as the live rig: the jaw opens, and
+        # two seconds later somebody looks at the sheet. Here "somebody" is the rig itself
+        # rather than a vision model, but the Board, the ids and the stacking are the real
+        # ones. The first read is requested at startup so the board is never empty.
+        wall = time.time()
+        trigger.feed(arm["joints"].get("gripper"), wall)
+        if board.reads == 0:
+            trigger.request(wall)
+        if trigger.due(wall):
+            blocks = board.apply(rig.board_reading(), wall)
+            bus.note("board", {"state": "ok", "model": "mock", "reads": board.reads,
+                               "cells": board.summary(), "since_read": 0.0,
+                               "trigger": f"{trigger.delay_s:g} s after the gripper opens"})
+            print(f"  mock board: read {board.reads} -> {len(blocks)} block(s): "
+                  f"{board.summary()}")
+        bus.publish_blocks(board.blocks())
 
         sleep = period - (time.perf_counter() - loop)
         if sleep > 0:
