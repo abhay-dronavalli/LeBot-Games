@@ -511,7 +511,7 @@ if cab then
 	check("full rail: no 5th ticket, the arrival timer is paused", railIds() .. " " .. tostring(g.arrivalIn == paused), "1,2,3,4 true")
 	check("the shift timer keeps running meanwhile", math.abs((timeBefore - g.timeLeft) - 20) < 0.01, true)
 
-	section("16b. cycling the ticket stack (Q / E and the < > arrows send TicketCycle -1 / +1)")
+	section("16b. cycling the ticket stack (Q / R and the < > arrows send TicketCycle -1 / +1)")
 	local TicketStack = require(pm.TicketStack)
 	local function cycleRun(dirs)
 		local seen = {}
@@ -521,7 +521,7 @@ if cab then
 		end
 		return table.concat(seen, " ")
 	end
-	check("forward (E / >) from 1 wraps around: 2 3 4 1", cycleRun({ 1, 1, 1, 1 }), "2 3 4 1")
+	check("forward (R / >) from 1 wraps around: 2 3 4 1", cycleRun({ 1, 1, 1, 1 }), "2 3 4 1")
 	check("back (Q / <) from 1 wraps around: 4 3 2 1", cycleRun({ -1, -1, -1, -1 }), "4 3 2 1")
 	check("the rail order never changes (oldest first)", railIds(), "1,2,3,4")
 	g:cycleTicket(tester, 1) -- active 2
@@ -533,14 +533,17 @@ if cab then
 	g:cycleTicket(tester, -1) -- back to 1
 	check("bad directions are rejected", tostring(g:cycleTicket(tester, 2)) .. " " .. tostring(g:cycleTicket(tester, 0))
 		.. " " .. tostring(g:cycleTicket(tester, "next")), "false false false")
-	check("Q / E and the arrows map to the same -1 / +1", TicketStack.KEYS[Enum.KeyCode.Q] .. " " .. TicketStack.KEYS[Enum.KeyCode.E]
-		.. " " .. TicketStack.ARROWS.Prev .. " " .. TicketStack.ARROWS.Next, "-1 1 -1 1")
+	check("Q / R and the arrows map to the same -1 / +1; E (the ProximityPrompt key) does nothing",
+		TicketStack.KEYS[Enum.KeyCode.Q] .. " " .. TicketStack.KEYS[Enum.KeyCode.R] .. " " .. tostring(TicketStack.KEYS[Enum.KeyCode.E])
+		.. " " .. TicketStack.ARROWS.Prev .. " " .. TicketStack.ARROWS.Next, "-1 1 nil -1 1")
 	local hudSource = game:GetService("StarterGui").PatternHud:FindFirstChildWhichIsA("LocalScript").Source
-	check("the HUD wires Q / E and both arrows to one cycle() that fires TicketCycle",
+	check("the HUD wires Q / R and both arrows to one cycle() that fires TicketCycle, with Q / R key hints",
 		string.find(hudSource, "TicketStack.KEYS[input.KeyCode]", 1, true) ~= nil
 		and string.find(hudSource, "cycle(TicketStack.ARROWS.Prev)", 1, true) ~= nil
 		and string.find(hudSource, "cycle(TicketStack.ARROWS.Next)", 1, true) ~= nil
 		and string.find(hudSource, "ticketCycle:FireServer(dir)", 1, true) ~= nil
+		and string.find(hudSource, 'arrow("Prev", "<", "Q"', 1, true) ~= nil
+		and string.find(hudSource, 'arrow("Next", ">", "R"', 1, true) ~= nil
 		and string.find(hudSource, "TicketPick", 1, true) == nil, true)
 	check("badge: waiting = tickets - 1, '+3 waiting', hidden at 0, at most 3 edges",
 		TicketStack.waitingCount(#sent[#sent].tickets) .. " | " .. TicketStack.badgeText(3) .. " | " .. tostring(TicketStack.badgeText(0))
@@ -713,6 +716,7 @@ if cab then
 
 	section("19. vanish during a shift: sticky rule, blocked compare, white outline, active ticket's cells kept")
 	Config.events = { "vanish" }
+	Config.vanishCount = { 2, 2 } -- always two cells, so this section runs the same checks every time
 	Config.debugEventEvery = 4
 	fakeBlocks = {}
 	startEasy()
@@ -727,7 +731,7 @@ if cab then
 	local vanishedNow = sent[#sent].vanishedCells
 	local onTarget = 0
 	for _, c in ipairs(vanishedNow) do if active.target[c] then onTarget += 1 end end
-	check("1-2 cells vanished, none in the ACTIVE ticket's pattern", #vanishedNow >= 1 and #vanishedNow <= 2 and onTarget == 0, true)
+	check("2 cells vanished (vanishCount forced to 2), none in the ACTIVE ticket's pattern", #vanishedNow .. " " .. onTarget, "2 0")
 	local v1, v2 = vanishedNow[1], vanishedNow[2]
 	check("vanished square transparent, the dark groove layer shows under it", board.LiveBoard[v1].Transparency == 1
 		and board.LiveBoard.Base.Color.R < 0.15, true)
@@ -740,9 +744,7 @@ if cab then
 	check("white outline on the blocked cell's block", board.LiveBoard.Blocks[v1].ProblemHighlight.Visible, true)
 	steps(20, 0.25) -- 11.0 s: the 6 s vanish timer ran out at 10 s
 	check("timer over, block still there: cell stays vanished", board.LiveBoard[v1].Transparency, 1)
-	if v2 then
-		check("the other vanished cell (no block) came back", board.LiveBoard[v2].Transparency, 0)
-	end
+	check("the other vanished cell (no block) came back", v2 and board.LiveBoard[v2].Transparency, 0)
 	check("ticket still not completed", sent[#sent].completedCount, 0)
 	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal", C3 = "yellow" })
 	g:step(0.25)
@@ -752,6 +754,7 @@ if cab then
 	check("vanish never calls Core.Events", #fired, 0)
 
 	section("20. scheduler: only during the Shift, never the same event twice in a row")
+	Config.vanishCount = { 1, 2 }
 	Config.events = { "vanish", "tremor", "inverted" }
 	Config.debugEventEvery = 3
 	local baseBefore = board.LiveBoard.Base.CFrame

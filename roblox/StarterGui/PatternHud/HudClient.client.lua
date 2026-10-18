@@ -3,13 +3,13 @@
 --   - Ticket stack (bottom left, small): only the ACTIVE ticket is face up (ticket #, points, mini 4 x 3
 --     grid with row A on top and columns 1-4 left to right, like the board seen from the row C side; a
 --     stacked cell is split, top color over bottom, with a small "2" badge; age). Waiting tickets peek out
---     behind it as a fanned pile (up to 3 edges) with a "+N waiting" badge. Q / E or the < > arrows cycle
+--     behind it as a fanned pile (up to 3 edges) with a "+N waiting" badge. Q / R or the < > arrows cycle
 --     the active ticket (TicketCycle remote; PatternMatch.TicketStack has the shared rules), with a quick
 --     swap: the old card slides behind the pile, the next slides to the front. A new ticket flies in and
 --     tucks onto the back of the pile (badge pulse, "NEW TICKET" chip for 1 s) without changing the active
 --     ticket. A completed card gets an "ORDER UP!" stamp and flies up and off (the big ORDER UP text is in
 --     3D above the boards). In Hard mode's hidden phase the card's squares go gray, layout kept. About
---     220 x 200 px at 1080p, scaled with the screen height.
+--     350 x 320 px at 1080p, scaled with the screen height (never below 0.8 of the design size).
 --   - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets done,
 --     the Hard reveal phase, the event banner and the game message.
 --   - Results screen at the end of a shift: tickets completed, total points, one line per ticket.
@@ -41,7 +41,9 @@ local CARD_W, CARD_H = 100, 110    -- the face-up card: a bit over half the old 
 local ARROW_W = 24
 local EDGE_STEP = 5                -- each waiting card peeks out this far up and to the right
 local SWAP_REACH = UDim2.fromOffset(48, -14) -- a swapping card slides this far out from behind the pile
-local CELL, CELL_GAP = 15, 2
+local CELL, CELL_GAP = 16, 2
+local STACK_BOOST = 1.6           -- the whole stack 1.6x the design size: about 350 x 320 at 1080p
+local STACK_MIN_SCALE = 0.8       -- readable floor for small windows
 local PAPER = Color3.fromRGB(252, 247, 234)
 local PAPER_EDGE = Color3.fromRGB(214, 202, 178)
 local INK = Color3.fromRGB(46, 36, 28)
@@ -87,7 +89,8 @@ end
 
 -- Ticket stack ----------------------------------------------------------------------------------------
 -- One small stack in the bottom left. Sizes are design pixels at 1080p; a UIScale on the stack follows the
--- screen height, so it stays about 220 x 200 at 1080p and scales with the screen.
+-- screen height times STACK_BOOST, so it is about 350 x 320 at 1080p, and never below STACK_MIN_SCALE so it
+-- stays readable in small windows (Studio's viewport).
 
 local stack = Instance.new("Frame")
 stack.Name = "Stack"
@@ -102,7 +105,7 @@ stackScale.Parent = stack
 local function fitToScreen()
 	local camera = workspace.CurrentCamera
 	local height = camera and camera.ViewportSize.Y or 1080
-	stackScale.Scale = math.clamp(height / 1080, 0.5, 2)
+	stackScale.Scale = math.clamp(STACK_BOOST * height / 1080, STACK_MIN_SCALE, 3)
 end
 fitToScreen()
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(fitToScreen)
@@ -153,7 +156,7 @@ local function arrow(name, glyph, key, x)
 	return button
 end
 local prevButton = arrow("Prev", "<", "Q", 0)
-local nextButton = arrow("Next", ">", "E", ARROW_W + 6 + CARD_W + TicketStack.MAX_EDGES * EDGE_STEP + 4)
+local nextButton = arrow("Next", ">", "R", ARROW_W + 6 + CARD_W + TicketStack.MAX_EDGES * EDGE_STEP + 4)
 
 local badge = text(stack, "Waiting", { Font = Enum.Font.GothamBlack, TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
 	BackgroundTransparency = 0, BackgroundColor3 = Color3.fromRGB(214, 98, 24), AnchorPoint = Vector2.new(1, 1),
@@ -176,7 +179,7 @@ local lastOrderSeq = nil -- seq of the last ORDER UP shown; set from the first p
 local chipToken = 0
 local inShiftNow = false
 
--- The face-up card: ticket number, points, mini 4 x 3 grid, age. Not clickable; cycling is Q / E or < >.
+-- The face-up card: ticket number, points, mini 4 x 3 grid, age. Not clickable; cycling is Q / R or < >.
 local function newCard(ticket)
 	local frame = Instance.new("Frame")
 	frame.Name = "Ticket" .. ticket.id
@@ -192,11 +195,11 @@ local function newCard(ticket)
 	local scale = Instance.new("UIScale")
 	scale.Parent = frame
 
-	text(frame, "Number", { Text = "#" .. ticket.id, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = INK,
-		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(7, 5), Size = UDim2.fromOffset(40, 14), ZIndex = 13 })
-	local points = text(frame, "Points", { Text = ticket.points .. " pts", Font = Enum.Font.GothamBlack, TextSize = 12,
+	text(frame, "Number", { Text = "#" .. ticket.id, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = INK,
+		TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(6, 4), Size = UDim2.fromOffset(36, 16), ZIndex = 13 })
+	local points = text(frame, "Points", { Text = ticket.points .. " pts", Font = Enum.Font.GothamBlack, TextSize = 14,
 		TextColor3 = Color3.fromRGB(196, 92, 20), TextXAlignment = Enum.TextXAlignment.Right,
-		Position = UDim2.new(1, -49, 0, 5), Size = UDim2.fromOffset(42, 14), ZIndex = 13 })
+		Position = UDim2.new(1, -58, 0, 4), Size = UDim2.fromOffset(52, 16), ZIndex = 13 })
 
 	local gridW = Config.gridCols * CELL + (Config.gridCols - 1) * CELL_GAP
 	local gridH = Config.gridRows * CELL + (Config.gridRows - 1) * CELL_GAP

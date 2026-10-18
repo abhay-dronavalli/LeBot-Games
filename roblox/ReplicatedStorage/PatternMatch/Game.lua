@@ -357,7 +357,7 @@ function Game:selectTicket(player, id)
 	return false
 end
 
--- A player cycled the ticket stack (TicketCycle remote: Q / E keys or the < > arrows): dir -1 or +1
+-- A player cycled the ticket stack (TicketCycle remote: Q / R keys or the < > arrows): dir -1 or +1
 -- through the rail, oldest first, wrapping around. Returns true if the active ticket changed.
 function Game:cycleTicket(player, dir)
 	if self.state ~= "Shift" or (dir ~= 1 and dir ~= -1) or #self.tickets < 2 then

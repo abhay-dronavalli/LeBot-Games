@@ -3,12 +3,13 @@
 -- and the client (StarterGui.PatternHud), so both agree:
 --   - the rail order stays oldest first; the ACTIVE ticket is just the one shown face up on top;
 --   - cycling moves the active ticket one step forward or back through that order, wrapping around;
---   - Q cycles back, E cycles forward, and so do the < and > arrow buttons beside the stack;
+--   - Q cycles back, R cycles forward (not E: that is the ProximityPrompt key), and so do the < and >
+--     arrow buttons beside the stack;
 --   - the "+N waiting" badge counts every ticket but the active one; at most 3 waiting cards peek out.
 
 local TicketStack = {}
 
-TicketStack.KEYS = { [Enum.KeyCode.Q] = -1, [Enum.KeyCode.E] = 1 }
+TicketStack.KEYS = { [Enum.KeyCode.Q] = -1, [Enum.KeyCode.R] = 1 }
 TicketStack.ARROWS = { Prev = -1, Next = 1 }
 TicketStack.MAX_EDGES = 3
 
