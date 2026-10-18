@@ -449,10 +449,14 @@ local function aerialCFrame(): CFrame?
 		return nil
 	end
 	local centre = floor.Position
-	local height = math.max(floor.Size.X, floor.Size.Z) * 1.15
+	-- Fractions of the floor's own size, not fixed studs, so the framing survives a change to
+	-- ARENA_SCALE. Both live in ArenaConfig - turn AERIAL_HEIGHT_FRAC down to come in closer.
+	local span = math.max(floor.Size.X, floor.Size.Z)
+	local height = span * ArenaConfig.AERIAL_HEIGHT_FRAC
 	-- Pulled back toward the far edge and tilted, not straight down: a pure top-down view hides
 	-- how high the head is, which is the one thing the operator needs to judge.
-	return CFrame.lookAt(centre + Vector3.new(0, height, floor.Size.Z * 0.45), centre)
+	local back = floor.Size.Z * ArenaConfig.AERIAL_BACK_FRAC
+	return CFrame.lookAt(centre + Vector3.new(0, height, back), centre)
 end
 
 local function setAerial(on: boolean)
@@ -481,6 +485,7 @@ local function setAerial(on: boolean)
 
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CFrame = view
+		camera.FieldOfView = ArenaConfig.AERIAL_FOV
 
 		for _, p in Players:GetPlayers() do
 			if p.Character then
@@ -519,6 +524,7 @@ local function setAerial(on: boolean)
 		-- Hand the camera back. Without re-pointing CameraSubject the player is left staring at
 		-- nothing when they toggle out after respawning.
 		camera.CameraType = Enum.CameraType.Custom
+		camera.FieldOfView = 70          -- the engine default, so the player view is unchanged
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if hum then

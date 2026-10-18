@@ -71,6 +71,26 @@ StarterPlayer
 If Studio is on a different machine from the robot, change `URL` in `ArenaMain` from `localhost`
 to the robot laptop's LAN IP.
 
+## Dialling the look
+
+Three knobs in `ArenaConfig.lua`, all of which were wrong on the first pass:
+
+- **`ARENA_SCALE` / `ARENA_WIDTH_SCALE`** — how much of the sheet is actually played on. The floor
+  is anchored at the dragon's end and shrinks *toward* it, so the pedestal stays against the cliff
+  and the far edge comes closer. Shrinking is always safe: a smaller floor is more reachable, never
+  less, so it cannot create a spot the dragon cannot hit. Growing past 1.0 is the dangerous
+  direction and is capped.
+- **`AERIAL_HEIGHT_FRAC` / `AERIAL_BACK_FRAC` / `AERIAL_FOV`** — the operator camera, as fractions
+  of the floor's own size so the framing survives a change to `ARENA_SCALE`. Lower the height to
+  come in closer.
+- **`LIGHTING`** — brightness, exposure, atmosphere density, bloom. The style guide asks for a dark
+  arena lit almost entirely by lava; these decide how far to take that. At the guide's literal
+  values the floor read as a black hole and you could not tell where you were standing, so the
+  environment tones in `Theme.Color` are lifted from its swatches too. The brightness *order* in
+  section 3 is unchanged - the floor is still the dimmest thing on screen.
+
+Regenerate the place after changing any of these: `python roblox/arena/build_place.py`.
+
 ## The aerial view
 
 **Press `V`.** Any client toggles between the normal player camera and the aerial operator view —

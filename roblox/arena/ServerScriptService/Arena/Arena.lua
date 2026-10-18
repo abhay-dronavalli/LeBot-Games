@@ -80,13 +80,29 @@ function Arena.floorFromSheet(self, space: any): any
 	local h = (space and space.sheet and space.sheet.h_mm) or 215.9
 	local base = (space and space.arm_base_mm) or { w / 2, -44.5 }
 	local m = ArenaConfig.ARENA_MARGIN_MM
+
+	-- Capped at 1. Shrinking the floor is safe - a smaller floor is more reachable - but growing it
+	-- past the sheet would hand players ground the arm cannot cover, which is the one thing the
+	-- style guide says must never happen.
+	local depthScale = math.clamp(ArenaConfig.ARENA_SCALE or 1, 0.15, 1)
+	local widthScale = math.clamp(ArenaConfig.ARENA_WIDTH_SCALE or 1, 0.15, 1)
+
+	-- The arm base is at a negative y (behind the top edge of the paper), so the floor has to reach
+	-- back past it for the pedestal to stand on something. That back edge is the anchor: the floor
+	-- shrinks *toward the dragon*, keeping it against the cliff while the far edge comes closer,
+	-- rather than shrinking toward the middle and leaving the pedestal floating in the lava.
+	local y0 = math.min(-m, base[2] - m)
+	local y1 = y0 + ((h + m) - y0) * depthScale
+
+	-- Across the sheet there is no anchor to respect, so this shrinks about the centre.
+	local cx = w / 2
+	local halfW = (w / 2 + m) * widthScale
+
 	return {
-		x0 = -m,
-		x1 = w + m,
-		-- The arm base is at a negative y (behind the top edge of the paper), so the floor has to
-		-- reach back past it for the pedestal to stand on something.
-		y0 = math.min(-m, base[2] - m),
-		y1 = h + m,
+		x0 = cx - halfW,
+		x1 = cx + halfW,
+		y0 = y0,
+		y1 = y1,
 		baseX = base[1],
 		baseY = base[2],
 		sheetW = w,
@@ -262,12 +278,14 @@ function Arena.applyLighting(self)
 	-- Technology is set in the Studio Properties panel, not from a script: Future needs a restart
 	-- of the lighting pass to take effect properly and scripting it mid-session gives a different
 	-- result than shipping it. See the arena README.
+	local L = ArenaConfig.LIGHTING
 	Lighting.ClockTime = 0
-	Lighting.Brightness = 1
+	Lighting.Brightness = L.Brightness
+	Lighting.ExposureCompensation = L.ExposureCompensation
 	Lighting.Ambient = Theme.Lighting.Ambient
 	Lighting.OutdoorAmbient = Theme.Lighting.OutdoorAmbient
-	Lighting.EnvironmentDiffuseScale = 0.3
-	Lighting.EnvironmentSpecularScale = 0.6
+	Lighting.EnvironmentDiffuseScale = L.EnvironmentDiffuseScale
+	Lighting.EnvironmentSpecularScale = L.EnvironmentSpecularScale
 	Lighting.GlobalShadows = true
 
 	local function ensure(class: string, name: string): Instance
@@ -281,23 +299,23 @@ function Arena.applyLighting(self)
 	end
 
 	local atm = ensure("Atmosphere", "ArenaAtmosphere") :: Atmosphere
-	atm.Density = 0.38
+	atm.Density = L.AtmosphereDensity
 	atm.Offset = 0.1
 	atm.Color = Theme.Lighting.AtmosphereTint
 	atm.Decay = Theme.Lighting.AtmosphereDecay
-	atm.Glare = 0.2
-	atm.Haze = 1.5
+	atm.Glare = L.AtmosphereGlare
+	atm.Haze = L.AtmosphereHaze
 
 	-- Neon has to actually glow, or the whole brightness order collapses: the hazards stop out-
 	-- ranking the dragon and the scene reads flat.
 	local bloom = ensure("BloomEffect", "ArenaBloom") :: BloomEffect
-	bloom.Intensity = 0.8
+	bloom.Intensity = L.BloomIntensity
 	bloom.Size = 28
-	bloom.Threshold = 1.4
+	bloom.Threshold = L.BloomThreshold
 
 	local cc = ensure("ColorCorrectionEffect", "ArenaGrade") :: ColorCorrectionEffect
-	cc.Contrast = 0.12
-	cc.Saturation = 0.08
+	cc.Contrast = L.Contrast
+	cc.Saturation = L.Saturation
 	cc.TintColor = Theme.Lighting.GradeTint
 
 	local sky = ensure("Sky", "ArenaSky") :: Sky

@@ -96,9 +96,19 @@ ArenaConfig.PART_BUDGET = 80          -- the whole dragon; boxes, wedges and cyl
 -- and every block the game knows about is on it. When the reach is logged, the outline replaces
 -- this rectangle and nothing else in the mode has to change - Arena.lua is the only file that
 -- knows the floor's shape.
-ArenaConfig.ARENA_MARGIN_MM = 40      -- floor extends this far past the sheet on all four sides
+ArenaConfig.ARENA_MARGIN_MM = 12      -- floor extends this far past the sheet, left/right/far
 ArenaConfig.LAVA_WIDTH_MM = 220       -- the lava moat ringing the floor
 ArenaConfig.CLIFF_HEIGHT = 90         -- studs, the back wall the pedestal is set against
+
+-- How much of the sheet to actually play on, 0..1. The floor is anchored at the dragon's end and
+-- shrinks toward it, so the pedestal stays against the back cliff and the far edge comes closer.
+--
+-- Shrinking is always safe in the direction that matters: a smaller floor is more reachable, never
+-- less, so it cannot create the thing the style guide forbids - a spot the dragon cannot hit.
+-- Growing it past 1.0 is the dangerous direction and is why this is capped in Arena.floorFromSheet.
+-- Turn it down if the arena feels empty or the dragon cannot cover the ground.
+ArenaConfig.ARENA_SCALE = 0.68
+ArenaConfig.ARENA_WIDTH_SCALE = 0.78  -- the same, across the sheet rather than away from the arm
 
 -- Round flow. The designer's numbers.
 ArenaConfig.ROUND_SECONDS = 120
@@ -129,6 +139,30 @@ ArenaConfig.EFFECT_REQUEST = {
 	freeze        = { intensity = 1.0, duration = 3 },
 	fog           = { intensity = 0.7, duration = 10 },
 	butterfingers = { intensity = 1.0, duration = 8 },
+}
+
+-- The aerial operator camera. Height and setback are fractions of the floor's own size, so they
+-- stay sensible when ARENA_SCALE changes. Lower HEIGHT to come in closer; raise BACK to sit
+-- further behind the dragon and see more of what is in front of it.
+ArenaConfig.AERIAL_HEIGHT_FRAC = 0.62
+ArenaConfig.AERIAL_BACK_FRAC = 0.38
+ArenaConfig.AERIAL_FOV = 55           -- degrees; lower zooms in without moving the camera
+
+-- Lighting levels, separate from the colours in Theme. The style guide asks for a dark arena lit
+-- almost entirely by lava, and these are the knobs for deciding how far to take that. Dark enough
+-- that the fire reads, bright enough to see the dragon's armour and where you are standing.
+ArenaConfig.LIGHTING = {
+	Brightness = 2.6,
+	ExposureCompensation = 0.35,
+	EnvironmentDiffuseScale = 0.55,
+	EnvironmentSpecularScale = 0.7,
+	AtmosphereDensity = 0.2,
+	AtmosphereHaze = 0.8,
+	AtmosphereGlare = 0.15,
+	BloomIntensity = 0.85,
+	BloomThreshold = 1.6,
+	Contrast = 0.08,
+	Saturation = 0.06,
 }
 
 -- Performance budget (style guide section 12). The effect modules check themselves against these.

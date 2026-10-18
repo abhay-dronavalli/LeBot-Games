@@ -20,10 +20,14 @@ local Theme = {}
 
 Theme.Color = {
 	-- Environment: dark, low saturation, never orange
-	Obsidian     = Color3.fromRGB(42, 34, 36),    -- arena floor
-	ObsidianDeep = Color3.fromRGB(20, 11, 13),    -- floor cracks, pits, crater centres
-	Basalt       = Color3.fromRGB(64, 38, 43),    -- pillars, walls, platforms, boulders
-	BasaltEdge   = Color3.fromRGB(96, 66, 68),    -- top bevels, so platform edges read
+	-- Lifted from the style guide's swatches. The scene is lit almost entirely by lava, so these
+	-- render far darker in game than they look here - at the guide's literal values the floor read
+	-- as a black hole and you could not tell where you were standing. The brightness *order* in
+	-- section 3 is what matters and is unchanged: these are still the dimmest things on screen.
+	Obsidian     = Color3.fromRGB(68, 56, 58),    -- arena floor
+	ObsidianDeep = Color3.fromRGB(34, 20, 22),    -- floor cracks, pits, crater centres
+	Basalt       = Color3.fromRGB(92, 58, 62),    -- pillars, walls, platforms, boulders
+	BasaltEdge   = Color3.fromRGB(132, 96, 97),   -- top bevels, so platform edges read
 
 	-- Heat: the brightest things on screen
 	Lava         = Color3.fromRGB(242, 98, 42),
@@ -60,8 +64,8 @@ Theme.Color = {
 -- "dark volcanic" scene quietly turns brown. Starting values from the style guide, section 4 -
 -- judge them in Play mode under the final lighting, not as swatches.
 Theme.Lighting = {
-	Ambient        = Color3.fromRGB(40, 20, 22),
-	OutdoorAmbient = Color3.fromRGB(60, 30, 30),
+	Ambient        = Color3.fromRGB(78, 52, 54),
+	OutdoorAmbient = Color3.fromRGB(104, 68, 66),
 	AtmosphereTint = Color3.fromRGB(120, 50, 40),
 	AtmosphereDecay = Color3.fromRGB(60, 20, 25),
 	GradeTint      = Color3.fromRGB(255, 240, 232),
