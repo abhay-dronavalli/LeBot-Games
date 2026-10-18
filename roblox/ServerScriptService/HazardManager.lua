@@ -605,3 +605,88 @@ BUILDERS.Mobs = function(i, folder, info, state)
 	end
 end
 
+-- ARROW TURRETS: wall dispensers fire volleys across the bay. Arrows physically die against
+-- any crate, so a placed block is real hard cover you can stand behind; filling both solve
+-- cells also shuts the turrets down.
+BUILDERS.ArrowTurrets = function(i, folder, info, state)
+	local z0 = bayZStart(i)
+	local turrets = {}
+
+	for _, side in ipairs({{x = -0.9, dir = 1}, {x = Config.BayWidth + 0.9, dir = -1}}) do
+		for _, row in ipairs({0, 2}) do
+			local z = z0 + row * CELL + CELL / 2
+			for _, y in ipairs({2.2, 4.8}) do
+				local t = newPart("Dispenser", Vector3.new(1.7, 1.7, 1.7),
+					Vector3.new(side.x, y, z), Color3.fromRGB(62, 60, 56),
+					Enum.Material.Slate, folder)
+				local eye = Instance.new("PointLight")
+				eye.Color = Color3.fromRGB(255, 150, 60)
+				eye.Range = 7
+				eye.Brightness = 1.2
+				eye.Parent = t
+				table.insert(turrets, {part = t, dir = side.dir, y = y, z = z})
+			end
+		end
+	end
+
+	local function crateBlocks(pos)
+		local bay = folder.Parent
+		for _, c in ipairs(bay:GetChildren()) do
+			if c.Name == "Crate" then
+				local b = c:FindFirstChild("Base")
+				if b and math.abs(b.Position.X - pos.X) < 2.6
+					and math.abs(b.Position.Z - pos.Z) < 2.6
+					and pos.Y < b.Position.Y + 2.5 then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	task.spawn(function()
+		while folder.Parent do
+			if not state.solved then
+				for _, t in ipairs(turrets) do
+					local arrow = newPart("Arrow", Vector3.new(2.4, 0.26, 0.26),
+						Vector3.new(t.part.Position.X + t.dir * 1.6, t.y, t.z),
+						Color3.fromRGB(205, 190, 165), Enum.Material.Wood, folder)
+					makeLethalPart(arrow)
+
+					task.spawn(function()
+						local travelled = 0
+						while arrow.Parent and travelled < Config.BayWidth + 4 do
+							arrow.CFrame = arrow.CFrame + Vector3.new(t.dir * 1.5, 0, 0)
+							travelled += 1.5
+							if crateBlocks(arrow.Position) then
+								break -- absorbed by cover
+							end
+							task.wait(0.03)
+						end
+						if arrow.Parent then
+							arrow:Destroy()
+						end
+					end)
+				end
+			end
+			task.wait(2.4)
+		end
+	end)
+
+	function state.onSolved()
+		for _, t in ipairs(turrets) do
+			t.part.Color = Color3.fromRGB(90, 88, 84)
+			for _, l in ipairs(t.part:GetChildren()) do
+				if l:IsA("PointLight") then
+					l.Enabled = false
+				end
+			end
+		end
+		for _, a in ipairs(folder:GetChildren()) do
+			if a.Name == "Arrow" then
+				a:Destroy()
+			end
+		end
+	end
+end
+
