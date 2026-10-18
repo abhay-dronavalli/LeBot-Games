@@ -2160,10 +2160,22 @@ local function resetBay(i)
 	if bay then
 		BlockSync.clearBay(bay)
 	end
-	return buildBay(i)
+	local st = buildBay(i)
+	-- tell the crate sources to forget this bay, or the next edit re-delivers what was here
+	RunControl.notifyBayReset(i)
+	return st
 end
 
 RunControl.rebuildBay = resetBay
+
+-- Wipe the whole course. Used when the crate source changes: solo and live disagree about who
+-- owns the crates and what the arm is doing, so nothing may survive the switch.
+function RunControl.rebuildAll()
+	for n = 1, Config.NumBays do
+		resetBay(n)
+		task.wait()
+	end
+end
 RunControl.bayState = function(i)
 	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
 	return bay and states[bay]

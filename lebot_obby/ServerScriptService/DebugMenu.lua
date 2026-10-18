@@ -179,13 +179,11 @@ DebugCommand.OnServerEvent:Connect(function(player, action, arg)
 		pushStatus()
 
 	elseif action == "feedMode" then
+		-- BridgeFeed does the world reset on the change event, so every bay is rebuilt and
+		-- every crate cleared -- not just the active bay's. Crates from the previous source
+		-- belong to the previous source.
 		RunControl.setFeedMode(arg)
-		-- Crates from the previous source belong to the previous source.
-		local bay = Workspace.Warehouse:FindFirstChild(("Bay%02d"):format(RunControl.activeBay))
-		if bay then
-			local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
-			BlockSync.clearBay(bay)
-		end
+		ObjectiveEvent:FireClient(player, nil)
 		pushStatus()
 
 	elseif action == "status" then

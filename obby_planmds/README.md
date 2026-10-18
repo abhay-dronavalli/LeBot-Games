@@ -108,10 +108,12 @@ column has been replaced by what a bay actually costs in cubes.
 
 ## Rules that apply to every bay
 
-**Two crate sources, one contract.** `BlockSync.applyCells` (the debug cell editor) and
-`BlockSync.applyBlocks` (the live robot feed) both end at `CellsChanged`, and both fire
-`CratePlaced` when a crate actually seats. A bay should never care which one is driving it —
-see [robot-link.md](robot-link.md) and [debug-menu.md](debug-menu.md).
+**Two modes, one contract.** `solo` is one player doing both jobs — you place on the 4×3 grid
+and the Sky Arm carries it in. `live` is the real SO-101, where only your hands place a block.
+Nothing scripted, ever. `BlockSync.applyCells` and `BlockSync.applyBlocks` both end at
+`CellsChanged` and both fire `CratePlaced` when a crate actually seats, so a bay never cares
+which is driving it. Switching modes rebuilds every bay and clears every crate — see
+[debug-menu.md](debug-menu.md).
 
 **Blocks are interchangeable.** No obstacle requires a particular colour — the operator places
 whichever cube is to hand, and any block satisfies any cell. Crates still *spawn* in their

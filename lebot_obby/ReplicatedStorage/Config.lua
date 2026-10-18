@@ -1,11 +1,19 @@
 local Config = {}
 
--- Exactly one input path owns the crates (robot-link.md). LiveFeed takes the operator's real
--- cubes over the WebSocket; DebugMode fakes them with the on-screen cell editor and animates a
--- delivery with SkyArm. Both at once would fight over the same bay, so DebugMode stands down
--- whenever LiveFeed is on.
-Config.LiveFeed = true
-Config.BridgeUrl = "ws://127.0.0.1:8765"   -- the robot laptop's LAN IP when it is not this one
+-- TWO MODES, and exactly one of them owns the crates at a time (robot-link.md).
+--
+--   "solo"  one player doing both jobs. You place blocks on the on-screen 4x3 grid and the
+--           Sky Arm carries them in, so you are the operator as well as the runner. Nothing
+--           is connected and nothing is scripted.
+--   "live"  the real SO-101 on the other end of the socket. Your hands are the only thing
+--           that places a block.
+--
+-- There is deliberately no third "play back a recording" mode. A feed that places blocks by
+-- itself is indistinguishable from the game doing it, which is alarming and was.
+Config.FeedMode = "solo"
+
+-- The robot laptop. localhost only when the Python process is on this machine.
+Config.BridgeUrl = "ws://127.0.0.1:8765"
 -- Which bay the mat currently maps to. Hardcoded until ActiveBayTracker picks it from where
 -- player 1 is standing -- that module is what makes one physical mat serve nine bays.
 Config.LiveBay = 1

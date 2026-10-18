@@ -32,13 +32,13 @@ screenGui.Name = "DebugCellEditor"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- This grid IS player 2 when there is no real one, so it should only be on screen when it is
--- actually the crate source. In "live" mode the real arm owns the cells and a clickable grid
--- that silently does nothing is worse than no grid; in "none" mode there is no operator at all.
+-- This grid IS the operator in solo mode, so it is only on screen when it is actually the
+-- crate source. In live the real arm owns the cells, and a clickable grid that silently does
+-- nothing is worse than no grid at all.
 local DebugStatus = Remotes:WaitForChild("DebugStatus")
 screenGui.Enabled = false
 DebugStatus.OnClientEvent:Connect(function(status)
-	screenGui.Enabled = (status.feedMode == "sim")
+	screenGui.Enabled = (status.feedMode == "solo")
 end)
 
 local title = Instance.new("TextLabel")

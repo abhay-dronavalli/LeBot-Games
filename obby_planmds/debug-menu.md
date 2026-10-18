@@ -52,28 +52,38 @@ Crates are a separate concern and belong to `BlockSync.clearBay`. A rebuilt bay 
 previous run's crates would also keep the diff state saying they are there, so re-placing the
 same cube would be a silent no-op and the bay would look broken.
 
-## 4. The three second-player modes
+## 4. Two modes
 
-Exactly one source may own the crates, and **which one is a runtime choice**, not a startup
+Exactly one source owns the crates, and **which one is a runtime choice**, not a startup
 constant — the point is to flip it mid-session rather than restart the place to change a
-boolean. `RunControl` owns it.
+boolean. `RunControl` owns it. `Config.FeedMode` sets the boot mode; it is `solo`.
 
-| Mode | Crates come from | Use it to |
+| Mode | Who places a block | The arm is driven by |
 |---|---|---|
-| `live` | the real arm (or `tools/mock_bridge.py`) over the WebSocket | play for real |
-| `sim` | the on-screen 4×3 cell editor, standing in for player 2 | debug game logic solo |
-| `none` | nothing — no crates at all | walk bays, test geometry, hazards and death solo |
+| **`solo`** | you, on the on-screen 4×3 grid — one player doing both jobs | the delivery job queue, carrying what you placed |
+| **`live`** | your hands on the real SO-101, and nothing else | the real arm's tip, over the socket |
 
-The arm mirror keeps mirroring in every mode: seeing the real arm move is useful even while
-debugging solo, and it costs nothing. Only the crates are gated.
+There is deliberately **no scripted or recorded third mode**. A feed that places blocks by
+itself is indistinguishable from the game doing it on its own, which is alarming — and was,
+until `tools/mock_bridge.py --bay 1` was traced as the culprit. That tool still exists for
+testing the link without hardware, but it is not part of either mode.
 
-Switching modes clears the active bay's crates, because crates from the previous source belong
-to the previous source. Verified by size — a `sim` crate is the 4-stud model, a live cube is
-6.72 studs and carries `IsCrate`.
+**Switching resets the world.** Every bay is rebuilt and every crate cleared. The two modes
+disagree about who owns the crates and about what is driving the arm, so nothing may survive
+the switch: crates placed by the other source are not yours, and a half-built bay from the
+previous mode is just confusing.
 
-`live` dials the socket lazily, on first entry into that mode. `Bridge` retries every 2 s with
-a warning, so dialling a socket nobody is serving — the normal case when debugging solo — would
-otherwise fill the output with noise.
+Leaving `live` also **hangs up**. `Bridge.disconnect()` stops the retry loop — otherwise a link
+dialled once keeps reconnecting to a socket nobody is serving every 2 s for the rest of the
+session, flapping `CONTROLLER ONLINE`/`OFFLINE` and burying a real connection failure in noise.
+
+Two things have to be forgotten on a reset, and both caused bugs:
+
+- **`SkyArm.setLiveMode`** follows the mode. Left on in solo, the Heartbeat kept lerping the
+  trolley toward a stale live target while a queued delivery tweened it somewhere else.
+- **`DebugMode`'s per-bay cell state** is cleared via `RunControl.BayReset`. `clearBay` wipes
+  the diff baseline, so a cell the editor still believed in was re-delivered on the very next
+  edit — one click after a reset produced two crates, one of them from the previous run.
 
 ## 5. One mat, nine bays
 

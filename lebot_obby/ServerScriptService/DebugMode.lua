@@ -18,7 +18,7 @@ end
 local RunControl = require(ServerScriptService:WaitForChild("RunControl"))
 
 local function isSource()
-	return RunControl.feedMode == "sim"
+	return RunControl.feedMode == "solo"
 end
 
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
@@ -143,6 +143,17 @@ end
 
 -- Follow the active bay. Declared after buildCellsList because a closure only sees locals
 -- declared above it -- reading one declared below silently resolves to a nil global.
+-- A reset bay has no crates, so the editor must not still think it holds cells. Without this
+-- the world and the grid disagree: clearBay wipes the diff baseline, so the next edit re-adds
+-- every cell this table still remembers and crates from the previous run reappear.
+RunControl.BayReset:Connect(function(i)
+	cellStateByBay[i] = nil
+	previousByBay[i] = nil
+	if i == activeBayIndexNow() then
+		CellsUpdated:FireAllClients(buildCellsList())
+	end
+end)
+
 RunControl.ActiveBayChanged:Connect(function()
 	SkyArm.setActiveBay(targetBayModel())
 	-- re-broadcast so the editor grid shows what is actually in the bay in front of you,

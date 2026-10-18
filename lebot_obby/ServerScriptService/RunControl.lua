@@ -7,10 +7,13 @@
 --
 -- FEED MODES. Exactly one source may own the crates, which is the whole reason this exists:
 --
---   "live"  the real arm (or tools/mock_bridge.py) over the WebSocket. BridgeFeed applies.
---   "sim"   the on-screen 4x3 cell editor stands in for player 2. DebugMode applies.
---   "none"  no operator at all. No crates appear, so bays, geometry and death can be walked
---           and tested solo without needing a second person or the robot plugged in.
+--   "solo"  one player doing both jobs: the on-screen 4x3 grid places blocks and the Sky Arm
+--           carries them in, so you are the operator as well as the runner.
+--   "live"  the real SO-101 over the WebSocket. Nothing else may place a block.
+--
+-- Switching modes RESETS THE WORLD -- every bay rebuilt, every crate cleared. The two modes
+-- disagree about who owns the crates and about what the arm is doing, so carrying state across
+-- the switch leaves crates nobody placed and an arm following nobody.
 --
 -- The mode is runtime, not a Config constant, because the point is to flip it mid-session
 -- while debugging rather than restarting the place to change one boolean.
@@ -20,9 +23,9 @@ local Config = require(ReplicatedStorage:WaitForChild("Config"))
 
 local RunControl = {}
 
-RunControl.MODES = {"live", "sim", "none"}
+RunControl.MODES = {"solo", "live"}
 
-RunControl.feedMode = Config.LiveFeed and "live" or "sim"
+RunControl.feedMode = (Config.FeedMode == "live") and "live" or "solo"
 
 local feedChanged = Instance.new("BindableEvent")
 RunControl.FeedModeChanged = feedChanged.Event
@@ -99,10 +102,25 @@ function RunControl.setFeedMode(mode)
 	return mode
 end
 
--- "Is a second player driving the arm?" in the only sense the game cares about: is there a
--- source of crates other than me clicking a grid.
+-- Is a real second player driving the arm, as opposed to me clicking a grid?
 function RunControl.hasOverseer()
 	return RunControl.feedMode == "live"
+end
+
+-- Set by HazardManager alongside rebuildBay; used to wipe the world on a mode change.
+RunControl.rebuildAll = nil
+
+-- Fired with the bay index after a bay has been rebuilt and its crates cleared.
+--
+-- Anything holding its own idea of what is in that bay has to drop it here. DebugMode keeps
+-- per-bay cell state, and BlockSync.clearBay resets the diff baseline -- so a cell the editor
+-- still believes in would be re-delivered on the very next edit, and a crate nobody placed in
+-- this run would walk back into a freshly reset bay.
+local bayReset = Instance.new("BindableEvent")
+RunControl.BayReset = bayReset.Event
+
+function RunControl.notifyBayReset(i)
+	bayReset:Fire(i)
 end
 
 return RunControl

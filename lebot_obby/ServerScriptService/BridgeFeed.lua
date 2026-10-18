@@ -39,8 +39,18 @@ end
 local gantry = Config.ArmStyle ~= "mirror"
 local mirror = nil
 
+-- The arm has TWO drivers and they must never overlap. In live the real arm steers it by the
+-- tip; in solo the delivery job queue does, because the player is the operator and the arm is
+-- carrying what they placed. Leaving live mode on in solo meant the Heartbeat kept lerping the
+-- trolley toward a stale live target while a queued job tweened it somewhere else.
+local function applyArmDriver()
+	if gantry then
+		SkyArm.setLiveMode(RunControl.feedMode == "live")
+	end
+end
+
 if gantry then
-	SkyArm.setLiveMode(true)
+	applyArmDriver()
 	SkyArm.setActiveBay(RunControl.activeBayModel())
 else
 	mirror = ArmMirror.new(Workspace)
@@ -81,6 +91,11 @@ Bridge.onState(function(s)
 	linked = true
 	-- The arm keeps following in every mode: seeing the real arm move is useful even while
 	-- debugging solo, and it costs nothing. Only the CRATES are gated on being the source.
+	-- Live only. In solo there is no feed at all, and the arm belongs to the job queue.
+	if RunControl.feedMode ~= "live" then
+		return
+	end
+
 	if gantry then
 		local tip = s.arm and s.arm.tip
 		if tip then
@@ -89,10 +104,6 @@ Bridge.onState(function(s)
 		end
 	else
 		mirror:update(s.arm, s.arm_age)
-	end
-
-	if RunControl.feedMode ~= "live" then
-		return
 	end
 
 	-- Blocks update slower than the arm (perception is ~10 Hz against the arm's 30) and both
@@ -125,8 +136,9 @@ BlockSync.PlacementRejected:Connect(function(bayModel, cell, reason)
 		:format(tostring(cell.col), tostring(cell.row), tostring(reason or "no reason given")))
 end)
 
--- Connect lazily. Bridge retries every 2 s with a warning, so dialling a socket nobody is
--- serving -- the usual case when debugging solo -- would fill the output with noise.
+-- Connect lazily, and only for live. Bridge retries every 2 s with a warning, so dialling a
+-- socket nobody is serving -- which is every second of solo play -- would fill the output with
+-- noise and make a real connection failure impossible to spot.
 local dialled = false
 local function dial()
 	if dialled then
@@ -134,15 +146,29 @@ local function dial()
 	end
 	dialled = true
 	Bridge.connect(Config.BridgeUrl)
-	print("[BridgeFeed] connecting to " .. tostring(Config.BridgeUrl))
+	print("[BridgeFeed] dialling the arm at " .. tostring(Config.BridgeUrl))
 end
 
 if RunControl.feedMode == "live" then
 	dial()
 end
+
+-- A mode change is a hard reset. Crates placed by the other source are not ours, the arm's
+-- driver changes under it, and a half-built bay from the previous mode is just confusing.
 RunControl.FeedModeChanged:Connect(function(mode)
+	applyArmDriver()
+	if RunControl.rebuildAll then
+		RunControl.rebuildAll()
+	end
 	if mode == "live" then
 		dial()
+		print("[BridgeFeed] LIVE -- the real arm owns the crates; nothing else may place one")
+	else
+		-- hang up: solo has no second machine in it
+		dialled = false
+		linked = false
+		Bridge.disconnect()
+		print("[BridgeFeed] SOLO -- you are the operator; the grid places, the arm carries")
 	end
 end)
 
@@ -160,7 +186,8 @@ RunService.Heartbeat:Connect(function(dt)
 		wasConnected = now
 		print(now and "[BridgeFeed] CONTROLLER ONLINE" or "[BridgeFeed] CONTROLLER OFFLINE")
 	end
-	if not linked then
-		print("[BridgeFeed] connected but no state yet")
+	-- only worth saying while we are actually trying to be live
+	if RunControl.feedMode == "live" and now and not linked then
+		print("[BridgeFeed] connected, waiting for the first frame from the arm")
 	end
 end)

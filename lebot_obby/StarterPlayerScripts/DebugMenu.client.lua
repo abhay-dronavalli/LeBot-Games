@@ -30,16 +30,14 @@ local COLD = Color3.fromRGB(110, 170, 255)
 local DONE = Color3.fromRGB(120, 240, 140)
 
 local FEED_LABEL = {
-	live = "P2: LIVE ARM",
-	sim = "P2: SIMULATED",
-	none = "P2: NOBODY",
+	live = "MODE: LIVE ARM",
+	solo = "MODE: SOLO",
 }
 local FEED_HINT = {
-	live = "crates come from the real arm over the socket",
-	sim = "the 4x3 grid below stands in for player 2",
-	none = "no operator -- no crates at all, walk the bay solo",
+	live = "connected to the real SO-101 -- only your hands place a block",
+	solo = "you are the operator too: place on the grid below, the arm carries it",
 }
-local FEED_TINT = {live = LIVE, sim = WARM, none = Color3.fromRGB(150, 150, 160)}
+local FEED_TINT = {live = LIVE, solo = WARM}
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "DebugMenu"
@@ -150,7 +148,8 @@ local resetBtn = button("RESET THIS BAY", root)
 local resetAllBtn = button("RESET ALL BAYS", root)
 
 -- Player 2 ------------------------------------------------------------
-local sep = label("SECOND PLAYER", 11, Color3.fromRGB(140, 146, 160))
+local sep = label("WHO PLACES BLOCKS  (switching resets everything)", 11,
+	Color3.fromRGB(140, 146, 160))
 sep.Size = UDim2.new(1, 0, 0, 16)
 
 local feedBtn = button("P2: ...", root)
@@ -159,9 +158,9 @@ feedHint.Size = UDim2.new(1, 0, 0, 26)
 feedHint.TextWrapped = true
 feedHint.Font = Enum.Font.Gotham
 
-local state = {activeBay = 1, feedMode = "live", bays = {}}
+local state = {activeBay = 1, feedMode = "solo", bays = {}}
 
-local MODE_CYCLE = {live = "sim", sim = "none", none = "live"}
+local MODE_CYCLE = {solo = "live", live = "solo"}
 
 startBtn.MouseButton1Click:Connect(function()
 	DebugCommand:FireServer("startRun", state.activeBay)
@@ -172,8 +171,9 @@ end)
 resetAllBtn.MouseButton1Click:Connect(function()
 	DebugCommand:FireServer("resetAll")
 end)
+-- Switching is a hard reset of the whole course, so say so rather than surprising anyone.
 feedBtn.MouseButton1Click:Connect(function()
-	DebugCommand:FireServer("feedMode", MODE_CYCLE[state.feedMode] or "live")
+	DebugCommand:FireServer("feedMode", MODE_CYCLE[state.feedMode] or "solo")
 end)
 
 local function render()

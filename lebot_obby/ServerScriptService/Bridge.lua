@@ -30,6 +30,11 @@ local connected = false
 local retryAt = 0
 local RETRY_S = 2
 
+-- Whether a connection is WANTED. Without this, connect() starts a retry loop that outlives
+-- any reason to be connected: switching back to solo play left the link reconnecting to a
+-- socket nobody was serving every 2 s, flapping CONTROLLER ONLINE/OFFLINE forever.
+local wanted = false
+
 local latest: any = nil          -- newest state frame, replaced not queued
 local helloFrame: any = nil
 local stateHandlers: { (any) -> () } = {}
@@ -106,13 +111,14 @@ end
 
 function Bridge.connect(wsUrl: string?)
 	url = wsUrl or url
+	wanted = true
 	if not open() then
 		retryAt = os.clock() + RETRY_S
 	end
 
 	RunService.Heartbeat:Connect(function()
 		if not connected then
-			if os.clock() >= retryAt then
+			if wanted and os.clock() >= retryAt then
 				retryAt = os.clock() + RETRY_S
 				open()
 			end
@@ -132,6 +138,21 @@ function Bridge.connect(wsUrl: string?)
 			end
 		end
 	end)
+end
+
+-- Stop talking to the robot and stop trying to. Solo play has no second machine in it, so a
+-- link left reconnecting in the background is pure noise -- and it makes a REAL connection
+-- failure impossible to spot among the retries.
+function Bridge.disconnect()
+	wanted = false
+	if ws then
+		pcall(function()
+			ws:Close()
+		end)
+	end
+	ws = nil
+	connected = false
+	latest = nil
 end
 
 function Bridge.send(frame: any): boolean
