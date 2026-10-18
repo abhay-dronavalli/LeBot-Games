@@ -3,11 +3,23 @@
 --
 -- The gotcha this file exists for: an **anchored** part moved by setting its CFrame does not
 -- carry a character standing on it. The player slides off, or is left behind, or gets flung.
--- Since the crane lift (a player riding a platform the real arm carries) is the demo's money
--- shot, platforms are **unanchored** and driven by AlignPosition + AlignOrientation, with the
--- server as network owner. The physics engine then moves the player with the platform.
+-- So a platform that is *moving* is **unanchored** and driven by AlignPosition +
+-- AlignOrientation, with the server as network owner, and the physics engine moves the player
+-- along with it.
 --
--- Speed is capped so a jumpy camera frame cannot launch the player across the map.
+-- A platform that is **not** moving is anchored, because a resting block should be exactly
+-- where the robot says it is and nothing more. Two stacked cubes left unanchored are two
+-- constraint-driven rigid bodies pressing on each other, and the smallest overlap sends the
+-- top one tumbling - a stack that was rock solid on the real table fell over here.
+--
+-- What decides which is which: the block's **cell**. Python no longer tracks a block while
+-- the arm carries it - a vision model reads the printed grid a couple of seconds after the
+-- gripper opens, so a block simply appears in a new cell between one read and the next, and
+-- `held` is always false. This file turns that step into a ride: a block whose cell changed
+-- unanchors, gets driven across, and re-anchors when it arrives. A player standing on it goes
+-- with it, which is what the crane lift used to do from forward kinematics.
+--
+-- Speed is capped so a big jump between cells cannot launch the player across the map.
 --
 --   local BlockSync = require(script.Parent.BlockSync)
 --   local sync = BlockSync.new(workspace)
@@ -21,14 +33,16 @@ BlockSync.__index = BlockSync
 
 local MAX_SPEED = 60                -- studs/s; above this a rider gets flung
 local RESPONSIVENESS = 40           -- AlignPosition stiffness
+local ARRIVED_STUDS = 0.75          -- this close to the goal counts as arrived, and re-anchors
+local MOVE_TIMEOUT_S = 6            -- ...and re-anchor regardless after this, so nothing stays
+                                    -- unanchored forever if it snags on the way
 
 -- AlignPosition.MaxForce defaults to 10000, which is nowhere near enough to hold a platform
--- up. A platform is about 22 x 6.5 x 22 studs at density 0.7, so roughly 2200 mass, and at the
--- default gravity of 196.2 that is about 4.3e5 of weight to oppose - 43x the default limit.
--- Under-powered, the constraint cannot lift the part: platforms sag toward the floor, and a
--- *held* block (CanCollide = false, so nothing catches it) sinks straight through the world
--- until the engine destroys it at FallenPartsDestroyHeight. The rider speed cap lives in
--- MaxVelocity, not here, so raising these costs nothing in safety.
+-- up. A platform is a 22-stud cube at density 0.7, so roughly 7500 mass, and at the default
+-- gravity of 196.2 that is well over 1e6 of weight to oppose. Under-powered, the constraint
+-- cannot hold the part at all: a platform in the middle of a move sags toward the floor
+-- instead of crossing to its new cell. The rider speed cap lives in MaxVelocity, not here, so
+-- raising these costs nothing in safety.
 local MAX_FORCE = 1e8
 local MAX_TORQUE = 1e8
 local LOST_TRANSPARENCY = 0.6       -- a block the camera cannot see right now
@@ -43,7 +57,9 @@ local COLORS: { [string]: Color3 } = {
 	blue = Color3.fromRGB(62, 99, 221),
 	purple = Color3.fromRGB(142, 78, 198),
 	pink = Color3.fromRGB(233, 61, 130),
-	grey = Color3.fromRGB(154, 164, 178),   -- what Python sends for a held block
+	-- What Python sends for a block it can see is there but cannot name: an overhead camera
+	-- cannot read the colour of a cube with another cube sitting on top of it.
+	grey = Color3.fromRGB(154, 164, 178),
 }
 
 function BlockSync.new(parent: Instance)
@@ -105,7 +121,9 @@ function BlockSync.create(self, b: any)
 		p:SetNetworkOwner(nil)
 	end)
 
-	local entry = { part = p, goal = goal }
+	-- `cell` is what a move is detected against, and `movingUntil` is the deadline that
+	-- guarantees the part goes back to being anchored even if it never quite arrives.
+	local entry = { part = p, goal = goal, cell = b.cell, movingUntil = 0 }
 	self.platforms[b.id] = entry
 	return entry
 end
@@ -133,42 +151,45 @@ function BlockSync.update(self, blocks: { any }?)
 		end
 		local target = CFrame.new(Mapping.blockPosition(b, self.cubeMm)) * Mapping.blockOrientation(b)
 		entry.goal.CFrame = target
-
-		-- Anchored while resting, unanchored while carried.
-		--
-		-- A resting block has no reason to be simulated: it should be exactly where the robot
-		-- says it is, full stop. Leaving it unanchored meant two stacked cubes were two
-		-- constraint-driven rigid bodies pressing on each other, and the smallest overlap sent
-		-- the top one tumbling - a stack that was perfectly stable on the real table fell over
-		-- here. Anchoring makes a stack exact and immovable.
-		--
-		-- A carried block is the opposite case, and the reason the part is unanchored at all:
-		-- an anchored part moved by CFrame does not carry a player standing on it, and being
-		-- carried is the whole point of the lift. So it unanchors for the duration and
-		-- AlignPosition takes over. The goal is kept in sync either way, so the hand-off in
-		-- both directions happens with no jump.
-
 		local p = entry.part
-		if b.held then
+
+		-- A changed cell means the robot moved this block between two board reads. Hand it to
+		-- the constraints for the crossing, so anyone standing on it is carried along, and take
+		-- it back as soon as it arrives. The goal is set above either way, so the hand-off in
+		-- both directions happens with no jump.
+		if b.cell ~= nil and b.cell ~= entry.cell then
+			entry.cell = b.cell
+			entry.movingUntil = os.clock() + MOVE_TIMEOUT_S
 			p.Anchored = false
+		end
+
+		if entry.movingUntil > 0 then
+			local arrived = (p.Position - target.Position).Magnitude <= ARRIVED_STUDS
+			if arrived or os.clock() > entry.movingUntil then
+				entry.movingUntil = 0
+				p.Anchored = true
+				p.CFrame = target        -- land it exactly where Python says, not nearly
+			end
 		else
+			-- Resting. Re-assert the pose every frame: a rider's weight or a neighbouring part
+			-- can nudge an anchored block, and the robot's answer is the only correct one.
 			p.Anchored = true
 			p.CFrame = target
 		end
-		p.Transparency = (b.visible or b.held) and 0 or LOST_TRANSPARENCY
-		-- A held block stays solid. Riding a carried block IS the crane lift - the player jumps
-		-- on while it rests on the table and gets carried across the map - so turning collision
-		-- off while held, as this used to, removed the one thing the feature exists for. The
-		-- speed cap in MaxVelocity is what keeps the rider safe, not loss of collision.
+
+		p.Transparency = b.visible and 0 or LOST_TRANSPARENCY
 		p.CanCollide = true
-		-- Colour has to be refreshed every frame, not just at create: a block reports grey
-		-- while it is in the jaw and its own colour again once it is put down, so a part
-		-- coloured only once would stay whatever it was when it first appeared.
+		-- Colour is refreshed every frame, not just at create: a cube that gets buried under
+		-- another one reports grey until it is uncovered again, so a part coloured once would
+		-- keep whatever colour it had when it first appeared.
 		p.Color = COLORS[b.color] or COLORS.grey
 	end
 
-	-- A block taken off the table stops being a platform. Python only drops a track after it
-	-- has been gone for seconds, so this is not a dropped camera frame.
+	-- A block taken off the table stops being a platform. A block is missing from this list
+	-- only because the last board read did not find it, so this is never a dropped camera
+	-- frame - but note that a block the arm is holding in the air is not on the board either,
+	-- and Python keeps reporting it in the cell it was last read in precisely so that this
+	-- does not delete its platform out from under a rider mid-carry.
 	for id, entry in self.platforms do
 		if not live[id] then
 			entry.goal:Destroy()
@@ -178,8 +199,9 @@ function BlockSync.update(self, blocks: { any }?)
 	end
 end
 
--- Weld a rider to a platform while it is being carried, if riding still proves unreliable.
--- Cheaper than fighting the physics: call on held, release on landing.
+-- Weld a rider to a platform while it crosses to a new cell, if riding still proves
+-- unreliable. Cheaper than fighting the physics: call when the cell changes, release on
+-- arrival.
 function BlockSync.attachRider(self, id: number, character: Model): Instance?
 	local entry = self.platforms[id]
 	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
