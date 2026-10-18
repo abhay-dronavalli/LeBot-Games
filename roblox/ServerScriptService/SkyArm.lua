@@ -169,4 +169,56 @@ local function applyFK(angles)
 	gripperTipWorld = (jawRoot * CFrame.new(0, 0, -JAW_LEN * 0.6)).Position
 end
 
+----------------------------------------------------------------
+-- Inverse kinematics -- simplified 2-link planar solve + azimuth, aimed at a world position.
+----------------------------------------------------------------
+local function solveIK(targetWorldPos)
+	-- never let a caller drive the gripper through the floor
+	if targetWorldPos.Y < MIN_TARGET_Y then
+		targetWorldPos = Vector3.new(targetWorldPos.X, MIN_TARGET_Y, targetWorldPos.Z)
+	end
+
+	local base = (carriage.CFrame * CFrame.new(0, -SHOULDER_OFFSET, 0)).Position
+	local delta = targetWorldPos - base
+	local azimuth = math.deg(math.atan2(-delta.X, -delta.Z))
+
+	local horizontalDist = math.sqrt(delta.X ^ 2 + delta.Z ^ 2)
+	local drop = -delta.Y - GRIP_REACH -- positive when target is below the base; shortened because
+	-- the gripper itself covers the last GRIP_REACH studs pointing straight down
+
+	local reach = math.sqrt(horizontalDist ^ 2 + drop ^ 2)
+	reach = math.clamp(reach, math.abs(L1 - L2) + 0.5, L1 + L2 - 0.5)
+
+	local cosElbow = (reach ^ 2 - L1 ^ 2 - L2 ^ 2) / (2 * L1 * L2)
+	local elbow = math.deg(math.acos(math.clamp(cosElbow, -1, 1)))
+
+	local alpha = math.atan2(drop, horizontalDist)
+	local beta = math.atan2(L2 * math.sin(math.rad(elbow)), L1 + L2 * math.cos(math.rad(elbow)))
+	local shoulderLift = math.deg(alpha - beta)
+
+	return {
+		shoulder_pan = azimuth,
+		shoulder_lift = shoulderLift,
+		elbow_flex = elbow,
+		wrist_flex = -(shoulderLift + elbow) + 90,
+		wrist_roll = 0,
+	}
+end
+
+local function solveIKWithGripper(pos, gripperVal)
+	local angles = solveIK(pos)
+	angles.gripper = gripperVal
+	return angles
+end
+
+-- Debug helpers -- quick numeric verification instead of guessing from screenshots.
+-- Safe to leave in; harmless if never called.
+function SkyArm.debugGripperPos()
+	return gripperTipWorld
+end
+
+function SkyArm.debugSolve(pos)
+	return solveIK(pos)
+end
+
 return SkyArm
