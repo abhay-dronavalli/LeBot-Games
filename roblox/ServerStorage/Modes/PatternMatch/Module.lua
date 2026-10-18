@@ -132,7 +132,8 @@ local function finish(s, score, why)
 	s.finished = true
 	local results = {}
 	for _, p in ipairs(s.list) do
-		table.insert(results, { player = p, won = why ~= "idle" and p.Parent ~= nil and not s.left[p] and Game.isWin(score) })
+		local stayed = s.kept[p] or (p.Parent ~= nil and not s.left[p]) -- kept: left after the result was decided
+		table.insert(results, { player = p, won = why ~= "idle" and stayed and Game.isWin(score) })
 	end
 	local names = {}
 	for _, r in ipairs(results) do
@@ -180,8 +181,16 @@ function Mode.step(dt)
 	end
 end
 
--- The arcade took `player` out of the game (they stepped on the Back to Lobby pad): they lose (won = false),
--- and the game ends when every player has left or gone.
+-- True once the shift's result is decided (the results screen): the arcade lets a player who takes the
+-- Back to Lobby pad then keep their result.
+function Mode.IsDecided()
+	local s = session
+	return s ~= nil and (s.game.state == "Results" or s.game.state == "Done")
+end
+
+-- The arcade took `player` out of the game (they stepped on the Back to Lobby pad): before the results
+-- they lose (won = false); on the results screen they keep their result. The game ends when every player
+-- has left or gone.
 function Mode.PlayerLeft(player)
 	local s = session
 	if not s or s.finished or not s.inGame[player] then
@@ -189,7 +198,8 @@ function Mode.PlayerLeft(player)
 	end
 	if not s.left[player] then
 		s.left[player] = true
-		log("%s went back to the lobby", player.Name)
+		s.kept[player] = Mode.IsDecided() or nil
+		log("%s went back to the lobby%s", player.Name, s.kept[player] and " (keeps the result)" or "")
 	end
 	checkLeavers(s)
 end
@@ -224,7 +234,7 @@ function Mode.Start(players, opts)
 	local cabinet = map:WaitForChild("PatternCabinet")
 
 	local s = {
-		map = map, cabinet = cabinet, list = {}, inGame = {}, left = {}, conns = {}, threads = {}, finished = false,
+		map = map, cabinet = cabinet, list = {}, inGame = {}, left = {}, kept = {}, conns = {}, threads = {}, finished = false,
 	}
 	for _, p in ipairs(players or {}) do
 		if not s.inGame[p] then

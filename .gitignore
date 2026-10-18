@@ -26,3 +26,6 @@ venv/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Studio holds this while a place file is open. Not ours to commit.
+*.rbxlx.lock
