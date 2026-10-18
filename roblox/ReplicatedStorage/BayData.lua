@@ -63,4 +63,12 @@ return {
 		note = "Wall dispensers fire volleys across the bay. The blocks are hard cover -- arrows die"
 			.. " against them -- and placing both shuts the turrets down.",
 	},
+	[8] = {
+		obstacle = "DarkZone",
+		color = "teal",
+		level = 1,
+		solveCells = {{1, 1}, {2, 1}},
+		note = "Lights out, with pits you cannot see. Teal blocks GLOW -- the only obstacle solved by"
+			.. " what the block emits rather than what it blocks.",
+	},
 }
