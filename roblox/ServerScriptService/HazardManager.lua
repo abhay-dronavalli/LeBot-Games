@@ -794,3 +794,102 @@ BUILDERS.Ice = function(i, folder, info, state)
 end
 
 ----------------------------------------------------------------
+-- Build every bay
+----------------------------------------------------------------
+local states = {}
+
+local function buildBay(i)
+	local info = BayData[i]
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	if not info or not bay then
+		return
+	end
+
+	local folder = bay:FindFirstChild("Obstacle")
+	if folder then folder:Destroy() end
+	folder = Instance.new("Folder")
+	folder.Name = "Obstacle"
+	folder.Parent = bay
+
+	local builder = BUILDERS[info.obstacle]
+	if not builder then
+		warn("[HazardManager] no builder for obstacle " .. tostring(info.obstacle))
+		return
+	end
+
+	local state = {solved = false, info = info, folder = folder}
+	builder(i, folder, info, state)
+
+	CollectionService:AddTag(folder, "Obstacle")
+	folder:SetAttribute("Obstacle", info.obstacle)
+	folder:SetAttribute("Color", info.color)
+	folder:SetAttribute("Level", info.level)
+
+	local c = bayCenter(i)
+	state.label = addLabel(folder,
+		string.format("%s  -  %s x%d", info.obstacle:upper(), info.color:upper(), info.level),
+		Vector3.new(c.X, 11, c.Z), Color3.fromRGB(255, 180, 90))
+
+	states[bay] = state
+	return state
+end
+
+for i = 1, Config.NumBays do
+	buildBay(i)
+	task.wait()
+end
+
+----------------------------------------------------------------
+-- Solve detection: driven by whatever BlockSync has actually placed
+----------------------------------------------------------------
+local function checkSolved(info, cellsList)
+	local byKey = {}
+	for _, c in ipairs(cellsList) do
+		byKey[c.col .. "," .. c.row] = c
+	end
+	for _, sc in ipairs(info.solveCells) do
+		local c = byKey[sc[1] .. "," .. sc[2]]
+		if not c then return false end
+		if c.color ~= info.color then return false end
+		if (c.level or 1) < info.level then return false end
+	end
+	return true
+end
+
+BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
+	local state = states[bayModel]
+	if not state then
+		local known = {}
+		for k in pairs(states) do
+			table.insert(known, k.Name)
+		end
+		warn(string.format("[HazardManager] no state for %s; known = [%s]",
+			bayModel:GetFullName(), table.concat(known, ",")))
+		return
+	end
+
+	local solved = checkSolved(state.info, cellsList)
+	if solved == state.solved then
+		return
+	end
+
+	state.solved = solved
+	if solved then
+		print(string.format("[HazardManager] %s SOLVED", state.info.obstacle))
+		if state.label then
+			state.label.Text = state.info.obstacle:upper() .. "  -  CLEARED"
+			state.label.TextColor3 = Color3.fromRGB(120, 240, 140)
+		end
+		if state.onSolved then
+			state.onSolved()
+		end
+	else
+		if state.label then
+			state.label.Text = string.format("%s  -  %s x%d",
+				state.info.obstacle:upper(), state.info.color:upper(), state.info.level)
+			state.label.TextColor3 = Color3.fromRGB(255, 180, 90)
+		end
+	end
+end)
+
+print("[HazardManager] one obstacle per bay built for all " .. Config.NumBays .. " bays")
