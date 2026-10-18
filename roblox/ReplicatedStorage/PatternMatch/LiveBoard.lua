@@ -6,8 +6,6 @@
 -- doesn't have (>= Config.maxStackGlobal) aren't drawn. Target.compare still reports both, and
 -- showProblems puts a thick white outline (one SelectionBox per block part, made once) on the specific
 -- block behind each problem. White is not a block color, so the outline shows against every block.
--- setVanished makes tiles fully transparent for the Vanishing Tile event: the inlaid square disappears
--- and the board's dark groove layer (Base) under it shows as a hole.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
@@ -45,24 +43,8 @@ function LiveBoard.new(boardModel)
 	return self
 end
 
--- Vanished tiles (a set of cells) turn fully transparent, label included if a tile has one; all others
--- are restored.
-function LiveBoard:setVanished(vanished)
-	for cell, tile in pairs(self.tiles) do
-		local gone = vanished ~= nil and vanished[cell] == true
-		local transparency = gone and 1 or 0
-		if tile.Transparency ~= transparency then
-			tile.Transparency = transparency
-			local label = tile:FindFirstChildOfClass("SurfaceGui")
-			if label then
-				label.Enabled = not gone
-			end
-		end
-	end
-end
-
 -- White outline on each listed block: problemLevels is Target.compare's { [cell] = { [level] = true } }
--- (extra, doubled and blocked blocks). A level above the pool's top is shown on the top block, since
+-- (extra, doubled and misread blocks). A level above the pool's top is shown on the top block, since
 -- that is where the offending block sits. nil or {} clears all.
 function LiveBoard:showProblems(problemLevels)
 	local top = self.blocks.levels - 1

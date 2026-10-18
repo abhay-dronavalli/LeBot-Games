@@ -1,9 +1,8 @@
 -- ReplicatedStorage.PatternMatch.Views.Player.PatternHud.HudClient
 -- Pattern Match HUD, driven by the PatternUI remote payload (PatternMatch.Game:payload). A template:
 -- Views.PlayerView clones its ScreenGui into PlayerGui for the player role and spectators (never the robot)
--- and destroys it on exit. With the ReadOnly attribute (spectators) it sends nothing: no Q / R, no arrows,
--- and no camera shake (their camera already follows the player's). It asks for the current payload
--- (PatternRefresh) when it starts, and stops the tremor shake when the view exits (Exiting attribute).
+-- and destroys it on exit. With the ReadOnly attribute (spectators) it sends nothing: no Q / R and no
+-- arrows. It asks for the current payload (PatternRefresh) when it starts.
 --   - Ticket stack (bottom left, small): only the ACTIVE ticket is face up (ticket #, points, mini 4 x 3
 --     grid with row A on top and columns 1-4 left to right, like the board seen from the row C side; a
 --     stacked cell is split, top color over bottom, with a small "2" badge; age). Waiting tickets peek out
@@ -14,31 +13,27 @@
 --     ticket. A completed card gets an "ORDER UP!" stamp and flies up and off (the big ORDER UP text is in
 --     3D above the boards). In Hard mode's hidden phase the card's squares go gray, layout kept. About
 --     350 x 320 px at 1080p, scaled with the screen height (never below 0.8 of the design size).
---   - Status panel (top right): mode, shift timer (flashes "+3s" on an ORDER UP), score, tickets done,
---     the Hard reveal phase, the event banner and the game message, plus a small robot link badge on the
---     mode line: ROBOT LIVE, MOCK, OFFLINE (matching is frozen) or NO ROBOT (the fake generator).
---   - Results screen at the end of a shift: tickets completed, total points, one line per ticket.
--- While a Tremor is active this client shakes its camera and the boards (PatternMatch.BoardShake,
--- restored exactly afterwards). Everything is hidden while this player is on the mode select screen.
+--   - Status panel (top right): mode, timer (the room's wait for Play, mode select, or the shift, which
+--     flashes "+3s" on an ORDER UP), score, tickets done, the win target ("WIN: 20 pts") with a progress
+--     bar, the Hard reveal phase (colors visible / hidden) and the game message, plus a small robot link
+--     badge on the mode line: ROBOT LIVE, MOCK, OFFLINE (matching is frozen) or NO ROBOT (the fake
+--     generator).
+--   - Results screen at the end of a shift (Results, and Done until the arcade stops the game): WIN or
+--     LOSE against the win target, tickets completed, total points, one line per ticket.
+-- Everything is hidden while this player is on the mode select screen.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
 local Config = require(PatternMatch:WaitForChild("Config"))
-local BoardShake = require(PatternMatch:WaitForChild("BoardShake"))
 local remotes = PatternMatch:WaitForChild("Remotes")
 local patternUI = remotes:WaitForChild("PatternUI")
 local ticketCycle = remotes:WaitForChild("TicketCycle")
 local TicketStack = require(PatternMatch:WaitForChild("TicketStack"))
-local cabinet = workspace:WaitForChild("PatternCabinet")
 local localPlayer = Players.LocalPlayer
-
-local CAMERA_SHAKE_STUDS = 0.12
-local CAMERA_SHAKE_RADIANS = math.rad(0.6)
 
 -- Ticket stack, in design pixels at 1080p (scaled with the screen height).
 local STACK_W, STACK_H = 220, 200
@@ -49,6 +44,7 @@ local SWAP_REACH = UDim2.fromOffset(48, -14) -- a swapping card slides this far 
 local CELL, CELL_GAP = 16, 2
 local STACK_BOOST = 1.6           -- the whole stack 1.6x the design size: about 350 x 320 at 1080p
 local STACK_MIN_SCALE = 0.8       -- readable floor for small windows
+local RESULTS_W, RESULTS_H = 460, 400 -- the results card, in design pixels
 local PAPER = Color3.fromRGB(252, 247, 234)
 local PAPER_EDGE = Color3.fromRGB(214, 202, 178)
 local INK = Color3.fromRGB(46, 36, 28)
@@ -56,6 +52,8 @@ local EMPTY_CELL = Color3.fromRGB(228, 220, 202)
 local HIDDEN_CELL = Color3.fromRGB(150, 150, 150)
 local ACTIVE_BORDER = Color3.fromRGB(255, 138, 30)
 local GOOD = Color3.fromRGB(90, 220, 120)
+local BAD = Color3.fromRGB(220, 70, 60)
+local GOAL_FILL = Color3.fromRGB(255, 170, 40)
 local SWAP = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TUCK = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local FLY = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
@@ -108,10 +106,14 @@ stack.Visible = false
 stack.Parent = root
 local stackScale = Instance.new("UIScale")
 stackScale.Parent = stack
+local resultsScale = nil -- the results card's UIScale, made with the card below
 local function fitToScreen()
 	local camera = workspace.CurrentCamera
 	local height = camera and camera.ViewportSize.Y or 1080
 	stackScale.Scale = math.clamp(STACK_BOOST * height / 1080, STACK_MIN_SCALE, 3)
+	if resultsScale then
+		resultsScale.Scale = math.clamp((height - 100) / RESULTS_H, 0.5, 1) -- the whole card fits short windows (top bar + margin)
+	end
 end
 fitToScreen()
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(fitToScreen)
@@ -434,8 +436,34 @@ local timerLabel = text(timerRow, "Timer", { Font = Enum.Font.GothamBlack, TextS
 local bonusLabel = text(timerRow, "Bonus", { Font = Enum.Font.GothamBlack, TextSize = 26, TextColor3 = GOOD, TextTransparency = 1,
 	TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.fromScale(0.6, 0), Size = UDim2.new(0.4, 0, 1, 0) })
 local scoreLabel = line("Score", 3, 22, 18, { Font = Enum.Font.GothamBold })
-local revealLabel = line("Reveal", 4, 22, 16, { Font = Enum.Font.GothamBold, Visible = false })
-local eventLabel = line("Event", 5, 26, 18, { Font = Enum.Font.GothamBold, TextColor3 = Color3.fromRGB(255, 210, 60), Visible = false })
+-- The win target: "WIN: 20 pts" and a bar filling toward it (green once reached), right under the score.
+local goalRow = Instance.new("Frame")
+goalRow.Name = "Goal"
+goalRow.LayoutOrder = 4
+goalRow.BackgroundTransparency = 1
+goalRow.Size = UDim2.new(1, 0, 0, 20)
+goalRow.Parent = panel
+local goalLabel = text(goalRow, "Target", { Font = Enum.Font.GothamBlack, TextSize = 15, TextColor3 = GOAL_FILL,
+	TextXAlignment = Enum.TextXAlignment.Left, Size = UDim2.new(0, 96, 1, 0) })
+local goalBar = Instance.new("Frame")
+goalBar.Name = "Bar"
+goalBar.AnchorPoint = Vector2.new(0, 0.5)
+goalBar.Position = UDim2.new(0, 100, 0.5, 0)
+goalBar.Size = UDim2.new(1, -100, 0, 14)
+goalBar.BackgroundColor3 = Color3.fromRGB(60, 56, 74)
+goalBar.BorderSizePixel = 0
+goalBar.ClipsDescendants = true
+goalBar.Parent = goalRow
+corner(goalBar, 7)
+local goalFill = Instance.new("Frame")
+goalFill.Name = "Fill"
+goalFill.Size = UDim2.fromScale(0, 1)
+goalFill.BackgroundColor3 = GOAL_FILL
+goalFill.BorderSizePixel = 0
+goalFill.Parent = goalBar
+corner(goalFill, 7)
+local goalText = text(goalBar, "Progress", { Font = Enum.Font.GothamBold, TextSize = 11, Size = UDim2.fromScale(1, 1), ZIndex = 2 })
+local revealLabel = line("Reveal", 5, 22, 16, { Font = Enum.Font.GothamBold, Visible = false })
 local messageLabel = line("Message", 6, 40, 15, { TextColor3 = Color3.fromRGB(220, 220, 230) })
 
 -- Results screen --------------------------------------------------------------------------------------
@@ -443,58 +471,31 @@ local messageLabel = line("Message", 6, 40, 15, { TextColor3 = Color3.fromRGB(22
 local results = Instance.new("Frame")
 results.Name = "Results"
 results.AnchorPoint = Vector2.new(0.5, 0.5)
-results.Position = UDim2.fromScale(0.5, 0.52)
-results.Size = UDim2.fromOffset(460, 360)
+results.Position = UDim2.fromScale(0.5, 0.5)
+results.Size = UDim2.fromOffset(RESULTS_W, RESULTS_H)
 results.BackgroundColor3 = PAPER
 results.Visible = false
 results.Parent = root
 corner(results, 12)
+resultsScale = Instance.new("UIScale")
+resultsScale.Parent = results
+fitToScreen()
 local resultsEdge = Instance.new("UIStroke")
 resultsEdge.Thickness = 3
 resultsEdge.Color = PAPER_EDGE
 resultsEdge.Parent = results
-text(results, "Title", { Text = "SHIFT OVER", Font = Enum.Font.GothamBlack, TextSize = 40, TextColor3 = INK,
-	Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 46) })
-local resultsSummary = text(results, "Summary", { Font = Enum.Font.GothamBold, TextSize = 22, TextColor3 = Color3.fromRGB(196, 92, 20),
-	Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 0, 56) })
+text(results, "Title", { Text = "SHIFT OVER", Font = Enum.Font.GothamBlack, TextSize = 26, TextColor3 = INK,
+	Position = UDim2.fromOffset(0, 12), Size = UDim2.new(1, 0, 0, 30) })
+local resultsVerdict = text(results, "Verdict", { Font = Enum.Font.GothamBlack, TextSize = 60,
+	Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 64) })
+local verdictStroke = Instance.new("UIStroke")
+verdictStroke.Thickness = 2
+verdictStroke.Color = INK
+verdictStroke.Parent = resultsVerdict
+local resultsSummary = text(results, "Summary", { Font = Enum.Font.GothamBold, TextSize = 20, TextColor3 = Color3.fromRGB(196, 92, 20),
+	Position = UDim2.fromOffset(0, 110), Size = UDim2.new(1, 0, 0, 52) })
 local resultsList = text(results, "List", { Font = Enum.Font.Code, TextSize = 16, TextColor3 = INK, TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(30, 132), Size = UDim2.new(1, -60, 1, -150) })
-
--- Tremor ----------------------------------------------------------------------------------------------
-
--- Tremor: nudge the camera a little every frame (after the camera scripts have placed it) and shake
--- both boards locally.
-local shaking = false
-local boardShake = nil
-local function setTremor(on)
-	if on == shaking then
-		return
-	end
-	shaking = on
-	if on and not readOnly then
-		local rng = Random.new()
-		RunService:BindToRenderStep("PatternTremor", Enum.RenderPriority.Camera.Value + 1, function()
-			local camera = workspace.CurrentCamera
-			camera.CFrame *= CFrame.new(rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS),
-				rng:NextNumber(-CAMERA_SHAKE_STUDS, CAMERA_SHAKE_STUDS), 0)
-				* CFrame.Angles(0, 0, rng:NextNumber(-CAMERA_SHAKE_RADIANS, CAMERA_SHAKE_RADIANS))
-		end)
-	end
-	if on then
-		boardShake = BoardShake.start({ cabinet:WaitForChild("TargetBoard"), cabinet:WaitForChild("LiveBoard") })
-	else
-		pcall(RunService.UnbindFromRenderStep, RunService, "PatternTremor") -- not bound on a read-only copy
-		if boardShake then
-			boardShake:stop()
-			boardShake = nil
-		end
-	end
-end
-
--- The view is leaving (role or game change): put the camera and the boards back.
-screen:GetAttributeChangedSignal("Exiting"):Connect(function()
-	setTremor(false)
-end)
+	TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(30, 172), Size = UDim2.new(1, -60, 1, -190) })
 
 -- Payload ---------------------------------------------------------------------------------------------
 
@@ -549,9 +550,12 @@ local function updateStack(p)
 	lastWaiting = waiting
 
 	if newOrder then
-		bonusLabel.Text = "+" .. (info.bonus or Config.ticketTimeBonus) .. "s"
-		bonusLabel.TextTransparency = 0
-		TweenService:Create(bonusLabel, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }):Play()
+		local bonus = info.bonus or Config.ticketTimeBonus
+		if bonus > 0 then -- 0 once the shift's bonus seconds are used up (Config.maxTimeBonus)
+			bonusLabel.Text = "+" .. bonus .. "s"
+			bonusLabel.TextTransparency = 0
+			TweenService:Create(bonusLabel, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 }):Play()
+		end
 		lastOrderSeq = info.seq
 	end
 end
@@ -577,11 +581,19 @@ patternUI.OnClientEvent:Connect(function(p)
 		clearStack()
 	end
 
-	modeLabel.Text = (p.mode and (string.upper(p.mode) .. " MODE   ") or "") .. (inShift and "SHIFT" or string.upper(p.state))
-	timerRow.Visible = (p.timeLeft or 0) > 0 and (inShift or p.state == "ModeSelect")
+	modeLabel.Text = (p.mode and (string.upper(p.mode) .. " MODE   ") or "") .. (inShift and "SHIFT"
+		or p.state == "Done" and "RESULTS" or p.state == "Idle" and "PRESS PLAY" or string.upper(p.state))
+	timerRow.Visible = (p.timeLeft or 0) > 0 and (inShift or p.state == "ModeSelect" or p.state == "Idle")
 	timerLabel.Text = formatTime(p.timeLeft)
 	timerLabel.TextColor3 = inShift and (p.timeLeft or 0) <= 15 and Color3.fromRGB(255, 90, 70) or Color3.new(1, 1, 1)
 	scoreLabel.Text = string.format("Score %d   Tickets %d", p.score or 0, p.completedCount or 0)
+	local goal = p.winPoints or Config.winPoints
+	local reached = (p.score or 0) >= goal
+	goalRow.Visible = p.state ~= "Idle"
+	goalLabel.Text = string.format("WIN: %d pts", goal)
+	goalFill.Size = UDim2.fromScale(math.clamp((p.score or 0) / math.max(goal, 1), 0, 1), 1)
+	goalFill.BackgroundColor3 = reached and GOOD or GOAL_FILL
+	goalText.Text = reached and "WIN REACHED!" or string.format("%d / %d", p.score or 0, goal)
 	local badge = ROBOT_BADGES[p.robot]
 	robotBadge.Visible = badge ~= nil
 	if badge then
@@ -594,23 +606,17 @@ patternUI.OnClientEvent:Connect(function(p)
 		revealLabel.TextColor3 = p.revealPhase == "show" and GOOD or Color3.fromRGB(180, 180, 190)
 	end
 
-	local event = p.event
-	eventLabel.Visible = event ~= nil
-	if event then
-		if event.phase == "warning" then
-			eventLabel.Text = string.format("WARNING: %s in %ds", event.banner, event.timeLeft)
-		else
-			eventLabel.Text = string.format("%s  %ds", event.banner, event.timeLeft)
-		end
-	end
-	setTremor(event ~= nil and event.name == "tremor" and event.phase == "active")
-
 	messageLabel.Text = p.message or ""
 
-	results.Visible = p.state == "Results"
-	if p.state == "Results" then
+	local over = p.state == "Results" or p.state == "Done" -- Done: the arcade is about to take the players back
+	results.Visible = over
+	if over then
 		local done = p.completed or {}
-		resultsSummary.Text = string.format("%d ticket%s completed\n%d points", #done, #done == 1 and "" or "s", p.score or 0)
+		local won = p.won == true
+		resultsVerdict.Text = won and "WIN!" or "LOSE"
+		resultsVerdict.TextColor3 = won and GOOD or BAD
+		resultsSummary.Text = string.format("%d ticket%s completed\n%d points (%d to win)", #done, #done == 1 and "" or "s",
+			p.score or 0, goal)
 		local rows = {}
 		for _, t in ipairs(done) do
 			local what = string.format("%d block%s%s", t.blocks, t.blocks == 1 and "" or "s", t.stacked and ", stacked" or "")

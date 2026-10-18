@@ -1,6 +1,8 @@
 -- Pattern Match unit tests. Not part of the game: run in Studio's command bar (or via the MCP
 -- execute_luau tool) in Edit mode. Requires clones of the modules, so it never touches the place
 -- and never gets stale cached module code. Returns "N passed, M failed" plus one line per check.
+-- The boards and the room are read from the arcade mode's Map (ServerStorage.Modes.PatternMatch.Map);
+-- section 33 runs the mode itself (Start / Finished / Stop) in Edit mode, with fake players.
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -109,26 +111,21 @@ check("compare exact match .clear", Target.compare(target, live(flat), {}).clear
 section("4. compare with one extra block (purple on A4)")
 local r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", A4 = "purple" }), {})
 check(".clear", r.clear, false); check(".extra", r.extra, { "A4" }); check(".missing", r.missing, {})
-check(".wrong", r.wrong, {}); check(".blocked", r.blocked, {}); check(".doubled", r.doubled, {})
-
-section("5. compare with a block on a vanished cell (red on vanished B4)")
-r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", B4 = "red" }), { B4 = true })
-check(".clear", r.clear, false); check(".blocked", r.blocked, { "B4" }); check(".extra", r.extra, {})
-check(".missing", r.missing, {}); check(".wrong", r.wrong, {})
-check("same, block removed from B4 .clear", Target.compare(target, live(flat), { B4 = true }).clear, true)
+check(".wrong", r.wrong, {}); check(".doubled", r.doubled, {})
+check("no blocked list (no vanishing cells any more)", tostring(r.blocked), "nil")
 
 section("5b. misread colors (not in Config.colors) count as wrong blocks, outlined")
 check("Target.isMisread: green / grey / red / skyblue", tostring(Target.isMisread("green")) .. tostring(Target.isMisread("grey"))
 	.. tostring(Target.isMisread("red")) .. tostring(Target.isMisread("skyblue")), "truetruefalsefalse")
 r = Target.compare(target, live({ A1 = "green", B2 = "teal", C3 = "yellow" }), {})
 check("green on target cell A1: wrong, outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.A1 and r.problemLevels.A1[0]),
-	"clear=false missing={} wrong={A1} extra={} blocked={} doubled={} outline true")
+	"clear=false missing={} wrong={A1} extra={} doubled={} outline true")
 r = Target.compare(target, live({ A1 = "red", B2 = "teal", C3 = "yellow", B3 = "pink" }), {})
 check("pink on non-target B3: wrong (not extra), outlined, not clear", Target.describe(r) .. " outline " .. tostring(r.problemLevels.B3 and r.problemLevels.B3[0]),
-	"clear=false missing={} wrong={B3} extra={} blocked={} doubled={} outline true")
+	"clear=false missing={} wrong={B3} extra={} doubled={} outline true")
 r = Target.compare(towers({ B2 = { "red", "teal" } }), live({ B2 = { "red", "white" } }), {})
 check("white on top of a tower: wrong at that level", Target.describe(r) .. " " .. tostring(r.problemLevels.B2 and r.problemLevels.B2[1]),
-	"clear=false missing={} wrong={B2} extra={} blocked={} doubled={} true")
+	"clear=false missing={} wrong={B2} extra={} doubled={} true")
 
 section("6. compare missing / wrong")
 r = Target.compare(target, live({ A1 = "red", B2 = "purple" }), {})
@@ -185,7 +182,7 @@ check("two reds in A1 .clear", r.clear, false); check(".doubled", r.doubled, { "
 check(".wrong", r.wrong, {}); check(".missing", r.missing, {}); check(".extra", r.extra, {})
 r = Target.compare(target, live(flat, { block("B4", "red"), block("B4", "teal") }), {})
 check("double on non-target B4 .doubled", r.doubled, { "B4" }); check(".extra", r.extra, { "B4" })
-check("describe()", Target.describe(r), "clear=false missing={} wrong={} extra={B4} blocked={} doubled={B4}")
+check("describe()", Target.describe(r), "clear=false missing={} wrong={} extra={B4} doubled={B4}")
 
 section("11. generate(n, maxHeight): n blocks, towers no taller than maxHeight, never above the global cap")
 Config.uniqueColorsPerTicket = false -- placement only here (n up to 12 is more than the 6 colors); 11a has colors
@@ -316,9 +313,6 @@ r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "purple" }, C3 = "yell
 check("wrong color on top only .wrong", r.wrong, { "B2" }); check(".missing", r.missing, {})
 r = Target.compare(tall, live({ A1 = "red", C3 = "yellow" }, { block("B2", "teal", { level = 1, z = 3.5 }) }), {})
 check("top block reported with nothing under it: .missing (level 0)", r.missing, { "B2" }); check(".wrong", r.wrong, {}); check(".extra", r.extra, {})
-r = Target.compare(tall, live({ A1 = "red", B2 = { "red", "teal" }, C3 = "yellow" }), { B2 = true })
-check("tower on a vanished cell .blocked", r.blocked, { "B2" }); check(".missing (blocked cells skip it)", r.missing, {})
-check(".problemLevels B2 = both levels", tostring(r.problemLevels.B2[0]) .. " " .. tostring(r.problemLevels.B2[1]), "true true")
 check("Target.count(tall)", table.concat({ Target.count(tall) }, ","), "4,2")
 
 section("12. worldPositionOf on an 8 x 1 x 6 base at (0, 5, 0): row A at +Z, column 1 at +X")
@@ -345,9 +339,11 @@ repeat task.wait() until fired ~= nil or os.clock() - waitedFrom > 1
 check("update() fires changed with new seq", fired, 7)
 check("get() returns updated blocks", #Store.get().blocks, 1)
 
-section("14. built boards")
+section("14. built boards (in the mode's Map)")
 local boardView, VIEW_OK -- set in section 14, reused in section 23
-local cab = workspace:FindFirstChild("PatternCabinet")
+local modeFolder = game:GetService("ServerStorage"):FindFirstChild("Modes") and game:GetService("ServerStorage").Modes:FindFirstChild("PatternMatch")
+local mapTemplate = modeFolder and modeFolder:FindFirstChild("Map")
+local cab = mapTemplate and mapTemplate:FindFirstChild("PatternCabinet")
 if cab then
 	local names = {}
 	for _, c in ipairs(cab.TargetBoard:GetChildren()) do
@@ -458,23 +454,27 @@ if cab then
 		and math.abs((twin.Base.Position.Y - twin.Base.Size.Y / 2) - (lb.Slab.Position.Y + lb.Slab.Size.Y / 2)) < 0.001, true)
 	check("Config colors are the Apprentice palette", Config.colors.red == Color3.fromHex("e2383f") and Config.colors.teal == Color3.fromHex("16a59b")
 		and Config.colors.purple == Color3.fromHex("8a5cc7") and Config.colors.skyblue == Color3.fromHex("62bdea"), true)
-	local room = workspace:FindFirstChild("Room")
-	local spawnPad = room and room:FindFirstChildWhichIsA("SpawnLocation", true)
-	check("bedroom built; Baseplate, old SpawnLocation, sky island and cabinet floor gone", room ~= nil and workspace:FindFirstChild("Baseplate") == nil
-		and workspace:FindFirstChild("SpawnLocation") == nil and cab:FindFirstChild("Island") == nil and cab:FindFirstChild("Floor") == nil, true)
-	check("spawn inside the room, near the entry pad", spawnPad ~= nil and (spawnPad.Position - cab.Entry.Position).Magnitude < 12, true)
+	local room = mapTemplate:FindFirstChild("Room")
+	local mat = room and room:FindFirstChild("Spawn") and room.Spawn:FindFirstChild("Mat")
+	check("bedroom built; Baseplate, SpawnLocations, sky island and cabinet floor gone", room ~= nil and workspace:FindFirstChild("Baseplate") == nil
+		and mapTemplate:FindFirstChildWhichIsA("SpawnLocation", true) == nil and cab:FindFirstChild("Island") == nil and cab:FindFirstChild("Floor") == nil, true)
+	check("the Play pad and its prompt in front of the table's row C side; the StartSpot behind the pad, in prompt range",
+		tostring(cab:FindFirstChild("Entry") and cab.Entry:FindFirstChild("PlayPrompt") and cab.Entry.PlayPrompt:IsA("ProximityPrompt")) .. " "
+		.. tostring(cab:FindFirstChild("StartSpot") ~= nil and cab.Entry.Position.Z > cab.Table.Top.Position.Z + cab.Table.Top.Size.Z / 2
+			and cab.StartSpot.Position.Z > cab.Entry.Position.Z
+			and (cab.StartSpot.Position - cab.Entry.Position).Magnitude < cab.Entry.PlayPrompt.MaxActivationDistance - 1), "true true")
+	check("the spawn mat is a plain part, near the start spot", mat ~= nil and mat.ClassName == "Part" and (mat.Position - cab.StartSpot.Position).Magnitude < 12, true)
 	local scriptsInRoom = 0
 	for _, d in ipairs(room and room:GetDescendants() or {}) do
 		if d:IsA("LuaSourceContainer") then scriptsInRoom += 1 end
 	end
 	check("no scripts inside the room's props", scriptsInRoom, 0)
-	local focus = game:GetService("Lighting"):FindFirstChild("CabinetFocus")
-	check("Lighting: Realistic style, shadows on, CabinetFocus depth of field", game:GetService("Lighting").LightingStyle == Enum.LightingStyle.Realistic
-		and game:GetService("Lighting").GlobalShadows and focus ~= nil and focus:IsA("DepthOfFieldEffect"), true)
+	check("Lighting holds no Pattern Match effect (the depth of field lives under the camera; the arcade owns Lighting)",
+		tostring(game:GetService("Lighting"):FindFirstChild("CabinetFocus")), "nil")
 	local blockMesh = RS.PatternMatch:FindFirstChild("BlockMesh")
 	table.insert(lines, "     (BlockMesh template: " .. (blockMesh and blockMesh.MeshId or "missing, plain Parts") .. ")")
 else
-	check("Workspace.PatternCabinet exists", false, true)
+	check("ServerStorage.Modes.PatternMatch.Map.PatternCabinet exists", false, true)
 end
 
 local Game = require(pm.Game)
@@ -508,11 +508,10 @@ if cab then
 	local board = cab:Clone() -- never parented, so the place is untouched
 	local fakeBlocks = {}
 	local robotStatus = "mock"
-	local sent, fired, changes = {}, {}, {}
+	local sent, changes = {}, {}
 	local g = Game.new({
 		cabinet = board,
 		store = { get = function() return { blocks = fakeBlocks } end, status = function() return robotStatus end },
-		core = { fire = function(name, intensity, duration) table.insert(fired, name .. " " .. intensity .. " " .. duration) end },
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end },
 		stateChanged = { Fire = function(_, info) table.insert(changes, info) end },
 		rng = Random.new(11),
@@ -543,8 +542,6 @@ if cab then
 		g:step(Config.modeSelectSeconds)
 		g:step(Config.modeConfirmSeconds)
 	end
-	Config.debugEventEvery = 100000 -- no events in this section
-
 	Config.debugForceMode = "easy"
 	g:setState("Idle")
 	check("start() from Idle", g:start(tester), true)
@@ -665,9 +662,9 @@ if cab then
 	end
 	fakeBlocks = { keepA1 } -- the A2 tower is cleared away, the red A1 block stays where it is
 	g:step(0.25)
-	local partial = Target.compare(g:activeTicket().target, g.liveGrid, g.events.vanished)
+	local partial = Target.compare(g:activeTicket().target, g.liveGrid)
 	check("A1 already counts: only B1 is missing, nothing extra or wrong", Target.describe(partial),
-		"clear=false missing={B1} wrong={} extra={} blocked={} doubled={}")
+		"clear=false missing={B1} wrong={} extra={} doubled={}")
 	table.insert(fakeBlocks, block("B1", "purple"))
 	steps(4, 0.25)
 	check("adding B1 completes ticket 1 with the reused A1 block (+3 points)", railIds() .. " score " .. g.score .. " active " .. g.activeId, "2,4 score 9 active 2")
@@ -801,145 +798,9 @@ if cab then
 	g:step(0.25)
 	check("problems removed -> highlights cleared", litBlocks(), {})
 
-	local PatternEvents = require(pm.PatternEvents)
-
-	section("18. vanish cell selection")
-	local rng = Random.new(7)
-	local badPicks, maxPicked = 0, 0
-	for _ = 1, 300 do
-		local tgt = Target.generate(rng:NextInteger(3, 5), 2, rng)
-		local occupied = {}
-		for _, c in ipairs(cells) do
-			if not tgt[c] and rng:NextNumber() < 0.4 then occupied[c] = "red" end
-		end
-		local lg = live(occupied)
-		local picked = PatternEvents.pickVanishCells(tgt, lg, {}, 2, rng)
-		maxPicked = math.max(maxPicked, #picked)
-		local seen = {}
-		for _, c in ipairs(picked) do
-			if tgt[c] or lg[c] or seen[c] then badPicks += 1 end
-			seen[c] = true
-		end
-	end
-	check("300 random boards: picks on a target, an occupied cell, or twice", badPicks, 0)
-	check("never more than 2 cells", maxPicked <= 2, true)
-	local fullBoard = {}
-	for _, c in ipairs(cells) do fullBoard[c] = "red" end
-	check("no empty non-target cell -> nothing picked", PatternEvents.pickVanishCells(towers({ A1 = "red" }), live(fullBoard), {}, 2, rng), {})
-	local allButB2 = {}
-	for _, c in ipairs(cells) do allButB2[c] = c ~= "B2" or nil end
-	check("already vanished cells are not picked again", PatternEvents.pickVanishCells({}, {}, allButB2, 2, rng), { "B2" })
-
-	section("19. vanish during a shift: sticky rule, blocked compare, white outline, active ticket's cells kept")
-	Config.events = { "vanish" }
-	Config.vanishCount = { 2, 2 } -- always two cells, so this section runs the same checks every time
-	Config.debugEventEvery = 4
-	fakeBlocks = {}
-	startEasy()
-	local active = g:activeTicket()
-	setPattern(active, { A1 = "red", B2 = "teal", C3 = "yellow" })
-	steps(7, 0.25) -- 1.75 s
-	check("1.75 s: no event yet", tostring(sent[#sent].event), "nil")
-	g:step(0.25) -- 2.0 s: warning, 2 s before the 4 s mark
-	check("2.0 s: vanish warning, 2 s", sent[#sent].event.name .. " " .. sent[#sent].event.phase .. " " .. sent[#sent].event.timeLeft, "vanish warning 2")
-	steps(8, 0.25) -- 4.0 s
-	check("4.0 s: vanish active", g.events.current.phase, "active")
-	local vanishedNow = sent[#sent].vanishedCells
-	local onTarget = 0
-	for _, c in ipairs(vanishedNow) do if active.target[c] then onTarget += 1 end end
-	check("2 cells vanished (vanishCount forced to 2), none in the ACTIVE ticket's pattern", #vanishedNow .. " " .. onTarget, "2 0")
-	local v1, v2 = vanishedNow[1], vanishedNow[2]
-	check("vanished square transparent, the dark groove layer shows under it", board.LiveBoard[v1].Transparency == 1
-		and board.LiveBoard.Base.Color.R < 0.15, true)
-	check("TargetBoard unchanged", board.TargetBoard[v1].Transparency, 0)
-	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal", C3 = "yellow" })
-	table.insert(fakeBlocks, block(v1, "red"))
-	steps(8, 0.25) -- 6.0 s: pattern built, but a block sits on a vanished cell
-	check("built + block on a vanished cell: not completed", sent[#sent].completedCount, 0)
-	check("compare reports it as blocked", Target.compare(active.target, g.liveGrid, g.events.vanished).blocked, { v1 })
-	check("white outline on the blocked cell's block", board.LiveBoard.Blocks[v1].ProblemHighlight.Visible, true)
-	steps(20, 0.25) -- 11.0 s: the 6 s vanish timer ran out at 10 s
-	check("timer over, block still there: cell stays vanished", board.LiveBoard[v1].Transparency, 1)
-	check("the other vanished cell (no block) came back", v2 and board.LiveBoard[v2].Transparency, 0)
-	check("ticket still not completed", sent[#sent].completedCount, 0)
-	fakeBlocks = blocksFor({ A1 = "red", B2 = "teal", C3 = "yellow" })
-	g:step(0.25)
-	check("block removed: cell comes back", board.LiveBoard[v1].Transparency .. " " .. table.concat(sent[#sent].vanishedCells, ","), "0 ")
-	steps(4, 0.25)
-	check("then the ticket completes", sent[#sent].completedCount, 1)
-	check("vanish never calls Core.Events", #fired, 0)
-
-	section("20. scheduler: only during the Shift, never the same event twice in a row")
-	Config.vanishCount = { 1, 2 }
-	Config.events = { "vanish", "tremor", "inverted" }
-	Config.debugEventEvery = 3
-	local baseBefore = board.LiveBoard.Base.CFrame
-	local blockBefore = board.LiveBoard.Blocks.A1.CFrame
-	table.clear(fired)
-	local seq, outside, lastActive = {}, 0, nil
-	local function watch()
-		local ev = g.events.current
-		if ev and g.state ~= "Shift" then outside += 1 end
-		if ev and ev.phase == "active" and ev ~= lastActive then
-			table.insert(seq, ev.name)
-			lastActive = ev
-		end
-	end
-	fakeBlocks = {}
-	g:setState("Idle")
-	g:start(tester)
-	for _ = 1, 66 do g:step(0.25); watch() end -- 15 s of ModeSelect + 1.5 s confirmation
-	check("ModeSelect: no events, no Core.Events calls", #seq .. " " .. #fired .. " " .. g.state, "0 0 Shift")
-	check("shift start: schedule reset", g.events.nextAt, 3)
-	for _ = 1, Config.shiftSeconds * 4 do g:step(0.25); watch() end -- the whole shift, empty grid
-	check("shift timed out", g.state, "Results")
-	check("server never moved the boards (tremor shake is client-side)", board.LiveBoard.Base.CFrame == baseBefore and board.LiveBoard.Blocks.A1.CFrame == blockBefore, true)
-	for _ = 1, 8 do g:step(0.25); watch() end
-	check("no event outside the Shift; scheduler stopped in Results", outside .. " " .. tostring(g.events.running), "0 false")
-	local repeats = 0
-	for i = 2, #seq do
-		if seq[i] == seq[i - 1] then repeats += 1 end
-	end
-	check("the shift ran at least 5 events", #seq >= 5, true)
-	check("back-to-back repeats in " .. #seq .. " events", repeats, 0)
-	local tremors, inverts, quakes, mirrors = 0, 0, 0, 0
-	for _, name in ipairs(seq) do
-		if name == "tremor" then tremors += 1 elseif name == "inverted" then inverts += 1 end
-	end
-	for _, f in ipairs(fired) do
-		if f == "earthquake 0.5 4" then quakes += 1 elseif f == "mirror 1 8" then mirrors += 1 end
-	end
-	check("Core.Events: earthquake 0.5 4 per tremor, mirror 1 8 per inverted", quakes .. "/" .. tremors .. " " .. mirrors .. "/" .. inverts,
-		tremors .. "/" .. tremors .. " " .. inverts .. "/" .. inverts)
-
-	section("21. tremor board shake (BoardShake, run on clients) restores every part exactly")
-	local BoardShake = require(pm.BoardShake)
-	local baseStart = board.LiveBoard.Base.CFrame
-	local tileStart = board.TargetBoard.C4.CFrame
-	local targetBlockStart = board.TargetBoard.Blocks.B2.CFrame
-	local twinPart = board.LiveBoard:FindFirstChild("ArmTwin") and board.LiveBoard.ArmTwin:FindFirstChild("UpperArm")
-	local twinStart = twinPart and twinPart.CFrame
-	local shake = BoardShake.start({ board.TargetBoard, board.LiveBoard })
-	local moved, twinMoved = false, false
-	for _ = 1, 10 do
-		task.wait()
-		if board.LiveBoard.Base.CFrame ~= baseStart then moved = true end
-		if twinPart and twinPart.CFrame ~= twinStart then twinMoved = true end
-	end
-	table.insert(lines, "     (boards moved while shaking: " .. tostring(moved) .. ", arm twin moved with them: " .. tostring(twinMoved) .. ")")
-	shake:stop()
-	check("after stop: LiveBoard.Base and TargetBoard.C4 exactly restored",
-		board.LiveBoard.Base.CFrame == baseStart and board.TargetBoard.C4.CFrame == tileStart, true)
-	check("after stop: TargetBoard block B2 exactly restored too", board.TargetBoard.Blocks.B2.CFrame == targetBlockStart, true)
-	if twinPart then
-		check("after stop: the twin's (unanchored) UpperArm is back within 0.001 studs",
-			(twinPart.Position - twinStart.Position).Magnitude < 0.001, true)
-	end
-
 	section("22. mode select: only the starter picks, only during ModeSelect, only once")
 	local alice, bob = { Name = "Alice", UserId = 101 }, { Name = "Bob", UserId = 202 }
 	Config.debugForceMode = nil
-	Config.debugEventEvery = nil
 	fakeBlocks = {}
 	g:setState("Idle")
 	check("Alice starts a game", g:start(alice), true)
@@ -1007,16 +868,12 @@ if cab then
 	liveSpinner:destroy()
 
 	g.targetBoard:show(towers({ A1 = "red", B2 = { "red", "teal" }, C3 = "teal" }), false, false)
-	local shakingNow = true
-	local targetSpinner = BoardSpinner.new(board.TargetBoard, { isShaking = function() return shakingNow end })
+	local targetSpinner = BoardSpinner.new(board.TargetBoard)
 	local tlook0, ta1Start = board.TargetBoard.Base.CFrame.LookVector, board.TargetBoard.A1.Position
 	targetSpinner:request()
-	task.wait(0.6)
-	check("during a tremor the spin waits", board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0) > 0.9999, true)
-	shakingNow = false
 	local took = waitIdle(targetSpinner, 3)
-	check("tremor over: the spin runs, after the 0.5 s margin", math.abs(board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0)) < 0.001
-		and took >= BoardSpinner.AFTER_SHAKE_SECONDS + BoardSpinner.SPIN_SECONDS - 0.05, true)
+	check("TargetBoard: one request spins it 90 degrees in about SPIN_SECONDS", math.abs(board.TargetBoard.Base.CFrame.LookVector:Dot(tlook0)) < 0.001
+		and took >= BoardSpinner.SPIN_SECONDS - 0.05, true)
 	check("1 spin: tiles on Grid.worldPositionOf, block parts (both levels) on their tiles (cells off)", offCells(board.TargetBoard), 0)
 	check("1 spin: A1 / B2 tower / C3 target blocks still shown, A2 still empty",
 		board.TargetBoard.Blocks.A1.Color == Config.colors.red and board.TargetBoard.Blocks.B2_1.Color == Config.colors.teal
@@ -1144,7 +1001,9 @@ else
 	check("ReplicatedStorage.ArmTwin exists", false, true)
 end
 
-section("26. attract mode: the Idle demo loop")
+section("26. attract mode: the Idle demo loop (off in the arcade; the code is kept)")
+local attractWas = Config.attractEnabled
+Config.attractEnabled = true
 if cab then
 	local AttractModule = require(pm.Attract)
 	local board = cab:Clone()
@@ -1165,7 +1024,7 @@ if cab then
 		update = function() storeWrites += 1 end,
 	}, { __newindex = function(t, k, v) storeWrites += 1; rawset(t, k, v) end })
 	local sent = {}
-	local g = Game.new({ cabinet = board, store = store, core = { fire = function() end },
+	local g = Game.new({ cabinet = board, store = store,
 		ui = { FireAllClients = function(_, p) table.insert(sent, p) end, FireClient = function() end }, manualAttract = true })
 	local A = g.attract
 	local livePool, targetPool = g.liveBoard.blocks, g.targetBoard.blocks
@@ -1330,9 +1189,10 @@ if cab then
 	g:start({ Name = "Tester", UserId = 1 })
 	g:setState("Idle")
 	check("attractEnabled = false: Idle without the demo", tostring(A.running) .. " " .. shown(targetPool), "false 0")
-	Config.attractEnabled = true
 	board:Destroy()
 end
+
+Config.attractEnabled = attractWas
 
 section("27. bridge grid: hello.space.grid drives the cell lookup (mock's hello; then a moved sheet)")
 do
@@ -1366,7 +1226,7 @@ do
 
 	-- Orientation, re-run against the mock's grid: a sheet point lands on the LiveBoard tile of the cell it
 	-- reads as, so A1 is far-left from the row C side and C4 near-right (the board view test in 14).
-	local cabModel = workspace:FindFirstChild("PatternCabinet")
+	local cabModel = cab
 	if cabModel then
 		local lb = cabModel.LiveBoard
 		G.setGeometry(mockGrid)
@@ -1395,10 +1255,8 @@ section("28. Core.StateStore adapter (edit mode: no bridge, nothing connects)")
 do
 	local core = RS.Core:Clone()
 	local Store = require(core.StateStore)
-	local Ev = require(core.Events)
 	check("source / status before any hello", Store.source() .. " " .. Store.status(), "pending offline")
 	check("sendEvent without the bridge: Roblox side only", select(2, Store.sendEvent("earthquake", 0.5, 4)), "no robot bridge (pending)")
-	check("Events.fire returns false without the bridge", Ev.fire("earthquake", 0.5, 4), false)
 	local function ls(...) return Store.linkStatus(...) end
 	check("badge: mock -> MOCK; teleop, follower, auto, a new name or none -> ROBOT LIVE",
 		table.concat({ ls("mock", 0.1, 0.1, 0.03), ls("teleop", 0.1, 0.1, 0.03), ls("follower", 0.1, 0.1, 0.03),
@@ -1457,7 +1315,7 @@ do
 end
 
 section("29. stick-figure arm twin (ArmTwin.Stick) from arm.points")
-local cabModel = workspace:FindFirstChild("PatternCabinet")
+local cabModel = cab
 if RS:FindFirstChild("ArmTwin") and RS.ArmTwin:FindFirstChild("Stick") and cabModel then
 	local twinCopy = RS.ArmTwin:Clone()
 	local StickM = require(twinCopy.Stick)
@@ -1556,10 +1414,10 @@ do
 	local core = RS.Core:Clone()
 	local Registry = require(core.GameRegistry)
 	local pmEntry = Registry.get("PatternMatch")
-	check("Pattern Match is registered (Core.Games.PatternMatch): name, lobby, two view modules",
+	check("Pattern Match is registered (Core.Games.PatternMatch): name, not the lobby (an arcade mode), two view modules",
 		pmEntry ~= nil and pmEntry.name .. " " .. tostring(pmEntry.lobby) .. " " .. pmEntry.playerView.Name .. " " .. pmEntry.robotView.Name,
-		"Pattern Match true PlayerView RobotView")
-	check("lobbyEntry is Pattern Match", Registry.lobbyEntry() == pmEntry, true)
+		"Pattern Match false PlayerView RobotView")
+	check("no lobby game: in the lobby a player shows no Pattern Match view", tostring(Registry.lobbyEntry()), "nil")
 	local views = {}
 	for _, m in ipairs({ pmEntry.playerView, pmEntry.robotView, RS.Core.Views.LobbyRobotView }) do
 		local v = require(m) -- the real modules: PlayerView finds its templates through script.Parent
@@ -1594,7 +1452,7 @@ if cab then
 	local players = { fake("Pat", "player"), fake("Rob", "robot"), fake("Spec", "spectator"), fake("New", nil) }
 	local active = {}
 	local g = Game.new({ cabinet = board, store = { get = function() return { blocks = {} } end, status = function() return "mock" end },
-		core = { fire = function() end }, ui = ui, robotUi = robotUi, players = function() return players end,
+		ui = ui, robotUi = robotUi, players = function() return players end,
 		roleOf = function(p) return p:GetAttribute("Role") end, onActive = function(on) table.insert(active, tostring(on)) end,
 		rng = Random.new(3), manualAttract = true })
 	g:setState("Idle")
@@ -1608,16 +1466,16 @@ if cab then
 	local keys = {}
 	for k in pairs(rp) do table.insert(keys, k) end
 	table.sort(keys)
-	check("the robot gets only state, timer, score, tickets done, ORDER UP and the link",
-		(robotSent[1] and robotSent[1].name or "-") .. " " .. table.concat(keys, ","), "Rob completedCount,robot,score,state,timeLeft")
+	check("the robot gets only state, timer, score and the win target, tickets done, ORDER UP and the link",
+		(robotSent[1] and robotSent[1].name or "-") .. " " .. table.concat(keys, ","), "Rob completedCount,robot,score,state,timeLeft,winPoints")
 	local ticket = g:activeTicket()
 	g:completeTicket(ticket)
 	local last = robotSent[#robotSent].payload
 	check("an ORDER UP reaches the robot as seq + points only", tostring(last.orderUp and last.orderUp.seq) .. " "
 		.. tostring(last.orderUp and last.orderUp.points == ticket.points) .. " " .. tostring(last.orderUp and last.orderUp.id), "1 true nil")
-	check("Game.robotPayload drops tickets, target, reveal, events and vanished cells", (function()
-		local p = Game.robotPayload(g:payload())
-		return tostring(p.tickets) .. tostring(p.activeId) .. tostring(p.revealPhase) .. tostring(p.event) .. tostring(p.vanishedCells)
+	check("Game.robotPayload drops tickets, target and reveal; no event fields anywhere", (function()
+		local p, full = Game.robotPayload(g:payload()), g:payload()
+		return tostring(p.tickets) .. tostring(p.activeId) .. tostring(p.revealPhase) .. tostring(full.event) .. tostring(full.vanishedCells)
 	end)(), "nilnilnilnilnil")
 	g:pushUI(players[2])
 	check("pushUI(robot) sends the robot payload, never the full one", tostring(robotSent[#robotSent].name) .. " " .. tostring(robotSent[#robotSent].payload.tickets), "Rob nil")
@@ -1649,9 +1507,13 @@ check("the robot view's camera shot keeps the whole cabinet behind it", (functio
 	if not (fx and ax) then return "no shot" end
 	local from, at = Vector3.new(tonumber(fx), tonumber(fy), tonumber(fz)), Vector3.new(tonumber(ax), tonumber(ay), tonumber(az))
 	local look = (at - from).Unit
+	-- The shot is in the map's frame; the Map is stored (and played) at Config.mapOffset.
+	from, at = from + Config.mapOffset, at + Config.mapOffset
+	look = (at - from).Unit
 	-- Every corner of the cabinet's bounding box (and 12 studs above it, the celebration text) is behind
 	-- the camera: a negative dot with the look direction.
-	local cf, size = workspace.PatternCabinet:GetBoundingBox()
+	if not cab then return "no cabinet" end
+	local cf, size = cab:GetBoundingBox()
 	for _, sx in ipairs({ -0.5, 0.5 }) do
 		for _, sy in ipairs({ -0.5, 0.5 }) do
 			for _, sz in ipairs({ -0.5, 0.5 }) do
@@ -1662,5 +1524,249 @@ check("the robot view's camera shot keeps the whole cabinet behind it", (functio
 	end
 	return "all behind"
 end)(), "all behind")
+
+section("33. arcade mode (ServerStorage.Modes.PatternMatch): contract, Start / Finished / Stop, cleanup")
+if modeFolder and modeFolder:FindFirstChild("Module") and mapTemplate then
+	-- Fresh copies of every module the mode requires by path (the command bar caches requires), then a
+	-- fresh copy of the mode itself (the clone keeps its Map next to its Module).
+	local stale = {}
+	for _, root in ipairs({ RS.PatternMatch, RS.Core, RS.ArmTwin }) do
+		for _, m in ipairs(root:GetDescendants()) do
+			if m:IsA("ModuleScript") then table.insert(stale, m) end
+		end
+	end
+	for _, m in ipairs(stale) do
+		local copy, parent = m:Clone(), m.Parent
+		m:Destroy()
+		copy.Parent = parent
+	end
+	local MC = require(RS.PatternMatch.Config)
+	local MGame = require(RS.PatternMatch.Game)
+	local Registry = require(RS.Core.GameRegistry)
+	local modeCopy = modeFolder:Clone()
+	local Mode = require(modeCopy.Module)
+	local Lighting = game:GetService("Lighting")
+
+	local function lightingSnapshot()
+		local parts = {}
+		for _, prop in ipairs({ "Ambient", "Brightness", "ClockTime", "ColorShift_Bottom", "ColorShift_Top", "EnvironmentDiffuseScale",
+			"EnvironmentSpecularScale", "ExposureCompensation", "FogColor", "FogEnd", "FogStart", "GeographicLatitude",
+			"GlobalShadows", "OutdoorAmbient", "ShadowSoftness", "LightingStyle" }) do
+			table.insert(parts, prop .. "=" .. tostring(Lighting[prop]))
+		end
+		for _, c in ipairs(Lighting:GetDescendants()) do
+			table.insert(parts, c:GetFullName() .. ":" .. c.ClassName .. ":" .. tostring(c:IsA("PostEffect") and c.Enabled))
+		end
+		table.sort(parts)
+		return table.concat(parts, ";")
+	end
+	local function workspaceSnapshot()
+		local names = {}
+		for _, c in ipairs(workspace:GetChildren()) do table.insert(names, c.Name) end
+		table.sort(names)
+		return table.concat(names, ",") .. " #" .. #workspace:GetDescendants()
+	end
+	local lightingBefore, workspaceBefore = lightingSnapshot(), workspaceSnapshot()
+
+	check("contract: name, tip, unlock, Finished, Start / Stop, MaxDuration",
+		string.format("%s | %s | %s %s %s %s %s", Mode.DisplayName, Mode.Tip, tostring(Mode.WinsToUnlock),
+			typeof(Mode.Finished) == "Instance" and Mode.Finished.ClassName or "-", type(Mode.Start), type(Mode.Stop), type(Mode.MaxDuration)),
+		"Pattern Match | Call out the pattern, the robot builds it! | 0 BindableEvent function function number")
+	check("win target: Config.winPoints = 20", MC.winPoints, 20)
+	local mapCf, mapSize = mapTemplate:GetBoundingBox()
+	check("Map: a Persistent Model, stored at Config.mapOffset", mapTemplate.ClassName .. " " .. mapTemplate.ModelStreamingMode.Name .. " "
+		.. tostring((mapTemplate:GetPivot().Position - MC.mapOffset).Magnitude < 1e-3), "Model Persistent true")
+	check("Map: clear of everything in Workspace (the arcade, its scenery, terrain) and of Flood's chamber, with 20 studs to spare",
+		(function()
+			local hits = workspace:GetPartBoundsInBox(mapCf, mapSize + Vector3.new(40, 40, 40))
+			local region = Region3.new(mapCf.Position - mapSize / 2, mapCf.Position + mapSize / 2):ExpandToGrid(4)
+			local mats, occ = workspace.Terrain:ReadVoxels(region, 4)
+			local terrain = 0
+			for x = 1, mats.Size.X do for y = 1, mats.Size.Y do for z = 1, mats.Size.Z do
+				if mats[x][y][z] ~= Enum.Material.Air and occ[x][y][z] > 0 then terrain += 1 end
+			end end end
+			local flood = game:GetService("ServerStorage").Modes:FindFirstChild("Flood")
+			local floodClear = true
+			if flood then
+				for _, p in ipairs(flood:GetDescendants()) do
+					if p:IsA("BasePart") then
+						local d = (p.Position - mapCf.Position):Abs() - (mapSize + p.Size) / 2
+						if d.X < 20 and d.Y < 20 and d.Z < 20 then floodClear = false break end
+					end
+				end
+			end
+			return #hits .. " parts, " .. terrain .. " terrain voxels, flood clear " .. tostring(floodClear)
+		end)(), "0 parts, 0 terrain voxels, flood clear true")
+	check("Map: no scripts and no SpawnLocation inside", (function()
+		local n = 0
+		for _, d in ipairs(mapTemplate:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") or d:IsA("SpawnLocation") then n += 1 end
+		end
+		return n
+	end)(), 0)
+	check("attract demo on for the room; the room waits roomIdleSeconds = 90", tostring(MC.attractEnabled) .. " " .. MC.roomIdleSeconds, "true 90")
+	check("no event settings left in Config", tostring(MC.events) .. tostring(MC.debugEventEvery) .. tostring(MC.vanishSeconds)
+		.. tostring(MC.easy) .. tostring(MC.hard.eventEvery), "nilnilnilnilnil")
+
+	-- MaxDuration: room wait + mode select countdown + confirmation + shift + every bonus second + results, with margin.
+	local longest = MC.roomIdleSeconds + MC.modeSelectSeconds + MC.modeConfirmSeconds + MC.shiftSeconds + MC.maxTimeBonus + MC.resultsSeconds
+	check("MaxDuration covers room wait + mode select + shift + all time bonuses + results, with margin, and is above the arcade's 180 s",
+		tostring(Mode.MaxDuration >= longest + 10) .. " " .. tostring(Mode.MaxDuration > 180) .. " " .. Mode.MaxDuration .. " >= " .. longest,
+		"true true " .. Mode.MaxDuration .. " >= " .. longest)
+
+	local function fakePlayer(name, role)
+		local attrs = { Role = role }
+		return { Name = name, UserId = 1000 + #name, Parent = game, Character = nil,
+			GetAttribute = function(_, k) return attrs[k] end, SetAttribute = function(_, k, v) attrs[k] = v end }
+	end
+	-- (A BindableEvent copies tables, so these fake players arrive as copies: compare names. Real Player
+	-- instances arrive as themselves.)
+	local fired = {}
+	local finishedConn = Mode.Finished.Event:Connect(function(r) table.insert(fired, r) end)
+	local function flush() -- signal handlers are deferred
+		for _ = 1, 3 do task.wait() end
+	end
+	local fakeBlocks = {}
+	local store = { get = function() return { blocks = fakeBlocks } end, status = function() return "fake" end }
+	-- Runs one game from Start to the end of Results with the given final score: `presser` presses Play
+	-- in the room after a few seconds.
+	local roomCheck
+	local function playTo(players, score, presser)
+		local s = Mode.Start(players, { store = store, manual = true, rng = Random.new(5) })
+		Mode.step(2)
+		roomCheck = s.game.state .. " " .. tostring(s.game.attract.running) .. " " .. tostring(s.prompt.Enabled) .. " " .. s.game.message
+			.. " | robot: " .. MGame.robotPayload(s.game:payload()).state
+		Mode.play(presser)
+		roomCheck ..= " | after Play: " .. s.game.state .. " " .. tostring(s.game.attract.running) .. " " .. tostring(s.prompt.Enabled)
+		Mode.step(MC.modeSelectSeconds) -- nobody picks: Easy at 0
+		Mode.step(MC.modeConfirmSeconds)
+		local inShift = s.game.state
+		s.game.score = score
+		s.game.timeLeft = 0
+		Mode.step(MGame.TICK) -- Results
+		local results = s.game:payload()
+		Mode.step(MC.resultsSeconds) -- Done: Finished
+		Mode.step(MGame.TICK)
+		Mode.step(MGame.TICK)
+		flush()
+		return s, inShift, results
+	end
+
+	local pat, sam = fakePlayer("Pat", "player"), fakePlayer("Sam", nil)
+	local s1, inShift, resultsPayload = playTo({ pat, sam }, 20, pat)
+	check("Start: map in Workspace under Config.mapName at the offset, Pattern Match active, room -> Play -> mode select -> shift",
+		tostring(s1.map.Parent == workspace and s1.map.Name == MC.mapName) .. " " .. tostring((s1.map:GetPivot().Position - MC.mapOffset).Magnitude < 1e-3)
+		.. " " .. tostring(Registry.active()) .. " " .. inShift, "true true PatternMatch Shift")
+	check("Start lands in the room: Idle, demo running, Play prompt on; Play stops the demo, hides the prompt, opens mode select",
+		roomCheck, "Idle true true Press Play on the cabinet to start! | robot: Idle | after Play: ModeSelect false false")
+	check("whoever pressed Play picks the mode", s1.game.chooserName, "Pat")
+	check("results screen first: Results state, won = true, win target in the payload",
+		resultsPayload.state .. " " .. tostring(resultsPayload.won) .. " " .. tostring(resultsPayload.winPoints), "Results true 20")
+	check("score 20: Finished fires once, list form, one entry per player, won = true",
+		#fired .. " " .. #(fired[1] or {}) .. " " .. tostring(fired[1] and fired[1][1].player.Name == "Pat" and fired[1][2].player.Name == "Sam")
+		.. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. tostring(fired[1] and fired[1][2].won), "1 2 true true true")
+	check("game state Done after Finished; steps after it fire nothing more", s1.game.state .. " " .. #fired, "Done 1")
+	Mode.Stop()
+	flush()
+	check("Stop: map gone, Workspace as before, no active game", tostring(s1.map.Parent) .. " " .. tostring(workspaceSnapshot() == workspaceBefore)
+		.. " " .. tostring(Registry.active()), "nil true nil")
+	check("Stop: every connection disconnected, every thread done, game shut down, spinner stopped", (function()
+		local live = 0
+		for _, c in ipairs(s1.conns) do if c.Connected then live += 1 end end
+		for _, t in ipairs(s1.threads) do if coroutine.status(t) ~= "dead" then live += 1 end end
+		return live .. " " .. tostring(s1.game.stopped) .. " " .. tostring(s1.spinner.connection.Connected) .. " " .. #s1.conns
+	end)(), "0 true false " .. #s1.conns)
+	check("Stop again is harmless; Finished didn't fire again", (pcall(Mode.Stop)) and #fired, 1)
+
+	-- Start -> Stop -> Start works: a second game, a score under the target.
+	table.clear(fired)
+	local s2, inShift2 = playTo({ pat }, 19, pat)
+	check("a second Start after Stop runs a fresh game (new map, mode select -> shift)",
+		tostring(s2 ~= s1 and s2.map ~= s1.map and s2.map.Parent == workspace) .. " " .. inShift2, "true Shift")
+	check("score 19: Finished once, won = false", #fired .. " " .. tostring(fired[1] and fired[1][1].player.Name == "Pat") .. " " .. tostring(fired[1] and fired[1][1].won),
+		"1 true false")
+	Mode.Stop()
+
+	-- A player leaves mid-shift: with someone still there the game goes on; when everyone has left it
+	-- ends at once and Finished still fires (won = false for those who left).
+	table.clear(fired)
+	local a, b = fakePlayer("Ana", "player"), fakePlayer("Bo", "spectator")
+	local s3 = Mode.Start({ a, b }, { store = store, manual = true, rng = Random.new(6) })
+	Mode.play(a)
+	Mode.step(MC.modeSelectSeconds)
+	Mode.step(MC.modeConfirmSeconds)
+	s3.game.score = 25
+	a.Parent = nil
+	Mode.step(MGame.TICK)
+	flush()
+	check("one of two leaves mid-shift: the shift goes on, no Finished yet", s3.game.state .. " " .. #fired, "Shift 0")
+	b.Parent = nil
+	Mode.step(MGame.TICK)
+	flush()
+	check("the last player leaves: Finished fires at once, list form, everyone won = false",
+		#fired .. " " .. #(fired[1] or {}) .. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. tostring(fired[1] and fired[1][2].won),
+		"1 2 false false")
+	Mode.step(MC.resultsSeconds)
+	flush()
+	check("...and only once", #fired, 1)
+	Mode.Stop()
+	check("Stop after everyone left: map gone", tostring(s3.map.Parent) .. " " .. tostring(workspaceSnapshot() == workspaceBefore), "nil true")
+
+	-- Nobody presses Play: after roomIdleSeconds the game ends and nobody wins.
+	table.clear(fired)
+	local idler = fakePlayer("Idle", "player")
+	local s4 = Mode.Start({ idler }, { store = store, manual = true, rng = Random.new(8) })
+	s4.game.score = 99 -- even a stray score can't win a game that never left the room
+	Mode.step(MC.roomIdleSeconds - 1)
+	flush()
+	check("room: still waiting 1 s before roomIdleSeconds", s4.game.state .. " " .. #fired, "Idle 0")
+	Mode.step(1.2)
+	flush()
+	check("nobody pressed Play: Finished once, won = false for everyone, prompt off, demo stopped",
+		#fired .. " " .. tostring(fired[1] and fired[1][1].won) .. " " .. s4.game.state .. " " .. tostring(s4.prompt.Enabled), "1 false Done false")
+	Mode.Stop()
+	check("Play after Stop does nothing", Mode.play(idler), false)
+
+	-- The longest game: every ticket is matched the moment it is active, so ORDER UPs (and their time
+	-- bonuses) come as fast as the hold allows, and mode select runs its full countdown.
+	table.clear(fired)
+	local longPlayer = fakePlayer("Long", "player")
+	local sLong
+	local instant = { get = function()
+		local t = sLong and sLong.game:activeTicket()
+		local list = {}
+		if t then
+			for cell, tower in pairs(t.target) do list[cell] = tower end
+		end
+		return { blocks = blocksFor(list) }
+	end, status = function() return "fake" end }
+	sLong = Mode.Start({ longPlayer }, { store = instant, manual = true, rng = Random.new(7) })
+	local simulated, dt = 0, 0.5
+	while simulated < MC.roomIdleSeconds - 1 do -- Play at the last moment
+		Mode.step(dt)
+		simulated += dt
+	end
+	Mode.play(longPlayer)
+	while #fired == 0 and simulated < Mode.MaxDuration + 60 do
+		Mode.step(dt)
+		simulated += dt
+		if simulated % 10 == 0 then flush() end
+	end
+	flush()
+	check("longest game (every ticket matched at once): bonus capped at maxTimeBonus, Finished within MaxDuration",
+		tostring(sLong.game.bonusUsed) .. " " .. tostring(#fired == 1) .. " " .. tostring(simulated <= Mode.MaxDuration)
+		.. " (" .. simulated .. " s simulated, " .. #sLong.game.completed .. " tickets)",
+		MC.maxTimeBonus .. " true true (" .. simulated .. " s simulated, " .. #sLong.game.completed .. " tickets)")
+	check("...and it ran the room wait, the whole shift and every bonus second", simulated >= MC.roomIdleSeconds - 1 + MC.shiftSeconds + MC.maxTimeBonus, true)
+	Mode.Stop()
+
+	finishedConn:Disconnect()
+	flush()
+	check("Lighting unchanged after full runs (server side never touches it)", lightingSnapshot() == lightingBefore, true)
+	check("Workspace unchanged after every Stop", workspaceSnapshot(), workspaceBefore)
+	modeCopy:Destroy()
+else
+	check("ServerStorage.Modes.PatternMatch has Module and Map", false, true)
+end
 
 return string.format("%d passed, %d failed\n", passed, failed) .. table.concat(lines, "\n")

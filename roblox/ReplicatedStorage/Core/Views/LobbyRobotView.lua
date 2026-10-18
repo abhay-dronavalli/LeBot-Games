@@ -1,10 +1,10 @@
 -- ReplicatedStorage.Core.Views.LobbyRobotView
--- The robot station while no game is active: a slow orbit over the room (Core.Config.lobbyOrbit), a big
--- "ROBOT STATION" title, "Waiting for your partner to pick a game", and the robot link badge from the
--- "RobotLink" attribute on ReplicatedStorage.Core (set by Core.StateStore on the server: "live", "mock",
--- "offline" or "fake"), so the operator can see the arm is connected before a game starts.
+-- The robot station while no game is active: a slow orbit over the room (Core.Config.lobbyOrbit: all the
+-- way round, or back and forth along its `arc`), a big "ROBOT STATION" title, "Waiting for your partner to
+-- pick a game", and the robot link badge from the "RobotLink" attribute on ReplicatedStorage.Core (set by
+-- Core.StateStore on the server: "live", "mock", "offline" or "fake"), so the operator can see the arm is
+-- connected before a game starts.
 
-local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -73,27 +73,20 @@ function LobbyRobotView.enter()
 	gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
 
 	local orbit = Config.lobbyOrbit
-	-- A game's view may have left a depth of field effect in Lighting (local to this client): keep the
-	-- room in focus around the orbit's center instead of whatever blur it had.
-	local focus = {}
-	for _, effect in ipairs(Lighting:GetChildren()) do
-		if effect:IsA("DepthOfFieldEffect") then
-			table.insert(focus, effect)
-		end
-	end
+	-- No post effects here: Lighting belongs to the place (the arcade), and each game's view removes its
+	-- own camera effects when it exits.
 	local started = os.clock()
 	table.insert(connections, RunService.RenderStepped:Connect(function()
 		local camera = workspace.CurrentCamera
 		camera.CameraType = Enum.CameraType.Scriptable
-		local a = (os.clock() - started) / orbit.seconds * 2 * math.pi
+		local t = (os.clock() - started) / orbit.seconds * 2 * math.pi
+		local a = t
+		if orbit.arc then -- swing between the arc's ends, easing at each end
+			local from, to = math.rad(orbit.arc[1]), math.rad(orbit.arc[2])
+			a = from + (to - from) * (1 - math.cos(t)) / 2
+		end
 		local eye = orbit.center + Vector3.new(math.cos(a) * orbit.radius, orbit.height, math.sin(a) * orbit.radius)
 		camera.CFrame = CFrame.lookAt(eye, orbit.center)
-		for _, effect in ipairs(focus) do
-			effect.FocusDistance = (eye - orbit.center).Magnitude
-			effect.InFocusRadius = 30
-			effect.FarIntensity = 0.18
-			effect.NearIntensity = 0
-		end
 	end))
 end
 

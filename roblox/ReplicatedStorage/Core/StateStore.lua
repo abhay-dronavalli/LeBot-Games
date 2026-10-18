@@ -30,7 +30,9 @@
 -- Fake generator: publishes a fake arm (small waves around the twin's rest pose, as sheet-mm points from
 -- ArmTwin.Rig) 20 times a second. Blocks only change through the Debug hook below or debugAutoSolve
 -- (no random placements: the idle board is Pattern Match's attract-mode demo, which never writes here).
--- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
+-- With Config.debugAutoSolve also on (fake generator, or the bridge's mock source for testing: the solved
+-- board then replaces the mock's blocks until the game leaves the shift), it follows the Pattern Match
+-- game (PatternMatch.Remotes.PatternState):
 -- 3 s after each ticket becomes active the board is rebuilt to
 -- match it, reusing the blocks already there (rebuiltBlocks; leftovers go to the tray). The delay
 -- ignores debugFastTimers.
@@ -245,6 +247,7 @@ function StateStore.fakeArm(angles)
 end
 
 local AUTO_SOLVE_DELAY = 3 -- debugAutoSolve: seconds after a ticket becomes active (ignores debugFastTimers)
+local mockSolved = nil      -- debugAutoSolve on the mock link: the solved blocks shown instead of the mock's
 local FAKE_TRAY_MAX = 8     -- blocks the fake tray keeps; extras beyond this are taken off the table
 
 local function cellOfLabel(cell)
@@ -256,7 +259,7 @@ end
 -- other needed block is taken from the unused blocks of that color (wrong spot on the grid, the tray, or
 -- held) and moved; anything still missing is added; leftover blocks go to the tray (zone "tray", which
 -- the game ignores). Towers get matching level values.
-local function rebuiltBlocks(target)
+local function rebuiltBlocks(target, from)
 	local need = {} -- "B2:1" -> color, for every target cell and level
 	for cell, tower in pairs(target) do
 		for i, color in ipairs(tower) do
@@ -265,7 +268,7 @@ local function rebuiltBlocks(target)
 	end
 
 	local kept, pool = {}, {}
-	for _, block in ipairs(state.blocks) do
+	for _, block in ipairs(from or state.blocks) do
 		local tag = fakeCell[block.id]
 		local key = tag and tag ~= "offgrid" and tag ~= "held" and (tag .. ":" .. (block.level or 0)) or nil
 		if key and need[key] == block.color then
@@ -335,8 +338,8 @@ local onGameState = nil       -- set below: called with each new game state
 
 -- Follows the Pattern Match game (PatternMatch.Remotes.PatternState, fired on every state change and
 -- every active ticket change): keeps the state and the active ticket's target, and with
--- Config.debugAutoSolve (fake generator only) rebuilds the board for it AUTO_SOLVE_DELAY seconds after it
--- becomes active.
+-- Config.debugAutoSolve (fake generator, or the mock source) rebuilds the board for it AUTO_SOLVE_DELAY
+-- seconds after it becomes active.
 local function followGame()
 	local stateSignal = ReplicatedStorage.PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternState")
 	local generation = 0
@@ -348,15 +351,26 @@ local function followGame()
 		if onGameState then
 			onGameState(info.state)
 		end
-		if not Config.debugAutoSolve or source ~= "fake" then
+		if info.state ~= "Shift" then
+			mockSolved = nil -- the mock's own blocks again
+		end
+		local mock = source == "bridge" and helloFrame ~= nil and helloFrame.source == "mock"
+		if not Config.debugAutoSolve or (source ~= "fake" and not mock) then
 			return
 		end
 		if info.state == "Shift" and info.target then
 			task.delay(AUTO_SOLVE_DELAY, function()
-				if generation == mine and source == "fake" then
+				if generation ~= mine then
+					return
+				end
+				if source == "fake" then
 					local blocks, note = rebuiltBlocks(info.target)
 					publish(blocks)
 					print(string.format("[StateStore fake] debugAutoSolve: rebuilt the board for ticket #%s (%s)", tostring(info.activeId), note))
+				elseif mock then
+					local blocks, note = rebuiltBlocks(info.target, mockSolved or {})
+					mockSolved = blocks
+					print(string.format("[StateStore mock] debugAutoSolve: board solved for ticket #%s over the mock's blocks (%s)", tostring(info.activeId), note))
 				end
 			end)
 		end
@@ -476,7 +490,11 @@ local function onState(frame)
 		return
 	end
 	lastFrameAt = os.clock()
-	StateStore.update(StateStore.fromFrame(frame))
+	local converted = StateStore.fromFrame(frame)
+	if mockSolved and Config.debugAutoSolve then
+		converted.blocks, converted.blocks_age = mockSolved, 0 -- testing on the mock: the auto-solved board
+	end
+	StateStore.update(converted)
 end
 
 if RunService:IsServer() and RunService:IsRunning() then

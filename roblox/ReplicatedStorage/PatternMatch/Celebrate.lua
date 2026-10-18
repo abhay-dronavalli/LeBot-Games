@@ -113,7 +113,7 @@ end
 
 -- cabinet: Workspace.PatternCabinet; boards: the board Models whose cells flash and whose Base sparkles.
 function Celebrate.new(cabinet, boards)
-	local self = setmetatable({ emitters = {}, tiles = {}, tweens = {}, generation = 0, active = false }, Celebrate)
+	local self = setmetatable({ emitters = {}, tiles = {}, tweens = {}, threads = {}, generation = 0, active = false }, Celebrate)
 	self.anchor = textAnchor(cabinet)
 	self.gui = self.anchor.Gui
 	self.label = self.gui.Label
@@ -166,14 +166,14 @@ function Celebrate:burst(text)
 		sound:Play()
 	end
 
-	task.delay(BURST_SECONDS, function()
+	table.insert(self.threads, task.delay(BURST_SECONDS, function()
 		if self.generation == mine then
 			for _, emitter in ipairs(self.emitters) do
 				emitter.Enabled = false
 			end
 		end
-	end)
-	task.delay(SECONDS, function()
+	end))
+	table.insert(self.threads, task.delay(SECONDS, function()
 		if self.generation == mine then
 			self.gui.Enabled = false
 			self.active = false
@@ -182,12 +182,18 @@ function Celebrate:burst(text)
 				tile.part.Color = tile.color
 			end
 		end
-	end)
+	end))
 end
 
--- Ends any burst now: emitters off and cleared, tile colors back, text hidden.
+-- Ends any burst now: its timers cancelled, emitters off and cleared, tile colors back, text hidden.
 function Celebrate:stop()
 	self.generation += 1
+	for _, thread in ipairs(self.threads) do
+		if coroutine.status(thread) == "suspended" then
+			task.cancel(thread)
+		end
+	end
+	table.clear(self.threads)
 	self.active = false
 	self:cancelTweens()
 	for _, emitter in ipairs(self.emitters) do

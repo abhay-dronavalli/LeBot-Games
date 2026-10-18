@@ -5,8 +5,10 @@
 -- The camera flies to a fixed shot of the table inside the bedroom, two tiles (EASY / HARD) send the
 -- pick through the PatternPick remote, and a countdown shows the auto-pick. Everyone else keeps the
 -- HUD, which says who is choosing.
--- During the shot the LocalPlayer attribute "PatternShot" is true, which makes
--- StarterPlayerScripts.CabinetFocus blur the room behind the table more strongly.
+-- During the shot the LocalPlayer attribute "PatternShot" is true, which makes PatternWorld.CabinetFocus
+-- blur the room behind the table more strongly, and every character is hidden on this client (the shot is
+-- low at the front of the table, right where the players stand, and the arcade's characters are 1.5x).
+-- After it the camera eases to behind the character (at any scale) and the default camera takes over.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,7 +19,7 @@ local Config = require(PatternMatch:WaitForChild("Config"))
 local remotes = PatternMatch:WaitForChild("Remotes")
 local patternUI = remotes:WaitForChild("PatternUI")
 local patternPick = remotes:WaitForChild("PatternPick")
-local cabinet = workspace:WaitForChild("PatternCabinet")
+local cabinet = workspace:WaitForChild(Config.mapName):WaitForChild("PatternCabinet")
 local localPlayer = Players.LocalPlayer
 
 local SHOT_FROM = Vector3.new(-24, 10, 28)            -- camera, relative to the table top's center: low
@@ -26,6 +28,8 @@ local SHOT_FROM = Vector3.new(-24, 10, 28)            -- camera, relative to the
 local SHOT_AT = Vector3.new(3, 7, -4)                 -- look-at point, same frame
 local FLY = TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local RETURN = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+local RETURN_DISTANCE = 12.5                           -- after the shot: the default camera's distance behind
+local RETURN_PITCH = math.rad(18)                      --   the character, looking down a little at the table
 local HOVER = TweenInfo.new(0.12)
 
 local NEUTRAL = Color3.fromRGB(200, 200, 200)
@@ -37,7 +41,7 @@ local HARD_ART = { [1] = GRAYED, [6] = Config.colors.teal, [8] = GRAYED, [11] = 
 
 local TILES = {
 	{ key = "easy", title = "EASY", line = "Colors always visible", art = EASY_ART },
-	{ key = "hard", title = "HARD", line = "Colors flash on and off. Events every " .. Config.hard.eventEvery .. "s", art = HARD_ART },
+	{ key = "hard", title = "HARD", line = "Colors hide every " .. Config.hard.showSeconds .. " seconds", art = HARD_ART },
 }
 
 local screen = script.Parent
@@ -187,6 +191,28 @@ end
 local showing = false
 local savedCFrame, savedType
 
+-- Hides every character on this client for the shot (LocalTransparencyModifier), and puts them back.
+local hidden = {}
+local function hideCharacters(on)
+	for part, was in pairs(hidden) do
+		if part.Parent then
+			part.LocalTransparencyModifier = was
+		end
+	end
+	table.clear(hidden)
+	if not on then
+		return
+	end
+	for _, player in ipairs(Players:GetPlayers()) do
+		for _, d in ipairs(player.Character and player.Character:GetDescendants() or {}) do
+			if d:IsA("BasePart") or d:IsA("Decal") then
+				hidden[d] = d.LocalTransparencyModifier
+				d.LocalTransparencyModifier = 1
+			end
+		end
+	end
+end
+
 local function open()
 	showing, sent = true, false
 	root.Visible = true
@@ -197,14 +223,33 @@ local function open()
 	local center = cabinet:WaitForChild("Table"):WaitForChild("Top").Position
 	TweenService:Create(camera, FLY, { CFrame = CFrame.lookAt(center + SHOT_FROM, center + SHOT_AT) }):Play()
 	localPlayer:SetAttribute("PatternShot", true)
+	hideCharacters(true)
+end
+
+-- Where the camera goes after the shot: behind this player's character, looking past it at the table,
+-- about where the default camera picks up. (The camera from before the shot may still be where the player
+-- was before the arcade moved them in.) Works for any character scale; no character: the saved camera.
+local function returnCFrame()
+	local character = localPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then
+		return savedCFrame
+	end
+	local center = cabinet:WaitForChild("Table"):WaitForChild("Top").Position
+	local away = (rootPart.Position - center) * Vector3.new(1, 0, 1)
+	away = away.Magnitude > 0.1 and away.Unit or Vector3.new(0, 0, 1)
+	local focus = rootPart.Position + Vector3.new(0, 1.5 * character:GetScale(), 0)
+	local eye = focus + away * RETURN_DISTANCE * math.cos(RETURN_PITCH) + Vector3.new(0, RETURN_DISTANCE * math.sin(RETURN_PITCH), 0)
+	return CFrame.lookAt(eye, focus)
 end
 
 local function close()
 	showing = false
 	root.Visible = false
 	localPlayer:SetAttribute("PatternShot", nil)
+	hideCharacters(false)
 	local camera = workspace.CurrentCamera
-	local back = TweenService:Create(camera, RETURN, { CFrame = savedCFrame })
+	local back = TweenService:Create(camera, RETURN, { CFrame = returnCFrame() })
 	back.Completed:Connect(function()
 		if not showing then
 			camera.CameraType = savedType or Enum.CameraType.Custom
@@ -236,6 +281,7 @@ screen:GetAttributeChangedSignal("Exiting"):Connect(function()
 	if showing then
 		showing = false
 		localPlayer:SetAttribute("PatternShot", nil)
+		hideCharacters(false)
 		workspace.CurrentCamera.CameraType = savedType or Enum.CameraType.Custom
 	end
 end)

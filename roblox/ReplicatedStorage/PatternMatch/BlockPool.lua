@@ -5,8 +5,7 @@
 -- wide (the real 48 mm block on the 57 mm cell), sitting on the tile at level 0 and one cube higher per
 -- level, in a Blocks folder in the board. Each part is a clone of the rounded-cube MeshPart
 -- ReplicatedStorage.PatternMatch.BlockMesh (stored by tools/build_pattern_cabinet.lua), or a plain Part
--- when that mesh is missing. The parts belong to the board Model, so they turn with spins and shake with
--- tremors.
+-- when that mesh is missing. The parts belong to the board Model, so they turn with spins.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
@@ -102,7 +101,7 @@ function BlockPool:setTower(cell, colors)
 end
 
 -- Animation helpers (the attract-mode demo). A block's pose is measured from its rest place on its tile,
--- read from the tile's current CFrame, so it stays right while the board spins or shakes.
+-- read from the tile's current CFrame, so it stays right while the board spins.
 -- lift: studs above the rest place; scale: size factor (the block stays centered on its rest place).
 function BlockPool:pose(cell, level, lift, scale)
 	local part = self.parts[cell][level]

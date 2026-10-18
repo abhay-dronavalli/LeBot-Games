@@ -48,20 +48,28 @@ return {
 	ticketTimeBonus = 3,                 -- seconds added to the shift timer per completed ticket
 	ticketPoints = { ticket = 1, flat = 1, stacked = 3 }, -- per ticket, per level 0 block, per level 1 block
 	holdToClear = 1,
-	attractEnabled = true,               -- Idle: demo loop on the boards (PatternMatch.Attract)
+	maxTimeBonus = 60,                   -- cap on the seconds ticket bonuses add to one shift (bounds Mode.MaxDuration)
+	winPoints = 20,                      -- a shift scoring at least this is a WIN: +1 Win in the arcade
+	-- The arcade mode (ServerStorage.Modes.PatternMatch): Start clones the Map into Workspace under this
+	-- name, moved so its origin (where the bedroom was built) sits at mapOffset: clear of the Workshop
+	-- (x 306..494, z 198..322), Rising Flood (x = 400) and the carnival village and terrain at negative x.
+	mapName = "PatternMatchMap",
+	mapOffset = Vector3.new(0, 0, -400),
+	fakeArcade = false,                  -- testing (Studio only): ServerScriptService.FakeArcade builds a test
+	                                     --   lobby with a pad that runs the mode like the arcade does
+	attractEnabled = true,               -- Idle: demo loop on the boards (PatternMatch.Attract), while players
+	                                     --   wait in the room before someone presses Play
+	roomIdleSeconds = 90,                -- the arcade's Start puts players in the room (Idle); nobody presses
+	                                     --   Play by then: the game ends, nobody wins
 	attractPlaceInterval = 0.7,          -- seconds between the demo's block placements
 	attractPatterns = 5,                 -- demo patterns per set before a fresh set is generated
 	modeSelectSeconds = 15,
 	modeConfirmSeconds = 1.5,            -- "HARD MODE" confirmation before the shift
 	resultsSeconds = 10,
-	debugAutoSolve = false,              -- testing (fake generator only): rebuilds the board for the active ticket 3 s after it becomes active
-	debugFastTimers = false,             -- testing: every game timer (shift, ticket arrivals, events, reveal) runs 4x faster
+	debugAutoSolve = false,              -- testing (fake generator or the mock source): rebuilds the board for the active ticket 3 s after it becomes active
+	debugFastTimers = false,             -- testing: every game timer (room wait, shift, ticket arrivals, reveal) runs 4x faster
 	debugForceMode = nil,                -- testing: "easy" or "hard" makes ModeSelect pick that mode; nil picks Easy
-	debugEventEvery = nil,               -- testing: seconds between events in both modes, instead of easy/hard.eventEvery
-	hard = { showSeconds = 5, hideSeconds = 5, eventEvery = 30 },
-	easy = { eventEvery = 45 },
-	vanishSeconds = 6, vanishCount = { 1, 2 },
-	events = { "vanish", "tremor", "inverted" }, -- "fog" is also implemented (ARM LAGGING, core fog)
+	hard = { showSeconds = 5, hideSeconds = 5 }, -- Hard: the target's colors show, then hide, on repeat
 	twinJoints = { shoulder_pan = {sign=1, offset=0}, shoulder_lift = {sign=1, offset=0}, elbow_flex = {sign=1, offset=0},
 	               wrist_flex = {sign=1, offset=0}, wrist_roll = {sign=1, offset=0}, gripper = {sign=1, offset=0} },
 	-- Arm twin's folded rest pose, shown while there is no arm data (no sample yet, an empty one, or none

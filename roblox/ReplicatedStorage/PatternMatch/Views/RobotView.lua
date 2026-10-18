@@ -1,36 +1,42 @@
 -- ReplicatedStorage.PatternMatch.Views.RobotView
 -- Pattern Match for the robot role. The operator is blind by design, so this never shows the boards, the
--- target, the tickets or event warnings: it gets its own payload (PatternMatch.Remotes.RobotUI, from
+-- target or the tickets: it gets its own payload (PatternMatch.Remotes.RobotUI, from
 -- Game.robotPayload: state, timer, score, tickets done and the latest ORDER UP, nothing else), and the
 -- camera is a fixed shot of the back of the room with the whole cabinet behind it, so neither the boards
 -- nor anything floating above them (celebration text, attract sign) is ever in the frame.
--- The room is blurred like the mode select shot (Lighting.CabinetFocus, same intensities, focused right in
--- front of the camera) behind a centered card:
+-- The room is blurred like the mode select shot (a depth of field effect under the camera, made on enter
+-- and destroyed on exit, never in Lighting: the arcade owns it; same intensities, focused right in front
+-- of the camera) behind a centered card:
 --   "PATTERN MATCH" / "You're the robot. You can't see the board. Listen to your partner."
 --   before the shift: what the partner is doing; during it: the shift timer and the score, and a big
---   "ORDER UP! +points" flash when a ticket clears; results: the final score only.
+--   "ORDER UP! +points" flash when a ticket clears, and the win target; results: WIN or LOSE and the
+--   final score.
 
-local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
-local remotes = ReplicatedStorage:WaitForChild("PatternMatch"):WaitForChild("Remotes")
+local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
+local Config = require(PatternMatch:WaitForChild("Config"))
+local remotes = PatternMatch:WaitForChild("Remotes")
 
--- The shot: between the cabinet (z -47 at its back edge) and the back wall, looking at the gaming desk.
--- Everything Pattern Match draws is at z > -47, behind the camera.
+-- The shot, in the map's own frame (the arcade mode puts the map's origin at Config.mapOffset): between
+-- the cabinet (z -47 at its back edge) and the back wall, looking at the gaming desk. Everything Pattern
+-- Match draws is at z > -47, behind the camera.
 local SHOT_FROM = Vector3.new(12, 9, -53)
 local SHOT_AT = Vector3.new(16, 8, -70)
 local SWAY_STUDS = 0.6
 local BLUR = { FocusDistance = 0, InFocusRadius = 4, FarIntensity = 0.5, NearIntensity = 0.1 }
+local FOCUS_NAME = "PatternRobotFocus"
+local BAD = Color3.fromRGB(255, 90, 70)
 local GOOD = Color3.fromRGB(90, 220, 120)
 local FLASH_IN = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local FLASH_OUT = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 local RobotView = {}
 
-local gui, connections = nil, {}
+local gui, focus, connections = nil, nil, {}
 
 local function label(parent, name, text, size, props)
 	local l = Instance.new("TextLabel")
@@ -121,15 +127,18 @@ function RobotView.enter()
 		local shift = p.state == "Shift"
 		timer.Visible = shift
 		timer.Text = formatTime(p.timeLeft)
-		timer.TextColor3 = shift and (p.timeLeft or 0) <= 15 and Color3.fromRGB(255, 90, 70) or Color3.new(1, 1, 1)
-		if p.state == "Results" then
-			status.Text = "SHIFT OVER"
-			score.Text = string.format("Final score %d", p.score or 0)
+		timer.TextColor3 = shift and (p.timeLeft or 0) <= 15 and BAD or Color3.new(1, 1, 1)
+		if p.state == "Results" or p.state == "Done" then
+			status.Text = p.won and "SHIFT OVER: WIN!" or "SHIFT OVER: LOSE"
+			status.TextColor3 = p.won and GOOD or BAD
+			score.Text = string.format("Final score %d   (%d to win)", p.score or 0, p.winPoints or Config.winPoints)
 		elseif shift then
 			status.Text = ""
-			score.Text = string.format("Score %d   Tickets %d", p.score or 0, p.completedCount or 0)
+			score.Text = string.format("Score %d / %d to win   Tickets %d", p.score or 0, p.winPoints or Config.winPoints,
+				p.completedCount or 0)
 		else
 			status.Text = WAITING[p.state] or WAITING.Idle
+			status.TextColor3 = Color3.new(1, 1, 1)
 			score.Text = ""
 		end
 		local seq = p.orderUp and p.orderUp.seq
@@ -156,24 +165,24 @@ function RobotView.enter()
 	gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
 	remotes:WaitForChild("PatternRefresh"):FireServer() -- the current state, right away
 
-	local effect = Lighting:FindFirstChild("CabinetFocus")
-	if not effect then
-		effect = Instance.new("DepthOfFieldEffect")
-		effect.Name = "CabinetFocus"
-		effect.Parent = Lighting
-	end
-	effect.Enabled = true
+	focus = Instance.new("DepthOfFieldEffect")
+	focus.Name = FOCUS_NAME
 	for k, v in pairs(BLUR) do
-		effect[k] = v
+		focus[k] = v
 	end
+	focus.Parent = workspace.CurrentCamera
 
+	local shotFrom, shotAt = Config.mapOffset + SHOT_FROM, Config.mapOffset + SHOT_AT
 	local started = os.clock()
 	table.insert(connections, RunService.RenderStepped:Connect(function()
 		local camera = workspace.CurrentCamera
+		if focus.Parent ~= camera then
+			focus.Parent = camera
+		end
 		camera.CameraType = Enum.CameraType.Scriptable
 		local t = os.clock() - started
 		local sway = Vector3.new(math.sin(t * 0.21), math.sin(t * 0.13) * 0.5, 0) * SWAY_STUDS
-		camera.CFrame = CFrame.lookAt(SHOT_FROM + sway, SHOT_AT)
+		camera.CFrame = CFrame.lookAt(shotFrom + sway, shotAt)
 	end))
 end
 
@@ -185,6 +194,10 @@ function RobotView.exit()
 	if gui then
 		gui:Destroy()
 		gui = nil
+	end
+	if focus then
+		focus:Destroy()
+		focus = nil
 	end
 end
 
