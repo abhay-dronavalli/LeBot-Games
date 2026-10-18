@@ -22,6 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ContextActionService = game:GetService("ContextActionService")
+local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
@@ -321,6 +322,14 @@ local function ghostWalls(on)
 	local rig = Workspace:FindFirstChild("SkyArmRig")
 	for _, p in ipairs(rig and rig:GetDescendants() or {}) do
 		ghost(p, 0.75)
+	end
+
+	-- Backdrop scenery over the course -- the hall's roof deck, skylight and arch ribs --
+	-- carries the "OverseerHide" tag instead of being enumerated here: the generators in
+	-- build/ own the tag, this script just honours it. Hidden outright (not faded) because
+	-- at zoom-out the camera rises to ~143 and all of it sits between camera and floor.
+	for _, p in ipairs(CollectionService:GetTagged("OverseerHide")) do
+		ghost(p, 1)
 	end
 
 	-- The bay's own box. Matched by NAME rather than by size or position, because a bay builds

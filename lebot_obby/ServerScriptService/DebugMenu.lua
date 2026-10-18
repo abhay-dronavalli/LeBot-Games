@@ -44,6 +44,9 @@ end
 
 local DebugCommand = remote("DebugCommand")
 local GhostToggle = remote("GhostToggle")
+-- Told to the client whenever we move the player, so the camera turns with them.
+-- CameraPolish.client.lua listens; if nothing is listening this is simply ignored.
+local CameraFace = remote("CameraFace")
 
 -- Bumped by a full reset. Clients that hold view state of their own -- the overseer's zoom
 -- and pan -- watch this rather than guessing from the bay number, which does not change when
@@ -129,10 +132,19 @@ end)
 -- Placement
 ----------------------------------------------------------------
 -- Just outside the entrance, centred, so the player walks in through the doorway.
+--
+-- FACING MATTERS. An identity-rotated CFrame looks along -Z and the course runs toward +Z,
+-- so every scenario jump used to land you facing back the way you came -- staring down the
+-- course you had just left, with the bay you asked for behind your head. `CFrame.Angles(0,0,0)`
+-- read like "no rotation, so no opinion", but there is no neutral facing: not choosing one
+-- chooses backwards.
+local function lookDownCourse(pos)
+	return CFrame.lookAt(pos, pos + Vector3.new(0, 0, 1))
+end
+
 local function approachCFrame(i)
 	local zStart = (i - 1) * Config.BayPitch
-	return CFrame.new(Config.BayWidth / 2, 4, zStart - 4)
-		* CFrame.Angles(0, 0, 0)
+	return lookDownCourse(Vector3.new(Config.BayWidth / 2, 4, zStart - 4))
 end
 
 local function placePlayer(player, i, healFirst)
@@ -158,6 +170,10 @@ local function placePlayer(player, i, healFirst)
 	end
 	hrp.CFrame = approachCFrame(i)
 	hrp.AssemblyLinearVelocity = Vector3.zero
+	-- Turning the BODY does not turn the CAMERA: the default camera owns its own yaw on the
+	-- client and a server-side CFrame write never touches it. Without this the character
+	-- faces the bay and the player still sees the way they came.
+	CameraFace:FireClient(player, hrp.CFrame.LookVector)
 	return true
 end
 
@@ -174,13 +190,15 @@ end
 
 -- The course start, not bay 1's doorway. StartSpawn is where the place drops you on join,
 -- so a full reset ending anywhere else is not actually "back to the beginning".
+-- Built facing +Z explicitly rather than inherited from the pad: a SpawnLocation's rotation
+-- is easy to nudge in Studio and the one in this place was pointing back up the course.
 local function startCFrame()
 	for _, d in ipairs(workspace:GetDescendants()) do
 		if d:IsA("SpawnLocation") then
-			return d.CFrame + Vector3.new(0, 3.5, 0)
+			return lookDownCourse(d.Position + Vector3.new(0, 3.5, 0))
 		end
 	end
-	return CFrame.new(Config.BayWidth / 2, 4, -(Config.EntranceBuffer or 10) + 4)
+	return lookDownCourse(Vector3.new(Config.BayWidth / 2, 4, -(Config.EntranceBuffer or 10) + 4))
 end
 
 -- Everything back to how the place loads. Not a teleport: a FRESH CHARACTER.
@@ -205,6 +223,7 @@ local function fullReset(player)
 	if hrp then
 		hrp.CFrame = startCFrame()
 		hrp.AssemblyLinearVelocity = Vector3.zero
+		CameraFace:FireClient(player, hrp.CFrame.LookVector)
 	end
 	-- The new character is solid, but the ghost HUD survives respawn (ResetOnSpawn = false)
 	-- and would still read GHOST ON over a body that can die.

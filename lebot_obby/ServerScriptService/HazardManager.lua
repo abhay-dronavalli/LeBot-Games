@@ -2277,10 +2277,18 @@ BUILDERS.DarkZone = function(i, folder, info, state)
 	-- Lighting. Saved and restored, because Lighting is a GLOBAL service: leave it dim and
 	-- every other bay is dim too, including whatever the overseer is looking at.
 	----------------------------------------------------------------
+	-- THE BASELINE IS NOT "WHATEVER LIGHTING LOOKED LIKE WHEN THIS BUILDER RAN".
+	--
+	-- It used to be, and that is a trap: a bay is reset by REBUILDING it, so resetting bay 4
+	-- while the room was dark re-ran this line with Brightness already 0 and Ambient already
+	-- black -- and from then on "restore" restored to pitch black, for every bay, forever.
+	-- The real baseline is a property of the place, not of the moment, so it is stamped onto
+	-- Lighting as attributes by build/backdrop_lighting.lua and read back here. Falling back
+	-- to the live values keeps this working in a place where that script has not been run.
 	local saved = {
-		Ambient = Lighting.Ambient,
-		OutdoorAmbient = Lighting.OutdoorAmbient,
-		Brightness = Lighting.Brightness,
+		Ambient = Lighting:GetAttribute("BaselineAmbient") or Lighting.Ambient,
+		OutdoorAmbient = Lighting:GetAttribute("BaselineOutdoorAmbient") or Lighting.OutdoorAmbient,
+		Brightness = Lighting:GetAttribute("BaselineBrightness") or Lighting.Brightness,
 	}
 	local dark = false
 	local function setDark(on)
