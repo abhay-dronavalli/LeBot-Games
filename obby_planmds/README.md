@@ -187,6 +187,13 @@ block away says so on screen. A bay may still set its own `flash` and it wins. B
 only the saw wall announced refusals — bay 3 silently rejecting a block that was not the next
 cell on its route looked exactly like the block never arriving.
 
+**A cube can be a token instead of an object.** A bay that sets `VirtualCrates` on its model
+gets no crate part at all — the cell bookkeeping still happens, so `CellsChanged`, `CratePlaced`
+and solve detection are unchanged, but nothing is carried in and nothing is left standing. The
+laser walk uses it: the operator slides a real cube across the real mat and the matching tile
+goes quiet, while the player walks on the floor. A crate there was scenery that read as "climb
+me" in the one bay where climbing is not the point.
+
 **Crates can sit flush.** A bay whose crates *are* the floor sets `CrateSink` on its model and
 `cellToWorld` drops them by that much. The void uses one cube, so its bridge is level with the
 walkway instead of standing a cube proud of it.

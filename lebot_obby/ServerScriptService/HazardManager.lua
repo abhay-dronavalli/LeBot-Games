@@ -1154,7 +1154,16 @@ end
 -- The route is generated per run and the player can't see it, so the operator's overlay is
 -- load-bearing: Bridge.send publishes the next cell to the physical side every time it changes.
 BUILDERS.LaserWalk = function(i, folder, info, state)
+	-- The cube is a TOKEN here, not an object. The operator slides a real cube across the real
+	-- mat and the matching tile goes quiet; the player walks on the floor, because the pad is
+	-- what kills and a safe pad does not. A crate standing in the cell was scenery -- and
+	-- scenery that reads as "climb me" in the one bay where climbing is not the point.
+	-- (the attribute is set just below, once `bay` is in scope)
+
 	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	if bay then
+		bay:SetAttribute("VirtualCrates", true)
+	end
 	local COLS, ROWS = Config.BayCols, Config.BayRows
 
 	-- Arming has to trigger from the APPROACH, not from inside the bay. Every cell is lethal

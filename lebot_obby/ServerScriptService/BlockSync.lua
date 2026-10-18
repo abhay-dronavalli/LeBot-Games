@@ -238,8 +238,29 @@ local function liveTableFor(bayModel)
 	return live
 end
 
+-- VIRTUAL CRATES. In some bays the cube is a TOKEN, not an object.
+--
+-- The laser walk is the case: the operator moves a real cube across the real mat and what
+-- that does in here is disarm the matching tile. The player walks on the floor -- the pad is
+-- the authoritative killer, and a safe pad does not kill -- so a crate standing in the cell
+-- was never load-bearing. It was scenery, and scenery that reads as "climb me" in a bay where
+-- climbing is not the point.
+--
+-- The cell bookkeeping is unchanged: CellsChanged and CratePlaced still fire, so solve
+-- detection and the cooldown that lets you walk to the next tile work exactly as before.
 local function deliver(bayModel, live, key, cell)
 	local worldCFrame = BlockSync.cellToWorld(bayModel, cell.col, cell.row)
+
+	if bayModel:GetAttribute("VirtualCrates") then
+		live[key] = nil
+		spawnShockwave(bayModel, worldCFrame, cell.level, cell.color)
+		-- no arm trip and no model: nothing is carried in, the tile just goes quiet
+		task.defer(function()
+			cratePlacedEvent:Fire(bayModel, cell)
+		end)
+		return
+	end
+
 	local crateModel = buildCrateModel(cell.color, cell.level)
 	live[key] = crateModel
 	SkyArm.reachAndPlace(bayModel, worldCFrame, crateModel, cell.level, function()
@@ -447,6 +468,8 @@ end
 local liveBlocksByBay = setmetatable({}, {__mode = "k"})
 local refusedByBay = setmetatable({}, {__mode = "k"})
 local lastLiveSignature = setmetatable({}, {__mode = "k"})
+-- held-last flags for virtual bays, which have no cube entry to hang them on
+local entryHeldLast = {}
 
 local function destroyCube(entry)
 	entry.goal:Destroy()
@@ -574,6 +597,25 @@ function BlockSync.applyBlocks(bayModel, blocks)
 				live[b.id] = nil
 			end
 		else
+			-- A virtual-crate bay tracks the cell but never builds the cube (see deliver).
+			if bayModel:GetAttribute("VirtualCrates") then
+				if live[b.id] then
+					destroyCube(live[b.id])
+					live[b.id] = nil
+				end
+				seen[b.id] = true
+				if not b.held then
+					table.insert(placed, {col = col, row = row,
+						color = obbyColor(b.color), level = level})
+					if entryHeldLast[b.id] then
+						cratePlacedEvent:Fire(bayModel, {col = col, row = row,
+							color = obbyColor(b.color), level = math.min(level + 1, 2)})
+					end
+				end
+				entryHeldLast[b.id] = b.held and true or nil
+				continue
+			end
+
 			seen[b.id] = true
 			local entry, fresh = live[b.id], false
 			-- Rebuild a cube whose part has left the tree, or one lost cube is permanent:

@@ -1,3 +1,10 @@
+> **The cube is a token, not an object.** This bay sets `VirtualCrates`, so no crate is
+> ever built: placing a block disarms the matching tile and the player walks on the floor,
+> because the pad is what kills and a safe pad does not. Moving the cube on starts the
+> `LaserCooldownSeconds` grace on the tile behind, which is the time you have to step
+> across. Verified: 0 crate parts, 7 laser parts disarmed per tile, both tiles safe for
+> the 6 s overlap and then the old one re-arms.
+
 # Bay 3 — Laser Walk
 
 **Status:** built and verified in Studio. Solvable end to end.
