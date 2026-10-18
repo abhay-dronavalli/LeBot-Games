@@ -100,10 +100,34 @@ def cell_of(x, y):
     return None
 
 
+# Words the model reaches for that mean one of the kit's six. The prompt asks it to name
+# colours from the kit and allows "another plain lowercase colour word" when a cube matches
+# none - which is how "cyan" and "sky blue" get through for cubes that *are* kit colours.
+# Nothing downstream maps those: Roblox's Config.perceptionColors knows the six names only, so
+# an unmapped word is drawn grey and never matches. Snapping here keeps that fallback for
+# genuinely foreign colours while not letting a synonym cost a match.
+#
+# Only unambiguous synonyms belong here. "blue" is deliberately absent: on this kit it could
+# be light blue or teal, and guessing wrong is worse than reporting a colour nobody matches.
+COLOR_SYNONYMS = {
+    "cyan": "teal", "turquoise": "teal", "aqua": "teal", "teal blue": "teal",
+    "sky blue": "light blue", "skyblue": "light blue", "pale blue": "light blue",
+    "lightblue": "light blue", "baby blue": "light blue",
+    "gold": "yellow", "golden": "yellow", "amber": "yellow", "mustard": "yellow",
+    "tangerine": "orange", "peach": "orange",
+    "violet": "purple", "magenta": "purple", "lilac": "purple", "lavender": "purple",
+    "crimson": "red", "scarlet": "red", "maroon": "red",
+    "gray": "grey",
+}
+
+
 def norm_color(name):
-    """"Light_Blue" -> "light blue". Empty, or any way of saying "I cannot tell", -> grey."""
+    """"Light_Blue" -> "light blue", "cyan" -> "teal". Empty, or any way of saying "I cannot
+    tell", -> grey. A colour that is genuinely none of the kit's is passed through as-is."""
     c = re.sub(r"[\s_]+", " ", str(name or "")).strip().lower()
-    return UNKNOWN_COLOR if (not c or c in UNNAMED) else c
+    if not c or c in UNNAMED:
+        return UNKNOWN_COLOR
+    return COLOR_SYNONYMS.get(c, c)
 
 
 # ---- when to ask ------------------------------------------------------------------

@@ -69,6 +69,18 @@ class Hub:
         if kind == "ping":
             await conn.send(json.dumps(protocol.pong(frame.get("id"), asyncio.get_event_loop().time())))
             return
+        if kind == "read_board":
+            # "Read the board now", from a key in the game. A cube moved by hand never opens
+            # the jaw, so no release fires and the board keeps reporting where things used to
+            # be. Handled here rather than queued: the board thread owns its own trigger and
+            # the producer has nothing to do with it.
+            from .producers import board as board_producer
+            if board_producer.request_now():
+                print("  read_board: requested from a client")
+            else:
+                await conn.send(json.dumps(protocol.error(
+                    "no board thread: mock mode, or started without --vision")))
+            return
         if kind == "event":
             # The producer owns the effect stack (it applies effects in the robot thread), so
             # the frame is queued rather than applied here.
