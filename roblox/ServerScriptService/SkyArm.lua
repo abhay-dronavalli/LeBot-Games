@@ -121,4 +121,52 @@ local gripperBody = newPart("GripperBody", Vector3.new(42.85 * MM, 52.00 * MM, B
 local jawStatic = newPart("JawStatic", Vector3.new(20.00 * MM, 49.34 * MM, JAW_LEN), WHITE)
 local jawMoving = newPart("JawMoving", Vector3.new(20.00 * MM, 49.34 * MM, JAW_LEN), WHITE)
 
+----------------------------------------------------------------
+-- Forward kinematics -- given joint angles (degrees), place every segment.
+-- shoulder_pan = azimuth around Y. shoulder_lift = pitch below horizontal (0 = reach straight
+-- out, 90 = straight down). elbow_flex = relative bend at the elbow (0 = forearm continues
+-- straight from the upper arm). Every angle compounds through the chain like a real robot's
+-- joint-local convention.
+----------------------------------------------------------------
+local gripperTipWorld = carriage.Position
+
+local function applyFK(angles)
+	-- the bridge rides the rails at the trolley's Z, spanning the full bay width
+	bridge.CFrame = CFrame.new(Config.BayWidth / 2, carriageY + 1.35, carriage.Position.Z)
+
+	local mountTop = carriage.CFrame * CFrame.new(0, -MOUNT_Y, 0)
+	baseHousing.CFrame = mountTop * CFrame.new(0, -BASE_H / 2, 0)
+
+	-- shoulder_pan turns the whole arm about the vertical axis
+	local panPivot = mountTop * CFrame.new(0, -BASE_H, 0) * CFrame.Angles(0, math.rad(angles.shoulder_pan), 0)
+	panServo.CFrame = panPivot * CFrame.new(0, 0.5, 0)
+	shoulderYoke.CFrame = panPivot * CFrame.new(0, -YOKE_H / 2, 0)
+
+	-- shoulder pitch -- this point must match solveIK's base (SHOULDER_OFFSET below the carriage)
+	local upperArmJoint = panPivot * CFrame.new(0, -YOKE_H, 0)
+		* CFrame.Angles(-math.rad(angles.shoulder_lift), 0, 0)
+	shoulderServo.CFrame = upperArmJoint
+	upperArm.CFrame = upperArmJoint * CFrame.new(0, 0, -L1 / 2)
+
+	local elbowJoint = upperArmJoint * CFrame.new(0, 0, -L1) * CFrame.Angles(-math.rad(angles.elbow_flex), 0, 0)
+	elbowServo.CFrame = elbowJoint
+	forearm.CFrame = elbowJoint * CFrame.new(0, 0, -L2 / 2)
+
+	local wristJoint = elbowJoint * CFrame.new(0, 0, -L2)
+		* CFrame.Angles(-math.rad(angles.wrist_flex), 0, 0)
+		* CFrame.Angles(0, 0, math.rad(angles.wrist_roll))
+	wristServo.CFrame = wristJoint
+	wristRoll.CFrame = wristJoint * CFrame.new(0, 0, -WRIST_LEN / 2)
+	gripperBody.CFrame = wristJoint * CFrame.new(0, 0, -WRIST_LEN - BODY_LEN / 2)
+
+	-- Parallel jaws: Moving_Jaw rides in, the fixed jaw mirrors it
+	local jawRoot = wristJoint * CFrame.new(0, 0, -WRIST_LEN - BODY_LEN)
+	-- Closed hugs a 4-stud crate rather than clipping through it; open clears it.
+	local openAmount = 2.05 + (1 - angles.gripper / 100) * 0.95
+	jawStatic.CFrame = jawRoot * CFrame.new(openAmount, 0, -JAW_LEN / 2)
+	jawMoving.CFrame = jawRoot * CFrame.new(-openAmount, 0, -JAW_LEN / 2)
+
+	gripperTipWorld = (jawRoot * CFrame.new(0, 0, -JAW_LEN * 0.6)).Position
+end
+
 return SkyArm
