@@ -28,6 +28,12 @@ local COLOR_RGB = {
 	teal = Color3.fromRGB(50, 190, 180),
 }
 
+-- The crate palette, for anything that needs to match a crate's colour without owning a copy
+-- of the table -- obstacle holograms showing which colour a cell wants, for instance.
+function BlockSync.colorRGB(name)
+	return COLOR_RGB[name]
+end
+
 function BlockSync.cellToWorld(bayModel, col, row)
 	local anchorsFolder = bayModel:FindFirstChild("CrateAnchors")
 	if not anchorsFolder then

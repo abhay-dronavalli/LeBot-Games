@@ -59,6 +59,14 @@ Config.SawWallStallSeconds = 10
 
 Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 
+-- Bay 2 void -- the shaft is presentation plus a kill plane; the obstacle is the gap itself,
+-- and that is sized by BayData[2].coverRows, not from here. Worth writing down why no tunable
+-- is needed for the width: rows 0-1 span 16 studs and a running jump covers 8.67 (stock
+-- JumpHeight 7.2, WalkSpeed 16, Gravity 196.2), so one row of void is already unjumpable and
+-- two is well clear of it.
+Config.VoidShaftDepth = 48    -- studs from floor level down to the kill plane
+Config.VoidLightSpacing = 14  -- spacing of the red warning lights going down the shaft
+
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
 Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area

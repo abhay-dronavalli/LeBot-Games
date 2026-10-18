@@ -86,6 +86,62 @@ local function characterFrom(hit)
 	return nil
 end
 
+-- Who is standing in bay `i` right now. `pad` widens the test toward the entrance, so a bay
+-- can put its objective on screen while the player is still on the approach catwalk sizing the
+-- obstacle up. The y floor drops a player who has already fallen out of the world, which for a
+-- void bay is most of them.
+local function occupantsOf(i, pad)
+	local zStart = bayZStart(i)
+	local zEnd = zStart + Config.BayDepth
+	local found = {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local ch = pl.Character
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hrp and hum and hum.Health > 0 and not isGhost(ch) then
+			local p = hrp.Position
+			if p.Z > zStart - (pad or 0) and p.Z < zEnd + 2
+				and p.X > -2 and p.X < Config.BayWidth + 2 and p.Y > -8 then
+				table.insert(found, {character = ch, humanoid = hum, position = p})
+			end
+		end
+	end
+	return found
+end
+
+-- Objective HUD arbitration. Remotes.Objective is ONE channel, but every bay has an opinion
+-- about what belongs on it. While bay 1 was the only driver, broadcasting was fine; the moment
+-- a second bay started publishing, bay 1's loop -- which broadcasts a clear every 0.2s whenever
+-- its own bay is empty -- began wiping the callout of the bay the player was actually standing
+-- in, and bay 2's HUD only ever appeared in the gaps between those clears.
+--
+-- So no bay broadcasts any more. A bay addresses only the players inside it, and clears only a
+-- player it was itself last showing something to. That also makes each bay's own stated intent
+-- true -- "a player standing outside the bay isn't told to do anything" -- which broadcasting
+-- never actually delivered.
+local hudShownBy = setmetatable({}, {__mode = "k"})
+
+local function publishObjective(i, payload, pad)
+	local inside = {}
+	for _, o in ipairs(occupantsOf(i, pad)) do
+		local pl = Players:GetPlayerFromCharacter(o.character)
+		if pl then
+			inside[pl] = true
+		end
+	end
+
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if inside[pl] and payload then
+			hudShownBy[pl] = i
+			ObjectiveEvent:FireClient(pl, payload)
+		elseif hudShownBy[pl] == i then
+			-- only ever retract what this bay put up
+			hudShownBy[pl] = nil
+			ObjectiveEvent:FireClient(pl, nil)
+		end
+	end
+end
+
 -- Per-part lethality, for obstacles made of many independently-switchable pieces (the laser
 -- grid). The part carries its own "Live" attribute instead of reading the bay's solved flag.
 local function makeLethalPart(part)
@@ -430,7 +486,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 	local function pushObjective()
 		lastPush = os.clock()
 		if not running and not state.solved then
-			ObjectiveEvent:FireAllClients(nil)
+			publishObjective(i, nil, 0)
 			return
 		end
 
@@ -463,7 +519,7 @@ BUILDERS.Saw = function(i, folder, info, state)
 		if os.clock() < flashUntil then
 			p.flash = flashText
 		end
-		ObjectiveEvent:FireAllClients(p)
+		publishObjective(i, p, 0)
 	end
 
 	----------------------------------------------------------------
@@ -658,38 +714,114 @@ BUILDERS.Saw = function(i, folder, info, state)
 	function state.onSolved() end
 end
 
--- VOID: the floor is gone over `coverRows`. The placed blocks ARE the bridge across.
+-- VOID: the floor is gone over `coverRows`, and the gap is deliberately wider than a jump --
+-- so the crates are not a shortcut across, they ARE the bridge. The arithmetic that makes that
+-- true: stock JumpHeight 7.2 and WalkSpeed 16 under Gravity 196.2 give 0.54s of air and 8.67
+-- studs of flat travel, while the uncovered rows span 16. Mounting the far side higher, or
+-- widening the gap further, would both be redundant -- one cell of void is already unjumpable.
+--
+-- Nothing in this bay is lethal except the drop, which satisfies the safe-footing rule for
+-- free: the bridge you built is the only place there is to stand.
 BUILDERS.Void = function(i, folder, info, state)
 	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
 	local floor = bay and bay:FindFirstChild("Floor")
 	local rows = info.coverRows or {0, 1, 2}
 
+	local z0 = bayZStart(i)
+	local wholeBay = #rows >= Config.BayRows
+	-- The near lip is the bay entrance; the far lip is wherever solid ground resumes. Both are
+	-- derived from `coverRows`, so changing that one field moves the geometry with it.
+	local nearZ = z0
+	local farZ = wholeBay and (z0 + Config.BayDepth)
+		or (z0 + (math.max(table.unpack(rows)) + 1) * CELL)
+	local span = farZ - nearZ
+	local midZ = (nearZ + farZ) / 2
+	local W = Config.BayWidth
+	local depth = Config.VoidShaftDepth
+
+	local AMBER = Color3.fromRGB(255, 176, 40)
+	local GREEN = Color3.fromRGB(120, 240, 140)
+	local SHAFT = Color3.fromRGB(14, 14, 18)
+
+	----------------------------------------------------------------
+	-- Cut the baked floor back so only the rows outside `coverRows` keep solid ground.
+	-- Absolute rather than relative, so re-running the builder is idempotent.
+	----------------------------------------------------------------
 	if floor then
-		if #rows >= 3 then
+		if wholeBay then
 			floor.Transparency = 1
 			floor.CanCollide = false
 			floor.CanTouch = false
 		else
-			-- shrink the floor back so only the untouched rows keep solid ground
-			local keptStart = (math.max(table.unpack(rows)) + 1) * CELL
-			local keptDepth = Config.BayDepth - keptStart
-			floor.Size = Vector3.new(Config.BayWidth, 1, keptDepth)
-			floor.CFrame = CFrame.new(Config.BayWidth / 2, -0.5,
-				bayZStart(i) + keptStart + keptDepth / 2)
+			local keptDepth = Config.BayDepth - span
+			floor.Size = Vector3.new(W, 1, keptDepth)
+			floor.CFrame = CFrame.new(W / 2, -0.5, farZ + keptDepth / 2)
 		end
 	end
 
-	-- edge warning lips so the drop reads as intentional
-	for _, row in ipairs(rows) do
-		local z = bayZStart(i) + row * CELL
-		newPart("VoidEdge", Vector3.new(Config.BayWidth, 0.4, 0.8),
-			Vector3.new(Config.BayWidth / 2, 0.2, z), Color3.fromRGB(220, 40, 40),
-			Enum.Material.Neon, folder)
+	----------------------------------------------------------------
+	-- The shaft. Purely presentational: the drop has to read as a drop from floor level, or
+	-- the bay looks like a texture glitch rather than somewhere you can die. Every piece here
+	-- is CanCollide = false so nothing catches a falling player half way down.
+	----------------------------------------------------------------
+	local function shaftWall(name, size, pos)
+		newPart(name, size, pos, SHAFT, Enum.Material.Slate, folder, {CanQuery = false})
+	end
+	shaftWall("ShaftLeft", Vector3.new(0.5, depth, span), Vector3.new(0.25, -depth / 2, midZ))
+	shaftWall("ShaftRight", Vector3.new(0.5, depth, span), Vector3.new(W - 0.25, -depth / 2, midZ))
+	shaftWall("ShaftFar", Vector3.new(W, depth, 0.5), Vector3.new(W / 2, -depth / 2, farZ - 0.25))
+	shaftWall("ShaftNear", Vector3.new(W, depth, 0.5), Vector3.new(W / 2, -depth / 2, nearZ + 0.25))
+	shaftWall("ShaftFloor", Vector3.new(W, 0.5, span), Vector3.new(W / 2, -depth, midZ))
+
+	-- Cut-edge fascia: shows the thickness of the slab you are standing on, at both lips.
+	local function fascia(name, size, pos)
+		newPart(name, size, pos, Color3.fromRGB(78, 80, 88), Enum.Material.Metal, folder,
+			{CanQuery = false})
+	end
+	fascia("EdgeNear", Vector3.new(W, 1.4, 0.7), Vector3.new(W / 2, -0.7, nearZ + 0.35))
+	if not wholeBay then
+		fascia("EdgeFar", Vector3.new(W, 1.4, 0.7), Vector3.new(W / 2, -0.7, farZ - 0.35))
+	end
+	fascia("EdgeLeft", Vector3.new(0.7, 1.4, span), Vector3.new(0.35, -0.7, midZ))
+	fascia("EdgeRight", Vector3.new(0.7, 1.4, span), Vector3.new(W - 0.35, -0.7, midZ))
+
+	-- Hazard striping on both lips. These are the parts that go green on solve, so they are
+	-- the bay's whole state readout -- amber means the gap is still open.
+	local lips = {}
+	local DASH = 2
+	for x = 0, W - DASH, DASH * 2 do
+		local function dash(name, z)
+			local p = newPart(name, Vector3.new(DASH, 0.22, 0.9),
+				Vector3.new(x + DASH / 2, 0.11, z), AMBER, Enum.Material.Neon, folder,
+				{CanQuery = false})
+			table.insert(lips, p)
+		end
+		dash("LipNear", nearZ + 0.45)
+		if not wholeBay then
+			dash("LipFar", farZ - 0.45)
+		end
 	end
 
-	-- catch plane well below: falling in is a death, not an endless drop
-	local catcher = newPart("VoidCatcher", Vector3.new(Config.BayWidth + 12, 2, Config.BayDepth),
-		Vector3.new(Config.BayWidth / 2, -24, bayCenter(i).Z), Color3.fromRGB(0, 0, 0),
+	-- Warning lights down the shaft, so the depth is legible rather than just dark. Range is
+	-- capped just under the spacing so each one reads as a separate marker going down and none
+	-- of them spills back up through the opening to light the bay floor from below.
+	for y = -Config.VoidLightSpacing, -depth + 4, -Config.VoidLightSpacing do
+		local anchor = newPart("ShaftLight", Vector3.new(0.4, 0.4, 0.4),
+			Vector3.new(W / 2, y, midZ), nil, nil, folder, {Transparency = 1, CanQuery = false})
+		local l = Instance.new("PointLight")
+		l.Color = Color3.fromRGB(255, 70, 40)
+		l.Brightness = 1.1
+		l.Range = Config.VoidLightSpacing - 2
+		l.Parent = anchor
+	end
+
+	----------------------------------------------------------------
+	-- Kill plane. Sits above the shaft floor so the death happens in open air rather than on
+	-- contact with scenery, and spans wider than the bay so stepping off sideways still lands
+	-- in it.
+	----------------------------------------------------------------
+	local catcher = newPart("VoidCatcher", Vector3.new(W + 12, 2, span + 4),
+		Vector3.new(W / 2, -depth + 4, midZ), Color3.fromRGB(0, 0, 0),
 		Enum.Material.SmoothPlastic, folder, {Transparency = 1})
 	catcher.CanTouch = true
 	catcher.Touched:Connect(function(hit)
@@ -699,7 +831,124 @@ BUILDERS.Void = function(i, folder, info, state)
 		end
 	end)
 
-	function state.onSolved() end
+	----------------------------------------------------------------
+	-- Placement holograms: a crate-sized ghost at each solveCell, so the player can read the
+	-- cell to call out instead of guessing it off the debug grid. One disappears as its cell
+	-- is filled, which makes "what is left to do" visible in world as well as on the HUD.
+	----------------------------------------------------------------
+	local tint = BlockSync.colorRGB(info.color) or AMBER
+	local ghosts = {}
+	for _, sc in ipairs(info.solveCells or {}) do
+		local col, row = sc[1], sc[2]
+		local c = cellCenter(i, col, row)
+		local box = newPart("GhostCrate", Vector3.new(4, 4, 4), Vector3.new(c.X, 2, c.Z),
+			tint, Enum.Material.ForceField, folder, {Transparency = 0.55, CanQuery = false})
+		local label = addLabel(folder, string.format("%s  (%d,%d)", info.color:upper(), col, row),
+			Vector3.new(c.X, 6.5, c.Z), tint)
+		ghosts[col .. "," .. row] = {box = box, label = label}
+	end
+
+	local function showGhost(key, visible)
+		local g = ghosts[key]
+		if not g then
+			return
+		end
+		g.box.Transparency = visible and 0.55 or 1
+		g.label.Visible = visible
+	end
+
+	----------------------------------------------------------------
+	-- Objective HUD. No countdown: this bay has no clock of its own, and inventing one here
+	-- would be a mechanic rather than an obstacle. The task line is the cell callout instead,
+	-- which is exactly what the operator needs shouted at them.
+	----------------------------------------------------------------
+	local filled = {}
+
+	local function nextNeeded()
+		for _, sc in ipairs(info.solveCells or {}) do
+			local key = sc[1] .. "," .. sc[2]
+			if not filled[key] then
+				return sc, key
+			end
+		end
+		return nil
+	end
+
+	-- One description of how the bay looks, driven off what has actually landed rather than
+	-- off state.solved -- buildBay's setSolved only calls onSolved on the way IN, so hanging
+	-- the lip colour off that left the bay still showing "cleared" after a crate was lifted
+	-- back out of it.
+	local function refresh()
+		local complete = (nextNeeded() == nil)
+		for _, p in ipairs(lips) do
+			p.Color = complete and GREEN or AMBER
+		end
+		for key in pairs(ghosts) do
+			showGhost(key, not filled[key])
+		end
+	end
+
+	-- No occupancy test here: publishObjective only ever reaches players standing in this bay,
+	-- and clears the rest, so the payload is built unconditionally.
+	local function pushObjective()
+		local p = {title = string.format("BAY %d  -  THE VOID", i)}
+		if state.solved then
+			p.task = "CLEARED"
+			p.hint = "The bridge is in -- jump across to the exit."
+			p.tone = "ok"
+		else
+			local sc = nextNeeded()
+			local remaining = 0
+			for _, s2 in ipairs(info.solveCells or {}) do
+				if not filled[s2[1] .. "," .. s2[2]] then
+					remaining += 1
+				end
+			end
+			if sc then
+				p.task = string.format("%s x%d  ->  COL %d, ROW %d",
+					info.color:upper(), info.level, sc[1], sc[2])
+			else
+				p.task = string.format("%s x%d", info.color:upper(), info.level)
+			end
+			p.hint = (remaining > 1)
+				and string.format("No floor for %d studs. Call out both cells -- the crates are the bridge.", span)
+				or "One more block, then jump from block to block."
+			p.tone = (remaining > 1) and "danger" or "warn"
+		end
+		publishObjective(i, p, CELL)
+	end
+
+	-- Track what has actually landed, for the holograms and the callout. Solve detection
+	-- itself stays where it belongs -- checkSolved owns state.solved for a placement bay.
+	BlockSync.CellsChanged:Connect(function(bayModel, cellsList)
+		if bayModel ~= bay then
+			return
+		end
+		filled = {}
+		for _, c in ipairs(cellsList) do
+			if c.color == info.color and (c.level or 1) >= info.level then
+				filled[c.col .. "," .. c.row] = true
+			end
+		end
+		refresh()
+	end)
+
+	-- Both hooks share refresh() so there is exactly one description of how the bay looks.
+	state.onSolved = refresh
+
+	function state.reset()
+		filled = {}
+		refresh()
+	end
+
+	-- The HUD follows occupancy: padded toward the entrance so the callout is already on
+	-- screen while the player is still on the approach catwalk, reading the gap.
+	task.spawn(function()
+		while true do
+			pushObjective()
+			task.wait(0.2)
+		end
+	end)
 end
 
 -- LASER: red, semi-transparent beam across row 1. A block stops the beam, so everything past

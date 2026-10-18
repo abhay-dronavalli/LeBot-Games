@@ -7,8 +7,9 @@ plan is the original intent and has diverged.
 |---|---|
 | [obby_plan.md](obby_plan.md) | The master plan. Numbered sections (0–21) that the Luau comments cite — "Section 7", "Section 10.2" etc. refer to it. **§4.1–4.2 are superseded**; Part III (robot/vision/protocol) is still accurate and untouched. |
 | [bay-01-saw-wall.md](bay-01-saw-wall.md) | Bay 1, built and verified end to end. |
+| [bay-02-void.md](bay-02-void.md) | Bay 2, built and verified end to end. |
 
-One doc per scenario lands here as each bay is designed. Bays 2–9 don't have one yet.
+One doc per scenario lands here as each bay is designed. Bays 3–9 don't have one yet.
 
 ---
 
@@ -48,7 +49,7 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 | 3 `BlockSync` crate spawn, L1/L2 | ✅ |
 | 4 One bay playable with clock + checkpoint | ❌ no checkpoints or run clock |
 | 5 Crate effects and hazards | ✅ reinterpreted as one obstacle per bay |
-| 6 Bays 1–9, `ActiveBayTracker`, camera | ⚠️ bays exist; **no tracker, so only Bay 1 is wired** |
+| 6 Bays 1–9, `ActiveBayTracker`, camera | ⚠️ bays exist; no real tracker, but `DebugMode` now follows an active bay so any bay can be played |
 | 7 HUD, callouts, scoring, win/fail | ⚠️ objective HUD + timer only |
 | 8 `SkyArm` on the mock feed | ✅ |
 | 9 Real `Bridge` | ❌ |
@@ -61,13 +62,14 @@ map, and for what git *cannot* see (the warehouse geometry is baked into the pla
 ## Bay status
 
 Bay 1 was rebuilt around **one obstacle per 4×3 bay**, with the crates as a *ladder to the
-answer* rather than the answer. Bays 2–9 still use the older model where filling the right
-cells with the right colour *is* the solve, and have not had that redesign pass.
+answer* rather than the answer. Bay 2 is the counterpart: a pure **placement** bay where
+filling the cells *is* the solve, and where the crates are the floor. Bays 3–9 are still the
+older sketch of that model and have not had a design pass.
 
 | # | Obstacle | Colour | Lvl | Solve | Redesigned |
 |---|---|---|---|---|---|
 | 1 | **Saw Wall** | orange + red | 1 + 2 | **two levers, hold E** | ✅ built & verified |
-| 2 | Void | red | 1 | cells (1,0) (1,1) | ❌ |
+| 2 | **Void** | red | 1 | cells (1,0) (1,1) | ✅ built & verified |
 | 3 | Laser grid | yellow | 1 | cell (1,1) | ❌ |
 | 4 | Lava | blue | 1 | cells (1,0) (1,1) | ❌ |
 | 5 | Crusher roof | green | 2 | cell (1,1) | ❌ |
@@ -110,14 +112,24 @@ must mirror it, so no obstacle may destroy a crate. Resolve contact some other w
 Both go through one `state.setSolved`, which owns the label and the edge-triggered `onSolved`.
 A switch-mode bay **cannot be un-solved by clearing cells** — the R hotkey resets every bay.
 
-**Objective HUD.** Fire `Remotes.Objective` with
-`{title, task, hint, tone, timer, timerLabel, timerTone, flash}` to drive the on-screen task
-panel and countdown; fire `nil` to clear it. Nothing in it is saw-wall specific.
+**Objective HUD.** Build a payload of
+`{title, task, hint, tone, timer, timerLabel, timerTone, flash}` and hand it to
+`publishObjective(bayIndex, payload, pad)`; `nil` clears. Nothing in it is saw-wall specific.
+
+⚠️ **Never `FireAllClients` on this remote.** It is one channel shared by every bay, so a
+broadcast clear from an empty bay wipes the callout of the bay the player is standing in —
+which is exactly what bay 1 did to bay 2 until arbitration went in. `publishObjective`
+addresses only the players inside that bay, and retracts only what that bay put up. `pad`
+widens the catchment toward the entrance so a bay can brief the player on the approach.
 
 **Placement guards.** `BlockSync.setPlacementGuard(bayModel, fn)` lets an obstacle refuse a
 delivery into its own bay. A refusal is **parked, not discarded** — the operator's cube is
 still on the real table — and `BlockSync.retryRejected(bayModel)` re-offers it when the guard
 changes its mind.
+
+**Presentation must not hang off `state.solved`.** `buildBay`'s `setSolved` only calls
+`onSolved` on the way *in*, so anything driven from it stays stuck on "cleared" when the bay
+is later un-solved. Drive visuals from what has actually landed instead (bay 2's `refresh()`).
 
 **Reach gating.** To require a crate of a given height, raycast down from the player and check
 the supporting part is a crate `Base`/`Topper` above a threshold. Don't rely on mounting
@@ -127,8 +139,9 @@ things out of reach: a default Roblox jump clears about **12.8 studs of head hei
 
 ## Known gaps
 
-- **`ActiveBayTracker` doesn't exist.** `DebugMode` hardcodes Bay 1, so only Bay 1 is wired to
-  the arm. Everything else is built but unreachable by the real flow.
+- **`ActiveBayTracker` doesn't exist.** `DebugMode` now carries a minimal stand-in — one active
+  bay that the number keys and `N` move, with per-bay cell state — so any bay can be played.
+  The real tracker (driven by where the player actually is, not by a hotkey) is still missing.
 - **No `GameState` / checkpoints.** Dying respawns you at world spawn.
 - **No run clock, scoring or malfunctions** (plan §6, §9) — `Config` has placeholder values,
   nothing reads them.

@@ -13,8 +13,19 @@ end
 
 local BlockSync = require(ServerScriptService:WaitForChild("BlockSync"))
 local SkyArm = require(ServerScriptService:WaitForChild("SkyArm"))
--- Hardcoded to Bay 1 until ActiveBayTracker (Section 10.2 step 6) exists to pick the real active bay.
-local targetBay = Workspace:WaitForChild("Warehouse"):WaitForChild("Bay01")
+
+-- Minimal stand-in for ActiveBayTracker (Section 10.2 step 6): the arm, the cell editor and
+-- the crate deliveries all follow one active bay, and the quick-travel number keys move it.
+-- This used to be hardcoded to Bay01, which meant every bay past the first was unreachable by
+-- the real flow -- you could teleport into Bay 2 and edit cells, but the crates were delivered
+-- into Bay 1 behind you.
+--
+-- Each bay keeps its OWN cell state. Sharing one table would make BlockSync, which diffs per
+-- bay model, see every cell vanish from the bay you just left and have the arm dutifully
+-- unload it.
+local warehouse = Workspace:WaitForChild("Warehouse")
+local activeBayIndex = 1
+local targetBay = warehouse:WaitForChild("Bay01")
 SkyArm.setActiveBay(targetBay)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -24,11 +35,21 @@ local DebugHotkey = Remotes:WaitForChild("DebugHotkey")
 
 local COLOR_CYCLE = {"none", "red", "blue", "yellow", "green", "orange", "purple", "teal"}
 
--- cellState[col][row] = {color=, level=} or nil
-local cellState = {}
-local previousCellsList = {}
+-- cellStateByBay[bayIndex][col][row] = {color=, level=} or nil
+local cellStateByBay = {}
+local previousByBay = {}
+
+local function cellStateFor(bayIndex)
+	local cs = cellStateByBay[bayIndex]
+	if not cs then
+		cs = {}
+		cellStateByBay[bayIndex] = cs
+	end
+	return cs
+end
 
 local function buildCellsList()
+	local cellState = cellStateFor(activeBayIndex)
 	local list = {}
 	for col = 0, Config.BayCols - 1 do
 		for row = 0, Config.BayRows - 1 do
@@ -85,7 +106,7 @@ end
 
 local function applyAndBroadcast()
 	local newList = buildCellsList()
-	local added, removed, changed = diffCells(previousCellsList, newList)
+	local added, removed, changed = diffCells(previousByBay[activeBayIndex] or {}, newList)
 	if #added > 0 or #removed > 0 or #changed > 0 then
 		print(string.format("[DebugMode] cells diff: +%d -%d ~%d", #added, #removed, #changed))
 		for _, c in ipairs(added) do
@@ -98,10 +119,26 @@ local function applyAndBroadcast()
 			print(string.format("  - (%d,%d) %s L%d", c.col, c.row, c.color, c.level))
 		end
 	end
-	previousCellsList = newList
+	previousByBay[activeBayIndex] = newList
 	CellsUpdated:FireAllClients(newList)
 	BlockSync.applyCells(targetBay, newList)
 	return newList
+end
+
+-- Point the arm, the editor grid and future deliveries at a different bay. Declared after
+-- buildCellsList because a closure only sees locals declared above it -- reading it from here
+-- when it was declared below would silently resolve to a nil global.
+local function setActiveBay(bayIndex)
+	local bayModel = warehouse:FindFirstChild(string.format("Bay%02d", bayIndex))
+	if not bayModel then
+		return nil
+	end
+	activeBayIndex = bayIndex
+	targetBay = bayModel
+	SkyArm.setActiveBay(bayModel)
+	-- re-broadcast so the editor grid shows what is actually in the bay in front of you
+	CellsUpdated:FireAllClients(buildCellsList())
+	return bayModel
 end
 
 CellEdit.OnServerEvent:Connect(function(player, col, row, action)
@@ -112,6 +149,7 @@ CellEdit.OnServerEvent:Connect(function(player, col, row, action)
 		return
 	end
 
+	local cellState = cellStateFor(activeBayIndex)
 	cellState[col] = cellState[col] or {}
 	local cell = cellState[col][row]
 
@@ -149,9 +187,9 @@ local craneActive = false
 
 DebugHotkey.OnServerEvent:Connect(function(player, key)
 	if key == "R" then
-		cellState = {}
+		cellStateByBay[activeBayIndex] = {}
 		applyAndBroadcast()
-		print("[DebugMode] R: reset run (cells cleared; GameState reset not wired yet)")
+		print("[DebugMode] R: reset run (cells cleared for the active bay; GameState reset not wired yet)")
 	elseif key == "H" then
 		craneActive = not craneActive
 		print("[DebugMode] H: held Purple crane ->", craneActive)
@@ -162,16 +200,22 @@ DebugHotkey.OnServerEvent:Connect(function(player, key)
 	elseif key == "M" then
 		print("[DebugMode] M: trigger malfunction (Events not wired yet)")
 	elseif key == "N" then
-		print("[DebugMode] N: next bay (ActiveBayTracker not wired yet)")
+		-- moves the arm and the editor without moving the player, for watching a bay fill
+		local nextIndex = (activeBayIndex % Config.NumBays) + 1
+		if setActiveBay(nextIndex) then
+			print("[DebugMode] N: active bay -> " .. nextIndex)
+		end
 	elseif tonumber(key) then
 		local bayIndex = tonumber(key)
 		local bayModel = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", bayIndex))
 		local character = player.Character
 		local hrp = character and character:FindFirstChild("HumanoidRootPart")
 		if bayModel and hrp then
+			-- land on the approach catwalk, not inside the bay: bay 2 has no floor at row 0 and
+			-- the old +2 spawned you into thin air over the void.
 			local zStart = (bayIndex - 1) * Config.BayPitch
-			hrp.CFrame = CFrame.new(Config.BayWidth / 2, 4, zStart + 2)
-			SkyArm.setActiveBay(bayModel)
+			hrp.CFrame = CFrame.new(Config.BayWidth / 2, 4, zStart - 3)
+			setActiveBay(bayIndex)
 			print("[DebugMode] " .. key .. ": teleported to Bay " .. bayIndex .. " (quick-travel, not the real ActiveBayTracker)")
 		end
 	end

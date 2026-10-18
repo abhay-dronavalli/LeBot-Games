@@ -50,9 +50,17 @@ return {
 		obstacle = "Void",
 		color = "red",
 		level = 1,
-		coverRows = {0, 1},   -- row 2 keeps its floor, so 2 cubes is enough to cross
+		-- Row 2 keeps its floor, so 2 cubes is enough to cross -- and 2 is the whole red budget.
+		-- The gap this leaves (16 studs) is already nearly twice a running jump (8.67), so the
+		-- crates cannot be skipped; widening it to all three rows would only cost the player the
+		-- landing, not add difficulty.
+		coverRows = {0, 1},
+		-- Both in column 1, one per uncovered row: that spaces the crate faces 2 / 4 / 2 studs
+		-- apart across the gap, so every hop is comfortably inside a jump even though the gap as
+		-- a whole is not. The bay tests the operator's placement, not the player's platforming.
 		solveCells = {{1, 0}, {1, 1}},
-		note = "No floor over rows 0-1. The blocks ARE the bridge from the catwalk to solid ground.",
+		note = "No floor over rows 0-1. The blocks ARE the bridge from the catwalk to solid ground."
+			.. " Nothing here is lethal but the drop, so the bridge is also the only safe footing.",
 	},
 	[3] = {
 		obstacle = "Laser",
