@@ -47,6 +47,16 @@ local COLOR_RGB = {
 	teal = Color3.fromRGB(50, 190, 180),
 }
 
+-- How far a bay sinks its crates below the floor plane.
+--
+-- Normally a crate rests ON the floor: you climb it, and its top is a cube above where you
+-- walk. In a bay where the crates ARE the floor -- the void -- that is wrong: the bridge ends
+-- up a cube proud of the walkway, so crossing means hopping up onto every slab and back down.
+-- Such a bay sets CrateSink on its model and the crates drop to sit flush.
+local function sinkFor(bayModel)
+	return tonumber(bayModel and bayModel:GetAttribute("CrateSink")) or 0
+end
+
 function BlockSync.cellToWorld(bayModel, col, row)
 	local anchorsFolder = bayModel:FindFirstChild("CrateAnchors")
 	if not anchorsFolder then
@@ -59,7 +69,7 @@ function BlockSync.cellToWorld(bayModel, col, row)
 		error(string.format("BlockSync.cellToWorld: missing anchor %s under %s", anchorName, bayModel:GetFullName()))
 	end
 
-	return anchor.CFrame
+	return anchor.CFrame * CFrame.new(0, -sinkFor(bayModel), 0)
 end
 
 ----------------------------------------------------------------

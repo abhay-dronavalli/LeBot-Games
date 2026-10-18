@@ -181,6 +181,16 @@ which is exactly what bay 1 did to bay 2 until arbitration went in. `publishObje
 addresses only the players inside that bay, and retracts only what that bay put up. `pad`
 widens the catchment toward the entrance so a bay can brief the player on the approach.
 
+**A refusal is visible.** `BlockSync.PlacementRejected` is picked up centrally in
+`HazardManager` and merged into the next objective push as a `flash`, so any bay that turns a
+block away says so on screen. A bay may still set its own `flash` and it wins. Before this,
+only the saw wall announced refusals — bay 3 silently rejecting a block that was not the next
+cell on its route looked exactly like the block never arriving.
+
+**Crates can sit flush.** A bay whose crates *are* the floor sets `CrateSink` on its model and
+`cellToWorld` drops them by that much. The void uses one cube, so its bridge is level with the
+walkway instead of standing a cube proud of it.
+
 **Placement guards.** `BlockSync.setPlacementGuard(bayModel, fn)` lets an obstacle refuse a
 delivery into its own bay. A refusal is **parked, not discarded** — the operator's cube is
 still on the real table — and `BlockSync.retryRejected(bayModel)` re-offers it when the guard

@@ -170,7 +170,28 @@ local function hudBayFor(pos, pad)
 	return approach or trailing
 end
 
+-- A refused placement has to be visible to the PLAYER, not just printed on the server.
+--
+-- The saw wall flashed its own refusals; every other bay was silent, so bay 3 turning away a
+-- block that was not the next cell on its route looked exactly like the block never arriving.
+-- You place, nothing happens, nothing says why. Held centrally so a bay gets this for free
+-- rather than each builder reinventing it.
+local flashText, flashUntil, flashBay = nil, 0, nil
+local FLASH_SECONDS = 2.6
+
+BlockSync.PlacementRejected:Connect(function(bayModel, cell, reason)
+	local idx = tonumber(tostring(bayModel.Name):match("Bay(%d+)"))
+	flashBay = idx
+	flashUntil = os.clock() + FLASH_SECONDS
+	flashText = reason and tostring(reason)
+		or ("CANNOT PLACE AT (%s,%s)"):format(tostring(cell and cell.col), tostring(cell and cell.row))
+end)
+
 local function publishObjective(i, payload, pad)
+	-- merge in any refusal this bay just made, unless the bay set its own
+	if payload and flashBay == i and os.clock() < flashUntil and payload.flash == nil then
+		payload.flash = flashText
+	end
 	local inside = {}
 	for _, pl in ipairs(Players:GetPlayers()) do
 		local ch = pl.Character
@@ -897,6 +918,12 @@ BUILDERS.Void = function(i, folder, info, state)
 	local AMBER = Color3.fromRGB(255, 176, 40)
 	local GREEN = Color3.fromRGB(120, 240, 140)
 	local SHAFT = Color3.fromRGB(14, 14, 18)
+
+	-- The crates here ARE the floor, so they sit flush with it rather than on top of it. One
+	-- cube of sink: without it the bridge stands a full cube proud of the walkway and crossing
+	-- the gap means hopping up onto every slab and back down again, which is not what "the
+	-- blocks are the bridge" means.
+	bay:SetAttribute("CrateSink", Mapping.cubeStuds())
 
 	----------------------------------------------------------------
 	-- Cut the baked floor back so only the rows outside `coverRows` keep solid ground.
