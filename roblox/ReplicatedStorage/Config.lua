@@ -21,4 +21,17 @@ Config.StaleAfterSeconds = 2
 Config.StudsPerCm = 1
 Config.ArmAngleUnits = "degrees"
 
+-- Clocks (Section 6) -- placeholders, retune after measuring real placement speed (Section 15, T+13-17)
+Config.FullRunSeconds = 8 * 60
+Config.DemoRunSeconds = 2 * 60 + 30
+Config.DeathPenaltySeconds = 10
+Config.TealL1BonusSeconds = 3
+Config.TealL2FreezeSeconds = 8
+
+-- Malfunctions (Section 9)
+Config.MalfunctionIntensity = 1
+Config.MalfunctionTelegraphSeconds = 1.5
+Config.MalfunctionCooldownSeconds = 10
+Config.MalfunctionGraceAfterBayChange = 3
+
 return Config
