@@ -34,4 +34,8 @@ Config.MalfunctionTelegraphSeconds = 1.5
 Config.MalfunctionCooldownSeconds = 10
 Config.MalfunctionGraceAfterBayChange = 3
 
+-- Crate resolution timing (Section 5.2)
+Config.CrateConfirmDelay = 0.2
+Config.CrateRemoveDelay = 0.4
+
 return Config
