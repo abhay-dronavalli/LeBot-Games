@@ -158,3 +158,47 @@ BUILDERS.Saw = function(i, folder, info, state)
 	end
 end
 
+-- VOID: the floor is gone over `coverRows`. The placed blocks ARE the bridge across.
+BUILDERS.Void = function(i, folder, info, state)
+	local bay = Workspace.Warehouse:FindFirstChild(string.format("Bay%02d", i))
+	local floor = bay and bay:FindFirstChild("Floor")
+	local rows = info.coverRows or {0, 1, 2}
+
+	if floor then
+		if #rows >= 3 then
+			floor.Transparency = 1
+			floor.CanCollide = false
+			floor.CanTouch = false
+		else
+			-- shrink the floor back so only the untouched rows keep solid ground
+			local keptStart = (math.max(table.unpack(rows)) + 1) * CELL
+			local keptDepth = Config.BayDepth - keptStart
+			floor.Size = Vector3.new(Config.BayWidth, 1, keptDepth)
+			floor.CFrame = CFrame.new(Config.BayWidth / 2, -0.5,
+				bayZStart(i) + keptStart + keptDepth / 2)
+		end
+	end
+
+	-- edge warning lips so the drop reads as intentional
+	for _, row in ipairs(rows) do
+		local z = bayZStart(i) + row * CELL
+		newPart("VoidEdge", Vector3.new(Config.BayWidth, 0.4, 0.8),
+			Vector3.new(Config.BayWidth / 2, 0.2, z), Color3.fromRGB(220, 40, 40),
+			Enum.Material.Neon, folder)
+	end
+
+	-- catch plane well below: falling in is a death, not an endless drop
+	local catcher = newPart("VoidCatcher", Vector3.new(Config.BayWidth + 12, 2, Config.BayDepth),
+		Vector3.new(Config.BayWidth / 2, -24, bayCenter(i).Z), Color3.fromRGB(0, 0, 0),
+		Enum.Material.SmoothPlastic, folder, {Transparency = 1})
+	catcher.CanTouch = true
+	catcher.Touched:Connect(function(hit)
+		local _, hum = characterFrom(hit)
+		if hum and hum.Health > 0 then
+			hum.Health = 0
+		end
+	end)
+
+	function state.onSolved() end
+end
+
