@@ -52,6 +52,11 @@ Config.SawWallBrakeEnabled = true
 -- reward for finishing Lever A rather than a way to skip it.
 Config.SawWallNoPlaceBand = 4
 
+-- How long one crate holds the wall once the blades are dead. A stall is spent per crate, so
+-- the spare cube buys a second one -- but a jammed crate is only ever a reprieve, never a
+-- permanent shield, and the wall resumes full speed when the timer runs out.
+Config.SawWallStallSeconds = 10
+
 Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 
 -- Full playspace shell (Section 3.1, 7)
