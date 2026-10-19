@@ -80,14 +80,15 @@ def main(argv=None):
             print(f"  {model:<10} #{i + 1}  {time.perf_counter() - t0:5.1f}s  {got}{mark}")
             g = getattr(board_mod.read_board, "last", {}).get("geometry")
             if g:
-                note = ""
+                what = (f"-> cells {g['cells']}" if g.get("cells") is not None
+                        else "-> cropped and labelled; the model decided the rest")
                 if g.get("invented") or g.get("skipped"):
-                    note = f", model invented {g['invented']} skipped {g['skipped']}"
-                print(f"             sheet: tags {g['tags']} fit {g['fit_mm']}mm "
-                      f"-> cells {g['cells']}{note}")
+                    what += f", model invented {g['invented']} skipped {g['skipped']}"
+                print(f"             sheet[{g.get('mode')}]: tags {g['tags']} "
+                      f"fit {g['fit_mm']}mm {what}")
             elif g is None and i == 0:
-                print("             sheet: NOT located - falling back to reading printed "
-                      "labels, so position is the model's guess again")
+                print(f"             sheet: not used (BOARD_VISION={board_mod.vision_mode()})"
+                      " - the model is reading an uncropped frame")
 
         top, hits = answers.most_common(1)[0]
         if len(answers) > 1:

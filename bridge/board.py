@@ -569,12 +569,29 @@ def _raise_for_http(r):
 
 # ---- locating the board before asking about it --------------------------------------
 
-# Set BOARD_GEOMETRY=0 to go back to sending the whole frame and letting the model read the
-# printed labels. Worth having: the geometry path needs at least two of the sheet's four
-# AprilTags in view, so if the tags are peeling off or something is parked on top of one, this
-# is the switch that keeps the demo running while that is sorted out.
-def geometry_enabled():
-    return os.environ.get("BOARD_GEOMETRY", "1").strip().lower() not in ("0", "false", "no")
+# How much of the answer comes from the model. Set with BOARD_VISION.
+#
+#   ai      the model decides everything - which cells hold cubes, what colour, how many high.
+#           The sheet's tags are still used, but only to crop the photo to the board and
+#           redraw the grid labels where a cube cannot cover them. Nothing is overridden.
+#   assist  the tags decide which cells are occupied and the model is asked only for colour
+#           and stack height. Measured more accurate (see `robot/perception/gridmask.py`) and
+#           kept for when position matters more than having one system answer the question.
+#   raw     the whole 1920-wide frame, no tags, no crop. The last resort if the overlay ever
+#           confuses the model more than it helps.
+#
+# The default is `ai`, which is a choice about who owns the answer rather than a claim that it
+# reads the board better. On 2026-10-18, with a cube sitting in B1, `ai` answered A1 four times
+# out of four and `assist` answered B1: the model follows the cube's top face, which leans a
+# whole row away from its base under a camera 363 mm up. `robot/scripts/tests/board_check.py`
+# is how to re-measure that here before trusting either.
+MODES = ("ai", "assist", "raw")
+DEFAULT_MODE = "ai"
+
+
+def vision_mode():
+    mode = os.environ.get("BOARD_VISION", DEFAULT_MODE).strip().lower()
+    return mode if mode in MODES else DEFAULT_MODE
 
 
 _locator_cache = "unset"        # not None: None is a real, remembered "unavailable"
@@ -593,24 +610,29 @@ def _locator():
     return _locator_cache
 
 
-def locate_cubes(frame_bgr):
-    """Find the sheet and which cells hold cubes. -> (pose, [Found]) or (None, []).
-
-    (None, []) means "ask the model the old way", never "the board is empty" - an empty board
-    returns a pose and an empty list, which is a different thing and must stay different.
-    """
+def locate_sheet(frame_bgr):
+    """The sheet's pose, or None when the tags cannot be found. Never raises."""
     loc = _locator()
     if loc is None:
+        return None
+    try:
+        return loc.locate(frame_bgr)
+    except Exception as e:                      # noqa: BLE001 - never lose a read over this
+        print(f"  (could not locate the sheet, sending the raw frame instead: {e})")
+        return None
+
+
+def locate_cubes(frame_bgr):
+    """`assist` mode only: the sheet plus which cells hold cubes. -> (pose, [Found])."""
+    pose = locate_sheet(frame_bgr)
+    if pose is None:
         return None, []
     try:
         from robot.perception import gridmask
-        pose = loc.locate(frame_bgr)
-        if pose is None:
-            return None, []
         centres = {c: cell_centre(c) for c in cells()}
         return pose, gridmask.occupied_cells(frame_bgr, pose, centres, CELL_MM)
-    except Exception as e:                      # noqa: BLE001 - never lose a read over this
-        print(f"  (could not locate the sheet, reading printed labels instead: {e})")
+    except Exception as e:                      # noqa: BLE001
+        print(f"  (could not mask the cubes, asking the model instead: {e})")
         return None, []
 
 
@@ -653,15 +675,30 @@ def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
     model = model or model_name()
     t = time.perf_counter()
 
-    pose, found = locate_cubes(frame_bgr) if geometry_enabled() else (None, [])
-    if pose is not None:
-        from robot.perception import gridmask
-        image = gridmask.annotate(frame_bgr, pose, {c: cell_centre(c) for c in cells()},
-                                  CELL_MM, found)
-        prompt = geometry_prompt(found)
-        geometry = {"tags": pose.tag_ids, "fit_mm": round(pose.fit_error_mm, 2),
-                    "cells": [f.cell for f in found]}
-        if not found:
+    mode = vision_mode()
+    image, prompt, geometry, found = frame_bgr, PROMPT, None, []
+
+    if mode == "ai":
+        # The model owns the whole answer. The tags only make the photo easier to read: crop
+        # to the board, and put each cell's label in its corner where a cube cannot sit on it.
+        pose = locate_sheet(frame_bgr)
+        if pose is not None:
+            from robot.perception import gridmask
+            image = gridmask.overlay(frame_bgr, pose, {c: cell_centre(c) for c in cells()},
+                                     CELL_MM)
+            geometry = {"tags": pose.tag_ids, "fit_mm": round(pose.fit_error_mm, 2),
+                        "mode": "ai", "cells": None}
+
+    elif mode == "assist":
+        pose, found = locate_cubes(frame_bgr)
+        if pose is not None:
+            from robot.perception import gridmask
+            image = gridmask.annotate(frame_bgr, pose, {c: cell_centre(c) for c in cells()},
+                                      CELL_MM, found)
+            prompt = geometry_prompt(found)
+            geometry = {"tags": pose.tag_ids, "fit_mm": round(pose.fit_error_mm, 2),
+                        "mode": "assist", "cells": [f.cell for f in found]}
+        if pose is not None and not found:
             # Nothing on the sheet. The model has nothing to add and a call would only invent
             # something; the tags already prove we are looking at the board and it is empty.
             #
@@ -670,12 +707,10 @@ def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
             # report trouble, and an empty board is a legitimate answer. The coverage gap is
             # wide enough (0.97 against 0.24 on this rig) that this should not creep up, but
             # it is what `robot/scripts/tests/board_check.py` is for after the rig moves, and
-            # BOARD_GEOMETRY=0 is the way out while it is sorted.
+            # BOARD_VISION=ai is the way out while it is sorted.
             read_board.last = {"model": None, "seconds": round(time.perf_counter() - t, 2),
                                "tokens": 0, "raw": None, "geometry": geometry}
             return []
-    else:
-        image, prompt, geometry = frame_bgr, PROMPT, None
 
     body = {
         "model": model,
@@ -698,7 +733,8 @@ def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
     except (KeyError, IndexError, TypeError, ValueError) as e:
         raise BoardUnavailable(f"unreadable reply: {e}", "reply") from None
     out = parse(reply)
-    if geometry is not None:
+    if mode == "assist" and geometry is not None:
+        # Only `assist` overrides the model. In `ai` the reply is the answer, right or wrong.
         out, invented, skipped = reconcile(out, found)
         geometry.update(invented=invented, skipped=skipped)
         if invented or skipped:
