@@ -44,9 +44,9 @@ if not focus then
 	focus.Anchored, focus.CanCollide, focus.CanQuery, focus.CanTouch = true, false, false, false
 	focus.Transparency = 1
 	focus.Size = Vector3.one
-	focus.Position = Config.lobbyOrbit.center
 	focus.Parent = workspace
 end
+focus.Position = Config.lobbyOrbit.center
 
 -- Gives the player role a character and takes it away from everyone else.
 local function applyCharacter(player)

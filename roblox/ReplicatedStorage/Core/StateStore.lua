@@ -30,7 +30,9 @@
 -- Fake generator: publishes a fake arm (small waves around the twin's rest pose, as sheet-mm points from
 -- ArmTwin.Rig) 20 times a second. Blocks only change through the Debug hook below or debugAutoSolve
 -- (no random placements: the idle board is Pattern Match's attract-mode demo, which never writes here).
--- With Config.debugAutoSolve also on, it follows the Pattern Match game (PatternMatch.Remotes.PatternState):
+-- With Config.debugAutoSolve also on (fake generator, or the bridge's mock source for testing: the solved
+-- board then replaces the mock's blocks until the game leaves the shift), it follows the Pattern Match
+-- game (PatternMatch.Remotes.PatternState):
 -- 3 s after each ticket becomes active the board is rebuilt to
 -- match it, reusing the blocks already there (rebuiltBlocks; leftovers go to the tray). The delay
 -- ignores debugFastTimers.
@@ -74,14 +76,21 @@ function StateStore.hello()
 	return helloFrame
 end
 
--- The bridge link: "offline" when there is no frame yet (sinceFrame nil), none for
--- Config.bridgeStaleSeconds, blocks_age over that, or either age null (the server sends null until
--- that part has published once: teleop without --vision never publishes blocks). Otherwise "mock" for
--- hello source "mock" and "live" for any other source (teleop, follower, auto, anything new, or none).
-function StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge)
+-- Board reader states (the frame's notes.board.state, PROTOCOL.md) that mean the board has stopped
+-- updating until a human fixes it. rate_limit and error retry on their own.
+StateStore.BROKEN_BOARD = { no_credits = true, no_key = true, auth = true }
+
+-- The bridge link: "offline" when there is no frame yet (sinceFrame nil) or none for
+-- Config.bridgeStaleSeconds, when arm_age is null or over that, or when the board reader is broken
+-- (boardState in BROKEN_BOARD). blocks_age is NOT a staleness signal: the board is read by a vision
+-- model 2 s after each gripper release and republished unchanged between reads, so 30 s is healthy.
+-- Otherwise "mock" for hello source "mock" and "live" for any other source (teleop, follower, auto,
+-- anything new, or none).
+function StateStore.linkStatus(helloSource, sinceFrame, armAge, boardState)
 	local stale = Config.bridgeStaleSeconds
-	blocksAge, armAge = tonumber(blocksAge), tonumber(armAge)
-	if type(sinceFrame) ~= "number" or sinceFrame > stale or blocksAge == nil or blocksAge > stale or armAge == nil then
+	armAge = tonumber(armAge)
+	if type(sinceFrame) ~= "number" or sinceFrame > stale or armAge == nil or armAge > stale
+		or StateStore.BROKEN_BOARD[boardState] then
 		return "offline"
 	end
 	return helloSource == "mock" and "mock" or "live"
@@ -95,7 +104,7 @@ function StateStore.status()
 		return "offline"
 	end
 	return StateStore.linkStatus(helloFrame and helloFrame.source, lastFrameAt and os.clock() - lastFrameAt,
-		state.blocks_age, state.arm_age)
+		state.arm_age, state.board and state.board.state)
 end
 
 function StateStore.sendEvent(name, intensity, duration)
@@ -117,11 +126,16 @@ local unknownColors = {} -- protocol color names with no Config.colors entry, wa
 
 -- A perception color name as a Config.colors name, through Config.perceptionColors ("light blue" ->
 -- "skyblue"). Any other name is a misread (our kit has only the six): it is kept as sent, so the LiveBoard
--- draws it gray and Target.compare counts it as a wrong block (Target.isMisread).
+-- draws it gray and Target.compare counts it as a wrong block (Target.isMisread). "grey" is expected (the
+-- lower cube of a stack, whose colour the camera can't see; Target.compare lets it match), so it isn't
+-- warned about.
 function StateStore.colorName(name)
 	local mapped = Config.perceptionColors[name]
 	if mapped then
 		return mapped
+	end
+	if name == "grey" then
+		return name
 	end
 	if not unknownColors[name] then
 		unknownColors[name] = true
@@ -134,9 +148,8 @@ end
 function StateStore.fromFrame(frame)
 	local blocks = {}
 	for _, b in ipairs(frame.blocks or {}) do
-		local block = table.clone(b)
-		-- A held block reports "grey" (PROTOCOL.md). It never counts, so it isn't mapped or warned about.
-		block.color = b.held and b.color or StateStore.colorName(b.color)
+		local block = table.clone(b) -- cell (the printed cell the vision model read) comes along as is
+		block.color = StateStore.colorName(b.color)
 		table.insert(blocks, block)
 	end
 	local arm = frame.arm
@@ -146,6 +159,7 @@ function StateStore.fromFrame(frame)
 	return {
 		t = "state", seq = frame.seq, ts = frame.ts,
 		arm = arm, arm_age = frame.arm_age, blocks = blocks, blocks_age = frame.blocks_age, effects = frame.effects,
+		board = type(frame.notes) == "table" and type(frame.notes.board) == "table" and frame.notes.board or nil,
 	}
 end
 
@@ -245,6 +259,7 @@ function StateStore.fakeArm(angles)
 end
 
 local AUTO_SOLVE_DELAY = 3 -- debugAutoSolve: seconds after a ticket becomes active (ignores debugFastTimers)
+local mockSolved = nil      -- debugAutoSolve on the mock link: the solved blocks shown instead of the mock's
 local FAKE_TRAY_MAX = 8     -- blocks the fake tray keeps; extras beyond this are taken off the table
 
 local function cellOfLabel(cell)
@@ -256,7 +271,7 @@ end
 -- other needed block is taken from the unused blocks of that color (wrong spot on the grid, the tray, or
 -- held) and moved; anything still missing is added; leftover blocks go to the tray (zone "tray", which
 -- the game ignores). Towers get matching level values.
-local function rebuiltBlocks(target)
+local function rebuiltBlocks(target, from)
 	local need = {} -- "B2:1" -> color, for every target cell and level
 	for cell, tower in pairs(target) do
 		for i, color in ipairs(tower) do
@@ -265,7 +280,7 @@ local function rebuiltBlocks(target)
 	end
 
 	local kept, pool = {}, {}
-	for _, block in ipairs(state.blocks) do
+	for _, block in ipairs(from or state.blocks) do
 		local tag = fakeCell[block.id]
 		local key = tag and tag ~= "offgrid" and tag ~= "held" and (tag .. ":" .. (block.level or 0)) or nil
 		if key and need[key] == block.color then
@@ -335,8 +350,8 @@ local onGameState = nil       -- set below: called with each new game state
 
 -- Follows the Pattern Match game (PatternMatch.Remotes.PatternState, fired on every state change and
 -- every active ticket change): keeps the state and the active ticket's target, and with
--- Config.debugAutoSolve (fake generator only) rebuilds the board for it AUTO_SOLVE_DELAY seconds after it
--- becomes active.
+-- Config.debugAutoSolve (fake generator, or the mock source) rebuilds the board for it AUTO_SOLVE_DELAY
+-- seconds after it becomes active.
 local function followGame()
 	local stateSignal = ReplicatedStorage.PatternMatch:WaitForChild("Remotes"):WaitForChild("PatternState")
 	local generation = 0
@@ -348,15 +363,26 @@ local function followGame()
 		if onGameState then
 			onGameState(info.state)
 		end
-		if not Config.debugAutoSolve or source ~= "fake" then
+		if info.state ~= "Shift" then
+			mockSolved = nil -- the mock's own blocks again
+		end
+		local mock = source == "bridge" and helloFrame ~= nil and helloFrame.source == "mock"
+		if not Config.debugAutoSolve or (source ~= "fake" and not mock) then
 			return
 		end
 		if info.state == "Shift" and info.target then
 			task.delay(AUTO_SOLVE_DELAY, function()
-				if generation == mine and source == "fake" then
+				if generation ~= mine then
+					return
+				end
+				if source == "fake" then
 					local blocks, note = rebuiltBlocks(info.target)
 					publish(blocks)
 					print(string.format("[StateStore fake] debugAutoSolve: rebuilt the board for ticket #%s (%s)", tostring(info.activeId), note))
+				elseif mock then
+					local blocks, note = rebuiltBlocks(info.target, mockSolved or {})
+					mockSolved = blocks
+					print(string.format("[StateStore mock] debugAutoSolve: board solved for ticket #%s over the mock's blocks (%s)", tostring(info.activeId), note))
 				end
 			end)
 		end
@@ -476,7 +502,11 @@ local function onState(frame)
 		return
 	end
 	lastFrameAt = os.clock()
-	StateStore.update(StateStore.fromFrame(frame))
+	local converted = StateStore.fromFrame(frame)
+	if mockSolved and Config.debugAutoSolve then
+		converted.blocks, converted.blocks_age = mockSolved, 0 -- testing on the mock: the auto-solved board
+	end
+	StateStore.update(converted)
 end
 
 if RunService:IsServer() and RunService:IsRunning() then

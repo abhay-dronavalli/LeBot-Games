@@ -39,8 +39,8 @@ case "$mode" in
     echo "ports free."
     ;;
   test)
-    echo "== block tracker =="
-    "$PY" -m bridge.test_world || exit 1
+    echo "== board =="
+    "$PY" -m bridge.test_board || exit 1
     echo
     echo "== end to end (starts a mock server, then tears it down) =="
     free_ports

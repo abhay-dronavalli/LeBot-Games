@@ -4,7 +4,6 @@
 -- A target maps cell -> tower, a list of color names bottom to top, e.g. { A1 = {"red"}, B2 = {"red", "teal"} }
 -- (B2 wants a red block on the table with a teal one on top of it).
 -- A live grid comes from Grid.liveGridFrom: cell -> { [level] = { color, ... } }, level 0 = table.
--- vanished is a set of cells, e.g. { B3 = true }.
 
 local Config = require(script.Parent.Config)
 local Grid = require(script.Parent.Grid)
@@ -98,19 +97,22 @@ local function addLevel(problemLevels, cell, level)
 	levels[level] = true
 end
 
--- Compares level by level. Returns { clear, missing, wrong, extra, blocked, doubled, problemLevels }, the
--- five lists sorted arrays of cells:
+-- Compares level by level. Returns { clear, missing, wrong, extra, doubled, problemLevels }, the four
+-- lists sorted arrays of cells:
 --   missing: target cell with a tower level that has no block (nothing at all, or a shorter tower)
 --   wrong:   target cell with a block of the wrong color at some level, or any cell with a misread block
---            (a color name Config.colors doesn't have, Target.isMisread) at any level
+--            (a color name Config.colors doesn't have, Target.isMisread) at any level. Except: a "grey"
+--            level 0 block with a block on top of it is the lower cube of a stack, whose colour the
+--            overhead camera can't see (PROTOCOL.md), so it matches whatever colour the target wants there
 --   extra:   block at a level the target tower doesn't have (on top of a complete tower, or on a
 --            non-target cell), or at any level >= Config.maxStackGlobal
---   blocked: any block on a vanished cell (reported here instead of the lists above)
 --   doubled: 2+ blocks reported at the same cell and level; that level can never count as correct
--- problemLevels: { [cell] = { [level] = true } }, the blocks behind extra, doubled, blocked and misread,
+-- problemLevels: { [cell] = { [level] = true } }, the blocks behind extra, doubled and misread,
 -- so the LiveBoard can outline the specific block.
 -- clear is true only when every tower matches exactly bottom to top and nothing else is on the grid,
--- i.e. all five lists are empty. Holding it for Config.holdToClear is the caller's job.
+-- i.e. all four lists are empty. Holding it for Config.holdToClear is the caller's job.
+Target.GREY = "grey" -- the board's "can't see the colour" (a stack's lower cube)
+
 -- True for a block color that isn't one of ours: perception misread it (green, blue, pink, white, ...).
 function Target.isMisread(color)
 	return Config.colors[color] == nil
@@ -125,43 +127,41 @@ local function anyMisread(colors)
 	return false
 end
 
-function Target.compare(target, liveGrid, vanished)
-	vanished = vanished or {}
-	local missing, wrong, extra, blocked, doubled = {}, {}, {}, {}, {}
+function Target.compare(target, liveGrid)
+	local missing, wrong, extra, doubled = {}, {}, {}, {}
 	local problemLevels = {}
 
 	for cell, entry in pairs(liveGrid) do
 		local tower = target[cell] or {}
 		for _, level in ipairs(Grid.levelsOf(entry)) do
 			local colors = entry[level]
-			if vanished[cell] then
-				blocked[cell] = true
+			local greyUnder = level == 0 and entry[1] ~= nil and #colors == 1 and colors[1] == Target.GREY
+			if #colors >= 2 then
+				doubled[cell] = true
 				addLevel(problemLevels, cell, level)
-			else
-				if #colors >= 2 then
-					doubled[cell] = true
+			end
+			if greyUnder then
+				if tower[1] == nil then
+					extra[cell] = true -- a stack where the target has none
 					addLevel(problemLevels, cell, level)
 				end
-				if anyMisread(colors) then
-					wrong[cell] = true -- never matches, wherever it is; outlined so the player sees it
-					addLevel(problemLevels, cell, level)
-				elseif level >= Config.maxStackGlobal or tower[level + 1] == nil then
-					extra[cell] = true
-					addLevel(problemLevels, cell, level)
-				elseif #colors == 1 and colors[1] ~= tower[level + 1] then
-					wrong[cell] = true
-				end
+			elseif anyMisread(colors) then
+				wrong[cell] = true -- never matches, wherever it is; outlined so the player sees it
+				addLevel(problemLevels, cell, level)
+			elseif level >= Config.maxStackGlobal or tower[level + 1] == nil then
+				extra[cell] = true
+				addLevel(problemLevels, cell, level)
+			elseif #colors == 1 and colors[1] ~= tower[level + 1] then
+				wrong[cell] = true
 			end
 		end
 	end
 
 	for cell, tower in pairs(target) do
-		if not blocked[cell] then
-			local entry = liveGrid[cell] or {}
-			for i = 1, #tower do
-				if entry[i - 1] == nil then
-					missing[cell] = true
-				end
+		local entry = liveGrid[cell] or {}
+		for i = 1, #tower do
+			if entry[i - 1] == nil then
+				missing[cell] = true
 			end
 		end
 	end
@@ -170,19 +170,17 @@ function Target.compare(target, liveGrid, vanished)
 		missing = sortedKeys(missing),
 		wrong = sortedKeys(wrong),
 		extra = sortedKeys(extra),
-		blocked = sortedKeys(blocked),
 		doubled = sortedKeys(doubled),
 		problemLevels = problemLevels,
 	}
-	result.clear = #result.missing == 0 and #result.wrong == 0 and #result.extra == 0
-		and #result.blocked == 0 and #result.doubled == 0
+	result.clear = #result.missing == 0 and #result.wrong == 0 and #result.extra == 0 and #result.doubled == 0
 	return result
 end
 
 -- One-line summary of a compare result, for logs.
 function Target.describe(result)
 	local parts = { "clear=" .. tostring(result.clear) }
-	for _, key in ipairs({ "missing", "wrong", "extra", "blocked", "doubled" }) do
+	for _, key in ipairs({ "missing", "wrong", "extra", "doubled" }) do
 		table.insert(parts, key .. "={" .. table.concat(result[key], ",") .. "}")
 	end
 	return table.concat(parts, " ")

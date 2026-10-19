@@ -14,8 +14,15 @@
 -- while it runs.
 -- While the robot link is OFFLINE (store.status(), Core.StateStore) the match check freezes: the board
 -- keeps its last frame, no ticket can clear and the hold-to-clear count starts over, but the shift timer,
--- arrivals and events keep running.
--- Easy and Hard modes; events (PatternMatch.PatternEvents) run during the shift. Each state is an
+-- arrivals keep running.
+-- In the arcade (ServerStorage.Modes.PatternMatch.Module, opts.onFinished) a game is one pass:
+--   Idle (the room: attract demo, Play prompt) -> ModeSelect -> Shift -> Results (WIN at Config.winPoints
+--   or more, else LOSE) -> Done
+-- Idle lasts at most Config.roomIdleSeconds: if nobody presses Play by then, it goes straight to Done.
+-- Done calls opts.onFinished(score, why) once; the mode reports the results to the arcade and the arcade
+-- then calls Stop, which ends the game for good (Game:shutdown). Ticket time bonuses stop at
+-- Config.maxTimeBonus per shift, so a game always ends within Game.maxDuration().
+-- Easy and Hard modes; Hard hides the target's colors on a show / hide cycle (Game.revealAt). Each state is an
 -- enter/tick pair in `states`. Every 0.2 s, step() redraws the LiveBoard from StateStore (in every
 -- state, idle included), counts down, ticks the current state and pushes the HUD payload if anything
 -- on it changed.
@@ -25,12 +32,12 @@ local Grid = require(script.Parent.Grid)
 local Target = require(script.Parent.Target)
 local LiveBoard = require(script.Parent.LiveBoard)
 local TargetBoard = require(script.Parent.TargetBoard)
-local PatternEvents = require(script.Parent.PatternEvents)
 local Attract = require(script.Parent.Attract)
 local Celebrate = require(script.Parent.Celebrate)
 local TicketStack = require(script.Parent.TicketStack)
 
 local TICK = 0.2
+local MAX_DURATION_MARGIN = 30 -- seconds on top of the longest game: ticks, the map clone, client lag
 
 local Game = {}
 Game.__index = Game
@@ -40,6 +47,20 @@ local function seconds(s)
 	return Config.debugFastTimers and s / 4 or s
 end
 Game.seconds = seconds
+Game.TICK = TICK
+
+-- The longest a game can run from Start to Finished, in seconds (the mode's MaxDuration): the whole room
+-- wait (Play pressed at the last moment), the mode select countdown and the confirmation, a full shift
+-- with every bonus second (Config.maxTimeBonus), the results, plus a margin.
+function Game.maxDuration()
+	return math.ceil(Config.roomIdleSeconds + Config.modeSelectSeconds + Config.modeConfirmSeconds + Config.shiftSeconds
+		+ Config.maxTimeBonus + Config.resultsSeconds) + MAX_DURATION_MARGIN
+end
+
+-- A shift's result: WIN when the score reaches Config.winPoints.
+function Game.isWin(score)
+	return (score or 0) >= Config.winPoints
+end
 
 local function log(fmt, ...)
 	print("[PatternMode] " .. string.format(fmt, ...))
@@ -113,7 +134,20 @@ states.Idle = {
 		else
 			self.targetBoard:show(nil)
 		end
-		self.message = "Walk up to the pad and press E to play Pattern Match."
+		if self.onFinished then
+			-- The arcade room: players walk around until someone presses Play, for at most roomIdleSeconds.
+			self:startTimer(Config.roomIdleSeconds)
+			self.message = "Press Play on the cabinet to start!"
+		else
+			self.message = "Waiting for the next game."
+		end
+	end,
+	tick = function(self)
+		if self.onFinished and self.timeLeft <= 0 then
+			log("nobody pressed Play within %d s: game over", Config.roomIdleSeconds)
+			self.idleTimedOut = true
+			self:setState("Done")
+		end
 	end,
 }
 
@@ -144,6 +178,7 @@ states.Shift = {
 		self.tickets, self.activeId, self.completed = {}, nil, {}
 		self.nextTicketId = 1 -- tickets are numbered from #1 every shift
 		self.score = 0
+		self.bonusUsed = 0 -- ticket bonus seconds so far, up to Config.maxTimeBonus
 		self.shiftElapsed = 0
 		self.shiftLength = seconds(Config.shiftSeconds)
 		self.clearFor = 0
@@ -154,7 +189,6 @@ states.Shift = {
 		if self.mode == "Hard" then
 			self.revealPhase, self.revealLeft = Game.revealAt(0)
 		end
-		self.events:start(self.mode)
 		self:addTicket() -- the first ticket arrives at shift start
 		self:scheduleArrival()
 	end,
@@ -170,7 +204,6 @@ states.Shift = {
 		end
 
 		local active = self:activeTicket()
-		self.events:tick(dt, active and active.target or {}, self.liveGrid)
 		if self.mode == "Hard" then
 			local phase, left = Game.revealAt(self.shiftElapsed)
 			self.revealLeft = left
@@ -187,8 +220,8 @@ states.Shift = {
 				log("ticket #%d: robot OFFLINE, matching frozen", active.id)
 			end
 		elseif active then
-			local result = Target.compare(active.target, self.liveGrid, self.events.vanished)
-			self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and blocked blocks
+			local result = Target.compare(active.target, self.liveGrid)
+			self.liveBoard:showProblems(result.problemLevels) -- extra, doubled and misread blocks
 			local text = Target.describe(result)
 			if text ~= self.lastCompare then
 				self.lastCompare = text
@@ -213,19 +246,31 @@ states.Results = {
 	enter = function(self)
 		self.tickets, self.activeId = {}, nil
 		self.targetBoard:show(nil)
-		self.message = string.format("Shift over! %d ticket%s, %d points", #self.completed,
-			#self.completed == 1 and "" or "s", self.score)
+		self.message = string.format("Shift over! %d ticket%s, %d points: %s", #self.completed,
+			#self.completed == 1 and "" or "s", self.score, Game.isWin(self.score) and "WIN" or "LOSE")
 		self:startTimer(Config.resultsSeconds)
 		log("results (%s mode): %s", tostring(self.mode), self.message)
 	end,
 	tick = function(self)
 		if self.timeLeft <= 0 then
-			self:setState("Idle")
+			self:setState(self.onFinished and "Done" or "Idle")
 		end
 	end,
 }
 
--- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore), core (Core.Events),
+-- The arcade game is over: report the score once (opts.onFinished, with why: "results", or "idle" when
+-- nobody pressed Play). Nothing more happens until the mode stops the game.
+states.Done = {
+	enter = function(self)
+		self.message = ""
+		if not self.finishedReported then
+			self.finishedReported = true
+			self.onFinished(self.score, self.idleTimedOut and "idle" or "results")
+		end
+	end,
+}
+
+-- opts: cabinet (Workspace.PatternCabinet), store (Core.StateStore),
 -- ui (PatternUI RemoteEvent), robotUi (optional RobotUI RemoteEvent), players (optional function returning
 -- the players to send the HUD to) and roleOf (optional function player -> role): with all three, every
 -- player gets the full HUD payload except the robot role, which gets only Game.robotPayload on robotUi
@@ -234,19 +279,21 @@ states.Results = {
 -- stateChanged (optional BindableEvent, fired with
 -- { state, mode, activeId, target } on every state change and every active ticket change, where target
 -- is the active ticket's target), rng (optional Random for tickets, for repeatable tests), manualAttract
--- (true: the attract demo only moves when tests call game.attract:advance(dt))
+-- (true: the attract demo only moves when tests call game.attract:advance(dt)), onFinished (optional
+-- function(score, why): the arcade mode; Idle is the room with its own timeout, and Results end in Done,
+-- which calls it once, instead of Idle)
 function Game.new(opts)
 	local self = setmetatable({}, Game)
 	self.store = opts.store
 	self.ui = opts.ui
 	self.robotUi, self.players, self.roleOf, self.onActive = opts.robotUi, opts.players, opts.roleOf, opts.onActive
 	self.stateChanged = opts.stateChanged
+	self.onFinished = opts.onFinished
 	self.rng = opts.rng or Random.new()
 	local targetModel = opts.cabinet:WaitForChild("TargetBoard")
 	local liveModel = opts.cabinet:WaitForChild("LiveBoard")
 	self.targetBoard = TargetBoard.new(targetModel)
 	self.liveBoard = LiveBoard.new(liveModel)
-	self.events = PatternEvents.new({ core = opts.core, liveBoard = self.liveBoard })
 	-- The shared "matched" moment: the attract demo's COMPLETE! and the shift's ORDER UP.
 	self.celebrate = Celebrate.new(opts.cabinet, { targetModel, liveModel })
 	self.attract = Attract.new({ cabinet = opts.cabinet, targetBoard = self.targetBoard, liveBoard = self.liveBoard,
@@ -256,6 +303,7 @@ function Game.new(opts)
 	self.mode, self.score, self.completed = nil, 0, {}
 	self.tickets, self.activeId, self.nextTicketId = {}, nil, 1
 	self.orderUpSeq = 0
+	self.bonusUsed = 0
 	self.shiftElapsed, self.shiftLength = 0, seconds(Config.shiftSeconds)
 	self.timeLeft, self.timerRunning, self.message = 0, false, ""
 	return self
@@ -400,16 +448,18 @@ function Game:completeTicket(ticket)
 		end
 	end
 	self.score += ticket.points
+	local bonus = math.min(Config.ticketTimeBonus, math.max(0, Config.maxTimeBonus - self.bonusUsed))
+	self.bonusUsed += bonus
 	table.insert(self.completed, {
 		id = ticket.id, points = ticket.points, blocks = ticket.blocks, stacked = ticket.stacked,
 		seconds = math.floor(self.shiftElapsed - ticket.arrivedAt + 0.5),
 	})
-	self.timeLeft += seconds(Config.ticketTimeBonus)
+	self.timeLeft += seconds(bonus)
 	self.orderUpSeq += 1
-	self.orderUp = { id = ticket.id, points = ticket.points, bonus = Config.ticketTimeBonus, seq = self.orderUpSeq }
+	self.orderUp = { id = ticket.id, points = ticket.points, bonus = bonus, seq = self.orderUpSeq }
 	self.message = string.format("ORDER UP! Ticket #%d +%d", ticket.id, ticket.points)
 	self.celebrate:burst(string.format("ORDER UP! +%d", ticket.points)) -- same moment as the demo's COMPLETE!
-	log("ORDER UP: ticket #%d, +%d points (score %d), +%d s", ticket.id, ticket.points, self.score, Config.ticketTimeBonus)
+	log("ORDER UP: ticket #%d, +%d points (score %d), +%d s", ticket.id, ticket.points, self.score, bonus)
 	self.activeId = nil
 	if #self.tickets == 0 then
 		self:addTicket() -- the rail is empty: the next ticket arrives right away
@@ -436,8 +486,20 @@ function Game:run()
 	end
 end
 
+-- Ends the game for good (the arcade mode's Stop): the attract demo, the celebration and the timer stop,
+-- and step() does nothing from now on. The boards go with the map.
+function Game:shutdown()
+	self.stopped = true
+	self.timerRunning = false
+	self.attract:stop()
+	self.celebrate:stop()
+end
+
 -- One tick: redraw the LiveBoard, count down, tick the current state, update the HUD if it changed.
 function Game:step(dt)
+	if self.stopped then
+		return
+	end
 	if self.attract.running then
 		self.liveGrid = {} -- the attract demo owns the LiveBoard while it runs
 	else
@@ -458,12 +520,14 @@ end
 function Game:setState(name)
 	if name ~= "Idle" then
 		self.attract:stop() -- cancels its timers and animations and clears both boards
+		if self.state == "Idle" then
+			self.celebrate:stop() -- a new game starts clean (with or without the attract demo)
+		end
 	end
 	self.state = name
 	self.timerRunning = false
 	self.timeLeft = 0
 	self.revealPhase, self.revealLeft = nil, nil
-	self.events:stop()
 	self.liveBoard:showProblems(nil)
 	if self.onActive then
 		self.onActive(name ~= "Idle") -- the player is in Pattern Match from mode select until Results end
@@ -498,7 +562,6 @@ local function ticketCard(ticket, now)
 end
 
 function Game:payload()
-	local event, vanishedCells = self.events:payload()
 	local tickets = {}
 	for _, ticket in ipairs(self.tickets) do
 		table.insert(tickets, ticketCard(ticket, self.shiftElapsed))
@@ -517,30 +580,28 @@ function Game:payload()
 		orderUp = self.orderUp,        -- { id, points, bonus, seq } for the latest ORDER UP, or nil
 		revealPhase = self.revealPhase,
 		revealTimeLeft = self.revealPhase and math.ceil(self.revealLeft) or nil,
-		event = event,                 -- { name, banner, phase = "warning" | "active", timeLeft } or nil
-		vanishedCells = vanishedCells, -- sorted list of cells
 		chooser = self.chooserName,    -- who picks the mode this game
 		chooserUserId = self.chooserUserId,
 		confirming = self.state == "ModeSelect" and self.picked == true, -- picked, showing "HARD MODE"
 		robot = self:robotStatus(),    -- "live" | "mock" | "offline" | "fake": the status panel's badge
+		winPoints = Config.winPoints,  -- the score that wins the shift
+		won = (self.state == "Results" or self.state == "Done") and Game.isWin(self.score) or nil, -- set once it's over
 	}
 end
 
 -- The parts of the payload that change during a state; a new value means the HUD needs a push.
 function Game:hudKey()
 	local p = self:payload()
-	local event = p.event and (p.event.name .. ":" .. p.event.phase .. ":" .. p.event.timeLeft) or "-"
 	local tickets = {}
 	for _, t in ipairs(p.tickets) do
 		table.insert(tickets, t.id .. "@" .. t.age)
 	end
-	return string.format("%s|%d|%s|%s|%s|%s|%s|%s|%s", p.robot, p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
-		event, table.concat(p.vanishedCells, ","), table.concat(tickets, ","), tostring(p.activeId),
-		tostring(p.orderUp and p.orderUp.seq))
+	return string.format("%s|%d|%s|%s|%s|%s|%s", p.robot, p.timeLeft, tostring(p.revealPhase), tostring(p.revealTimeLeft),
+		table.concat(tickets, ","), tostring(p.activeId), tostring(p.orderUp and p.orderUp.seq))
 end
 
--- What the robot role may see of a payload: the state, the shift timer, the score, tickets done and the
--- latest ORDER UP. Never the tickets, the target, the reveal phase, events or vanished cells: the operator
+-- What the robot role may see of a payload: the state, the shift timer, the score and the win target,
+-- tickets done, the latest ORDER UP and the WIN / LOSE at the end. Never the tickets, the target or the reveal phase: the operator
 -- plays blind (Views.RobotView).
 function Game.robotPayload(p)
 	return {
@@ -550,6 +611,8 @@ function Game.robotPayload(p)
 		completedCount = p.completedCount,
 		orderUp = p.orderUp and { seq = p.orderUp.seq, points = p.orderUp.points } or nil,
 		robot = p.robot,
+		winPoints = p.winPoints,
+		won = p.won,
 	}
 end
 

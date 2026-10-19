@@ -17,6 +17,11 @@ Client -> server
     place   autonomous mode only: ask the arm to put a block somewhere
     ping    {"id": n} -> pong
 
+The board. Blocks are not tracked frame to frame. A vision model reads the printed grid two
+seconds after the gripper opens, and the resulting board is republished unchanged until the
+next read. So a block in the gripper stays reported in the cell it was last read in, `held`
+is always false, and `blocks_age` of several seconds is normal rather than a fault.
+
 Coordinates. Everything the server sends is in the **sheet frame, millimetres**:
 origin at the printed sheet's top-left corner, +x right, +y down the page (away from the
 arm, which sits at the top), +z up off the paper. The client converts mm to its own units,
@@ -36,13 +41,16 @@ JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_ro
 
 STATE_HZ = 30.0          # state frames per second on the wire
 ARM_HZ = 30.0            # how fast the arm producer reads joints
-VISION_HZ = 10.0         # perception is segmentation + a homography; it is not 30 Hz
+# There is no vision rate any more. The board is read by a vision model when the gripper
+# opens and not on a clock, so blocks change a few times a minute while the arm moves at
+# ARM_HZ. `blocks_age` is therefore normally seconds, not milliseconds, and that is not
+# staleness - see bridge/board.py.
 
 WS_PORT = 8765
 VIEWER_PORT = 8766       # the mock-Roblox viewer is served here
 
 
-def hello(space, source, joints=None, effects=None):
+def hello(space, source, joints=None, effects=None, board=None):
     """Static facts the client needs once, before any state frame."""
     return {
         "t": "hello",
@@ -52,6 +60,9 @@ def hello(space, source, joints=None, effects=None):
         "joints": joints or JOINTS,
         "effects": effects or [],         # effect names this server will accept
         "space": space,                   # sheet geometry, cube size, suggested scale
+        # How the board is read, so a client can say "waiting for the next read" instead of
+        # treating a 20-second-old block list as a broken link.
+        "board": board or {},
     }
 
 

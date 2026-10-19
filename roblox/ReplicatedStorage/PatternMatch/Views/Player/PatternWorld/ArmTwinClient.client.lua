@@ -10,9 +10,11 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local PatternMatch = ReplicatedStorage:WaitForChild("PatternMatch")
+local Config = require(PatternMatch:WaitForChild("Config"))
 local Stick = require(ReplicatedStorage:WaitForChild("ArmTwin"):WaitForChild("Stick"))
-local armPose = ReplicatedStorage:WaitForChild("PatternMatch"):WaitForChild("Remotes"):WaitForChild("ArmPose")
-local cabinet = workspace:WaitForChild("PatternCabinet")
+local armPose = PatternMatch:WaitForChild("Remotes"):WaitForChild("ArmPose")
+local cabinet = workspace:WaitForChild(Config.mapName):WaitForChild("PatternCabinet")
 local twin = cabinet:WaitForChild("LiveBoard"):WaitForChild("ArmTwin")
 twin:WaitForChild("Base")
 

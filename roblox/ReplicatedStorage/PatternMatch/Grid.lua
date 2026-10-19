@@ -82,7 +82,8 @@ function Grid.allCells()
 end
 
 -- Sheet position in mm -> "A1".."C4", or nil if off grid.
--- A position only counts if it sits inside the middle cellTolerance (70%) of its cell.
+-- A position only counts if it sits inside the middle Config.cellTolerance of its cell (1.0: anywhere in
+-- it; a point exactly on a shared edge belongs to the higher row / column).
 -- Config.flipX mirrors columns (1 <-> 4) and Config.flipY mirrors rows (A <-> C).
 function Grid.cellOf(xMm, yMm)
 	local g = Grid.geometry()
@@ -118,9 +119,16 @@ function Grid.isStale(block)
 	return block.visible == false and (tonumber(block.age) or 0) > Config.staleBlockSeconds
 end
 
+-- The bridge's vision board names the printed cell each block sits in (block.cell, PROTOCOL.md); that is
+-- the authoritative position and is used as is. Blocks without one (older producers, the fake generator)
+-- are looked up from x, y.
 function Grid.cellOfBlock(block)
 	if block.held == true or Grid.isStale(block) or Config.ignoreZones[block.zone] then
 		return nil
+	end
+	if type(block.cell) == "string" then
+		local row, col = Grid.parseCell(block.cell)
+		return row and Grid.cellName(row, col) or nil
 	end
 	return Grid.cellOf(block.x, block.y)
 end

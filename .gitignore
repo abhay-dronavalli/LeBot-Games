@@ -26,3 +26,10 @@ venv/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# studio_sync.py transient mirror -- it is a copy of build/ and lebot_obby/ files that
+# the server hands to Studio, not source. The originals are the tracked ones.
+tools/src/
+
+# Studio holds this while a place file is open. Not ours to commit.
+*.rbxlx.lock

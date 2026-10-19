@@ -1,21 +1,26 @@
 -- ReplicatedStorage.PatternMatch.Views.PlayerView
--- Pattern Match for the player role and for spectators (Core.GameRegistry; also the lobby's player view).
+-- Pattern Match for the player role and for spectators while Pattern Match is the active game
+-- (Core.GameRegistry; the arcade mode sets it from Start to Stop).
 -- It is everything the game shows on a player's screen, kept as inert templates in Views.Player and cloned
 -- into PlayerGui on enter, destroyed on exit:
---   PatternHud (ScreenGui + HudClient)              ticket stack, status panel, results, Q / R, tremor shake
+--   PatternHud (ScreenGui + HudClient)              ticket stack, status panel, results, Q / R
 --   PatternModeSelect (ScreenGui + ModeSelectClient) the mode select shot and tiles, for the chooser
 --   PatternWorld (Folder: CabinetFocus, ArmTwinClient) depth of field on the table, the stick arm twin
--- The boards, the Play prompt and the celebration are server-side parts in the room.
+-- The boards and the celebration are server-side parts in the map (Workspace[Config.mapName]).
+-- Nothing here touches Lighting (the arcade owns it): the depth of field is an effect under the camera.
 -- ctx.readOnly (spectators): every copy gets the attribute ReadOnly = true and its scripts send nothing to
 -- the server (no Q / R, arrows or mode picks; the camera follows the player's instead, Core RoleClient).
 -- On exit each copy first gets the attribute Exiting = true and one frame to clean up while its script is
--- still running (camera, tremor shake, the stick arm): a script's own Destroying handler can't be relied on
--- once the script itself is being destroyed. Then the copies go, and anything left over is removed here.
+-- still running (camera, the stick arm): a script's own Destroying handler can't be relied on
+-- once the script itself is being destroyed. Then the copies go, and anything left over is removed here:
+-- the mode select shot flag, the depth of field under the camera, the stick arm.
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Config = require(ReplicatedStorage:WaitForChild("PatternMatch"):WaitForChild("Config"))
 local templates = script.Parent:WaitForChild("Player")
+local FOCUS_NAME = "PatternMatchFocus" -- PatternWorld.CabinetFocus's effect under the camera
 
 local PlayerView = {}
 
@@ -45,8 +50,13 @@ function PlayerView.exit()
 	end
 	table.clear(live)
 	Players.LocalPlayer:SetAttribute("PatternShot", nil)
-	pcall(RunService.UnbindFromRenderStep, RunService, "PatternTremor")
-	local stick = workspace:FindFirstChild("PatternCabinet") and workspace.PatternCabinet:FindFirstChild("ArmStick")
+	local camera = workspace.CurrentCamera
+	local focus = camera and camera:FindFirstChild(FOCUS_NAME)
+	if focus then
+		focus:Destroy()
+	end
+	local map = workspace:FindFirstChild(Config.mapName)
+	local stick = map and map:FindFirstChild("PatternCabinet") and map.PatternCabinet:FindFirstChild("ArmStick")
 	if stick then
 		stick:Destroy()
 	end

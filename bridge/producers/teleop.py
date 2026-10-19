@@ -64,31 +64,32 @@ def clamp_to_ranges(action, ranges):
     return out
 
 
-def _publish(bus, tracker, ws, reading, extra, vision):
+def _publish(bus, ws, reading, extra, vision):
+    """Publish the arm pose, and nothing else.
+
+    Blocks used to be published from here as well, at ARM_HZ, because a block in the gripper
+    was tracked from forward kinematics and the player riding it wanted that at the arm's
+    rate. Nothing is tracked mid-carry any more: the board is read when the jaw opens and the
+    board thread publishes it. So this function has one job, and in `--source follower` or
+    `--source teleop` without `--vision` there are simply no blocks - which is the honest
+    answer when nothing is looking at the sheet.
+    """
     arm = arm_frame(ws, reading, extra=extra)
     bus.publish_arm(arm)
-    if vision:
-        # The camera thread owns association and ageing at VISION_HZ. Here, at the much faster
-        # ARM_HZ, only the held block is advanced - it is rigid in the jaw, so forward
-        # kinematics already knows where it is and waiting for the next camera frame only adds
-        # lag to the one block the player is standing on.
-        bus.publish_blocks(tracker.follow_tip(arm, time.time()))
-    else:
-        # No camera at all: the full tracker is the only thing running, and with no detections
-        # it still carries a held block along the tip.
-        bus.publish_blocks(tracker.update([], arm, time.time()))
     return arm
 
 
-def run_passive(bus, tracker, inbox, effects, stop, hz=30.0, vision=False):
+def run_passive(bus, board, inbox, effects, stop, hz=30.0, vision=False,
+                board_poll=0.0):
     """Read the follower with torque off. Move the arm by hand; nothing is commanded."""
     ws = Workspace()
     follower = SO101Follower(SO101FollowerConfig(port=FOLLOWER_PORT, id="my_follower"))
 
-    vision_thread = None
+    board_thread = None
     if vision:
-        from . import vision as vision_mod
-        vision_thread = vision_mod.start(bus, tracker, stop)
+        from . import board as board_producer
+        board_thread = board_producer.start(bus, board, stop,
+                                            poll_s=board_poll or None)
 
     follower.bus.connect()
     print("  passive: follower connected")
@@ -106,7 +107,7 @@ def run_passive(bus, tracker, inbox, effects, stop, hz=30.0, vision=False):
                 obs = follower.get_observation()
                 reading = reading_from_action(obs)
                 if reading:
-                    _publish(bus, tracker, ws, reading, {"mode": "passive", "torque": False},
+                    _publish(bus, ws, reading, {"mode": "passive", "torque": False},
                              vision)
                 fails = 0
             except Exception as e:
@@ -128,11 +129,12 @@ def run_passive(bus, tracker, inbox, effects, stop, hz=30.0, vision=False):
             print("  passive: disconnected.")
         except Exception as e:
             print(f"  passive: disconnect failed ({e})")
-        if vision_thread:
-            vision_thread.join(timeout=2.0)
+        if board_thread:
+            board_thread.join(timeout=2.0)
 
 
-def run(bus, tracker, inbox, effects, stop, hz=30.0, vision=False, actual=False):
+def run(bus, board, inbox, effects, stop, hz=30.0, vision=False, actual=False,
+        board_poll=0.0):
     """Leader drives follower. Effects bend the command. Torque goes on."""
     ws = Workspace()
     ranges = calibrated_ranges()
@@ -143,10 +145,11 @@ def run(bus, tracker, inbox, effects, stop, hz=30.0, vision=False, actual=False)
         port=FOLLOWER_PORT, id="my_follower", max_relative_target=MAX_STEP_DEG))
     leader = SO101Leader(SO101LeaderConfig(port=LEADER_PORT, id="my_leader"))
 
-    vision_thread = None
+    board_thread = None
     if vision:
-        from . import vision as vision_mod
-        vision_thread = vision_mod.start(bus, tracker, stop)
+        from . import board as board_producer
+        board_thread = board_producer.start(bus, board, stop,
+                                            poll_s=board_poll or None)
 
     leader.connect(calibrate=False)
     follower.bus.connect()
@@ -213,7 +216,7 @@ def run(bus, tracker, inbox, effects, stop, hz=30.0, vision=False, actual=False)
                         extra["actual"] = True
 
                 if reading:
-                    _publish(bus, tracker, ws, reading, extra, vision)
+                    _publish(bus, ws, reading, extra, vision)
                 fails = 0
             except Exception as e:
                 fails += 1
@@ -239,5 +242,5 @@ def run(bus, tracker, inbox, effects, stop, hz=30.0, vision=False, actual=False)
             print("  teleop: follower disconnected, torque off.")
         except Exception as e:
             print(f"  teleop: clean disconnect failed ({e}); unplug the 12V jack to drop torque.")
-        if vision_thread:
-            vision_thread.join(timeout=2.0)
+        if board_thread:
+            board_thread.join(timeout=2.0)
