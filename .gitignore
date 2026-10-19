@@ -4,6 +4,11 @@
 robot/outputs/*
 !robot/outputs/color_memory.json
 
+# Camera exposure and white balance, written by robot/scripts/tools/camera_tune.py.
+# Unlike the fitted calibration above, this one does not survive a move at all: it is
+# whatever the light in this room is today. Re-run the tuner where the rig actually is.
+robot/calibration/camera_settings.json
+
 __pycache__/
 *.pyc
 *.bak

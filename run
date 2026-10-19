@@ -5,6 +5,7 @@
 #   ./run follower             real arm, torque OFF, move it by hand
 #   ./run follower --vision    ...and the real overhead camera
 #   ./run teleop               leader drives the real follower
+#   ./run camera               tune exposure/white balance until the block colours separate
 #   ./run test                 the checks that need no hardware
 #   ./run stop                 free the ports and exit
 #
@@ -45,11 +46,21 @@ case "$mode" in
     echo "== end to end (starts a mock server, then tears it down) =="
     free_ports
     "$PY" -m bridge.main --source mock >/dev/null 2>&1 &
-    sleep 5
+    # Wait for the port to actually accept, rather than guessing at a sleep: on a cold start
+    # the import of cv2 and lerobot can take well over five seconds, and a fixed wait turns
+    # that into a bogus "could not connect" failure.
+    for _ in $(seq 1 60); do
+      netstat -ano 2>/dev/null | grep -q "LISTENING.*:8765" && break
+      sleep 0.5
+    done
     "$PY" -m bridge.test_link
     status=$?
     free_ports
     exit $status
+    ;;
+  camera)
+    # Re-run this after every move: the colour separation depends on the room's light.
+    exec "$PY" -m robot.scripts.tools.camera_tune "$@"
     ;;
   mock)
     free_ports

@@ -13,7 +13,7 @@
 --   StateStore.source()    -> "pending" (waiting for the hello), "bridge" or "fake"
 --   StateStore.status()    -> "live" (bridge, any source but mock), "mock" (bridge, source mock),
 --                             "offline" (see linkStatus, or still pending) or "fake" (fake generator)
---   StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge) -> "live" | "mock" | "offline",
+--   StateStore.linkStatus(helloSource, sinceFrame, armAge, boardState) -> "live" | "mock" | "offline",
 --                             the bridge part of status() as a pure function; the server also keeps
 --                             status() in the "RobotLink" attribute of ReplicatedStorage.Core, for any client
 --   StateStore.hello()    -> the bridge's hello frame, or nil

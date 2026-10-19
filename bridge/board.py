@@ -100,10 +100,34 @@ def cell_of(x, y):
     return None
 
 
+# Words the model reaches for that mean one of the kit's six. The prompt asks it to name
+# colours from the kit and allows "another plain lowercase colour word" when a cube matches
+# none - which is how "cyan" and "sky blue" get through for cubes that *are* kit colours.
+# Nothing downstream maps those: Roblox's Config.perceptionColors knows the six names only, so
+# an unmapped word is drawn grey and never matches. Snapping here keeps that fallback for
+# genuinely foreign colours while not letting a synonym cost a match.
+#
+# Only unambiguous synonyms belong here. "blue" is deliberately absent: on this kit it could
+# be light blue or teal, and guessing wrong is worse than reporting a colour nobody matches.
+COLOR_SYNONYMS = {
+    "cyan": "teal", "turquoise": "teal", "aqua": "teal", "teal blue": "teal",
+    "sky blue": "light blue", "skyblue": "light blue", "pale blue": "light blue",
+    "lightblue": "light blue", "baby blue": "light blue",
+    "gold": "yellow", "golden": "yellow", "amber": "yellow", "mustard": "yellow",
+    "tangerine": "orange", "peach": "orange",
+    "violet": "purple", "magenta": "purple", "lilac": "purple", "lavender": "purple",
+    "crimson": "red", "scarlet": "red", "maroon": "red",
+    "gray": "grey",
+}
+
+
 def norm_color(name):
-    """"Light_Blue" -> "light blue". Empty, or any way of saying "I cannot tell", -> grey."""
+    """"Light_Blue" -> "light blue", "cyan" -> "teal". Empty, or any way of saying "I cannot
+    tell", -> grey. A colour that is genuinely none of the kit's is passed through as-is."""
     c = re.sub(r"[\s_]+", " ", str(name or "")).strip().lower()
-    return UNKNOWN_COLOR if (not c or c in UNNAMED) else c
+    if not c or c in UNNAMED:
+        return UNKNOWN_COLOR
+    return COLOR_SYNONYMS.get(c, c)
 
 
 # ---- when to ask ------------------------------------------------------------------
@@ -340,7 +364,12 @@ class Board:
 # ---- the model --------------------------------------------------------------------
 
 API = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "gpt-4o"        # override with OPENAI_MODEL; any vision model will do
+# Override with OPENAI_MODEL. Not just "any vision model will do": on this rig gpt-4o read a
+# cube sitting in A4 as B4 three times out of three - the right colour in the wrong row, which
+# is the failure that looks like a calibration problem and is not. gpt-5.1 read A4 three times
+# out of three, no slower (~1.6 s) and on slightly fewer tokens. Re-check with
+# `robot/scripts/tests/board_check.py` before changing this.
+DEFAULT_MODEL = "gpt-5.1"
 TIMEOUT_S = 40
 MAX_WIDTH = 1280                # the printed labels stay legible; a 1920 frame is wasted tokens
 
@@ -389,6 +418,40 @@ PROMPT = (
     'the A1 example is one red cube on the paper, and the B2 example is a teal cube sitting '
     'on top of another cube whose colour is hidden. Reply {"cells": []} if the grid is empty.'
 )
+
+
+# The same question, asked when the sheet's tags have already settled which cells are occupied.
+# Position is then not up for discussion - it is arithmetic on a 1.3 mm homography - so the
+# model is asked only what it is good at. See `robot/perception/gridmask.py` for why the model
+# cannot reliably answer the position question itself (short version: the cube covers the label
+# that names its own cell).
+def geometry_prompt(found):
+    listed = ", ".join(f.cell for f in found)
+    return (
+        "This is an overhead photo of foam cubes on a printed grid, cropped to the sheet.\n\n"
+        f"The cubes have ALREADY been located. There are {len(found)} of them, in these cells: "
+        f"{listed}. Each one is outlined in green and labelled with its cell name in green "
+        "text just outside the outline. This is measured, not guessed - do not second-guess "
+        "it, do not move a cube to a different cell, and do not add or remove cells. Your job "
+        "is only to say what is inside each outline.\n\n"
+        "For each listed cell, report two things:\n"
+        f"  1. the cube's colour, named from the ones this kit has: {', '.join(BLOCK_COLORS)}. "
+        "Only if a cube clearly matches none of them, use another plain lowercase colour word. "
+        "Judge its main colour, ignoring glare and shadow.\n"
+        f"  2. whether the outline holds ONE cube or a stack of exactly {MAX_STACK}, one "
+        f"squarely on top of the other. Never report more than {MAX_STACK}. You are looking "
+        "from above, so a stack is not wider - it is TALLER: it looks slightly larger than a "
+        "single cube elsewhere in the photo, shows a thicker band of shaded side faces around "
+        "its top, casts a longer shadow, and often has a visible horizontal seam. A single "
+        "cube looks flat against the paper with almost no visible sides. Compare the cubes "
+        "against each other rather than judging one alone.\n\n"
+        "If a cell holds a stack of two and the lower cube's colour is hidden by the one on "
+        "top - which is normal - give the lower colour as \"unknown\" rather than leaving it "
+        "out. Getting the count right matters more than getting that colour right.\n\n"
+        'Reply with JSON only, shaped {"cells": [{"cell": "A1", "stack": ["red"]}, '
+        '{"cell": "B2", "stack": ["unknown", "teal"]}]}, where "stack" runs bottom to top. '
+        f"Include every one of the {len(found)} listed cells and nothing else."
+    )
 
 
 class BoardUnavailable(RuntimeError):
@@ -504,6 +567,96 @@ def _raise_for_http(r):
     raise BoardUnavailable(f"HTTP {r.status_code}: {msg}", "network")
 
 
+# ---- locating the board before asking about it --------------------------------------
+
+# How much of the answer comes from the model. Set with BOARD_VISION.
+#
+#   ai      the model decides everything - which cells hold cubes, what colour, how many high.
+#           The sheet's tags are still used, but only to crop the photo to the board and
+#           redraw the grid labels where a cube cannot cover them. Nothing is overridden.
+#   assist  the tags decide which cells are occupied and the model is asked only for colour
+#           and stack height. Measured more accurate (see `robot/perception/gridmask.py`) and
+#           kept for when position matters more than having one system answer the question.
+#   raw     the whole 1920-wide frame, no tags, no crop. The last resort if the overlay ever
+#           confuses the model more than it helps.
+#
+# The default is `ai`, which is a choice about who owns the answer rather than a claim that it
+# reads the board better. On 2026-10-18, with a cube sitting in B1, `ai` answered A1 four times
+# out of four and `assist` answered B1: the model follows the cube's top face, which leans a
+# whole row away from its base under a camera 363 mm up. `robot/scripts/tests/board_check.py`
+# is how to re-measure that here before trusting either.
+MODES = ("ai", "assist", "raw")
+DEFAULT_MODE = "ai"
+
+
+def vision_mode():
+    mode = os.environ.get("BOARD_VISION", DEFAULT_MODE).strip().lower()
+    return mode if mode in MODES else DEFAULT_MODE
+
+
+_locator_cache = "unset"        # not None: None is a real, remembered "unavailable"
+
+
+def _locator():
+    """The sheet localiser, built once. None if this install cannot do geometry at all."""
+    global _locator_cache
+    if _locator_cache == "unset":
+        try:
+            from robot.perception.sheet import SheetLocalizer
+            _locator_cache = SheetLocalizer()
+        except Exception as e:                  # noqa: BLE001 - no cv2.aruco, no spec, no ROI
+            print(f"  (board geometry unavailable, reading printed labels instead: {e})")
+            _locator_cache = None
+    return _locator_cache
+
+
+def locate_sheet(frame_bgr):
+    """The sheet's pose, or None when the tags cannot be found. Never raises."""
+    loc = _locator()
+    if loc is None:
+        return None
+    try:
+        return loc.locate(frame_bgr)
+    except Exception as e:                      # noqa: BLE001 - never lose a read over this
+        print(f"  (could not locate the sheet, sending the raw frame instead: {e})")
+        return None
+
+
+def locate_cubes(frame_bgr):
+    """`assist` mode only: the sheet plus which cells hold cubes. -> (pose, [Found])."""
+    pose = locate_sheet(frame_bgr)
+    if pose is None:
+        return None, []
+    try:
+        from robot.perception import gridmask
+        centres = {c: cell_centre(c) for c in cells()}
+        return pose, gridmask.occupied_cells(frame_bgr, pose, centres, CELL_MM)
+    except Exception as e:                      # noqa: BLE001
+        print(f"  (could not mask the cubes, asking the model instead: {e})")
+        return None, []
+
+
+def reconcile(readings, found):
+    """Keep the model's colours and stack counts; keep geometry's cells.
+
+    The model is asked about exactly the cells geometry found, so the two usually agree. When
+    they do not, geometry wins on which cells are occupied, because that is the question it
+    answers to 1.3 mm and the model answers by guessing at a label it cannot see. A cell the
+    model invented is dropped; a cell it skipped is kept with its colour unknown, which
+    `Board._identify` then recovers from what that block was last seen to be.
+    """
+    want = {f.cell for f in found}
+    kept, extra = [], []
+    for r in readings:
+        cell = norm_cell(r.get("cell"))
+        (kept if cell in want else extra).append(r)
+    seen = {norm_cell(r.get("cell")) for r in kept}
+    missing = [c for c in (f.cell for f in found) if c not in seen]
+    for cell in missing:
+        kept.append({"cell": cell, "color": UNKNOWN_COLOR, "level": 0})
+    return kept, [norm_cell(r.get("cell")) or r.get("cell") for r in extra], missing
+
+
 def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
     """One model call. Returns [{"cell", "color", "level"}]; raises BoardUnavailable.
 
@@ -520,16 +673,54 @@ def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
         raise BoardUnavailable("the 'requests' package isn't installed", "network") from None
 
     model = model or model_name()
+    t = time.perf_counter()
+
+    mode = vision_mode()
+    image, prompt, geometry, found = frame_bgr, PROMPT, None, []
+
+    if mode == "ai":
+        # The model owns the whole answer. The tags only make the photo easier to read: crop
+        # to the board, and put each cell's label in its corner where a cube cannot sit on it.
+        pose = locate_sheet(frame_bgr)
+        if pose is not None:
+            from robot.perception import gridmask
+            image = gridmask.overlay(frame_bgr, pose, {c: cell_centre(c) for c in cells()},
+                                     CELL_MM)
+            geometry = {"tags": pose.tag_ids, "fit_mm": round(pose.fit_error_mm, 2),
+                        "mode": "ai", "cells": None}
+
+    elif mode == "assist":
+        pose, found = locate_cubes(frame_bgr)
+        if pose is not None:
+            from robot.perception import gridmask
+            image = gridmask.annotate(frame_bgr, pose, {c: cell_centre(c) for c in cells()},
+                                      CELL_MM, found)
+            prompt = geometry_prompt(found)
+            geometry = {"tags": pose.tag_ids, "fit_mm": round(pose.fit_error_mm, 2),
+                        "mode": "assist", "cells": [f.cell for f in found]}
+        if pose is not None and not found:
+            # Nothing on the sheet. The model has nothing to add and a call would only invent
+            # something; the tags already prove we are looking at the board and it is empty.
+            #
+            # The risk this takes is a silent one: if the mask ever stopped seeing cubes - a
+            # new room washing the colour out, say - the board would report empty rather than
+            # report trouble, and an empty board is a legitimate answer. The coverage gap is
+            # wide enough (0.97 against 0.24 on this rig) that this should not creep up, but
+            # it is what `robot/scripts/tests/board_check.py` is for after the rig moves, and
+            # BOARD_VISION=ai is the way out while it is sorted.
+            read_board.last = {"model": None, "seconds": round(time.perf_counter() - t, 2),
+                               "tokens": 0, "raw": None, "geometry": geometry}
+            return []
+
     body = {
         "model": model,
         "response_format": {"type": "json_object"},
         "temperature": 0,
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": PROMPT},
-            {"type": "image_url", "image_url": {"url": encode(frame_bgr), "detail": "high"}},
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": encode(image), "detail": "high"}},
         ]}],
     }
-    t = time.perf_counter()
     try:
         r = requests.post(API, headers={"Authorization": f"Bearer {key}"},
                           json=body, timeout=timeout_s)
@@ -542,7 +733,14 @@ def read_board(frame_bgr, key=None, model=None, timeout_s=TIMEOUT_S):
     except (KeyError, IndexError, TypeError, ValueError) as e:
         raise BoardUnavailable(f"unreadable reply: {e}", "reply") from None
     out = parse(reply)
+    if mode == "assist" and geometry is not None:
+        # Only `assist` overrides the model. In `ai` the reply is the answer, right or wrong.
+        out, invented, skipped = reconcile(out, found)
+        geometry.update(invented=invented, skipped=skipped)
+        if invented or skipped:
+            print(f"  (board: the model disagreed with the sheet - invented {invented}, "
+                  f"skipped {skipped}; the sheet wins on position)")
     usage = payload.get("usage") or {}
     read_board.last = {"model": model, "seconds": round(time.perf_counter() - t, 2),
-                       "tokens": usage.get("total_tokens"), "raw": reply}
+                       "tokens": usage.get("total_tokens"), "raw": reply, "geometry": geometry}
     return out

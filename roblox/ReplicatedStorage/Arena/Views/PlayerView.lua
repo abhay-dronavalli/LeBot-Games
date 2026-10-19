@@ -321,6 +321,12 @@ function PlayerView.enter(ctx: any)
 		if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then
 			return
 		end
+		-- Alt+1..4 is the arcade's debug game switcher (ArcadeClient). Without this guard the
+		-- same press also fires an ability, so switching out of a round throws a slot on the
+		-- way past.
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt) then
+			return
+		end
 		local n = input.KeyCode.Value - Enum.KeyCode.One.Value + 1
 		if n >= 1 and n <= ArenaConfig.ABILITY_SLOTS then
 			fire(n)

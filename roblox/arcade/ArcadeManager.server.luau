@@ -433,6 +433,34 @@ Players.PlayerRemoving:Connect(function(player)
 	end
 end)
 
+------------------------------------------------------------------ read the board now
+
+-- V in any client asks the robot laptop to read the board right now. The board is normally
+-- read two seconds after the gripper opens, which covers every change the *arm* makes - but a
+-- cube moved by hand never opens the jaw, so the board keeps reporting where things used to
+-- be until the next grab. This is the way out of that, and unlike the switcher it is not a
+-- debug key: it is needed in a real demo, so it works outside Studio too.
+--
+-- Each read is a model call that costs money and takes a few seconds, so it is rate limited
+-- here rather than trusting the client not to hold the key down.
+local readBoard = Instance.new("RemoteEvent")
+readBoard.Name = "ReadBoard"
+readBoard.Parent = arcadeState
+
+local READ_COOLDOWN = 4
+local lastRead = -math.huge
+
+readBoard.OnServerEvent:Connect(function(player)
+	if os.clock() - lastRead < READ_COOLDOWN then
+		return
+	end
+	lastRead = os.clock()
+	local sent = Bridge.send({ t = "read_board" })
+	print(string.format("[Arcade] %s asked for a board read: %s", player.Name,
+		sent and "sent" or "no robot link"))
+	fxRemote:FireAllClients("boardread", sent)
+end)
+
 ------------------------------------------------------------------ debug: jump between games
 
 -- Alt+1..4 in any client (ArcadeClient) jumps straight to that bay's game, ending whatever is
