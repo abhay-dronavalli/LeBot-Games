@@ -76,14 +76,21 @@ function StateStore.hello()
 	return helloFrame
 end
 
--- The bridge link: "offline" when there is no frame yet (sinceFrame nil), none for
--- Config.bridgeStaleSeconds, blocks_age over that, or either age null (the server sends null until
--- that part has published once: teleop without --vision never publishes blocks). Otherwise "mock" for
--- hello source "mock" and "live" for any other source (teleop, follower, auto, anything new, or none).
-function StateStore.linkStatus(helloSource, sinceFrame, blocksAge, armAge)
+-- Board reader states (the frame's notes.board.state, PROTOCOL.md) that mean the board has stopped
+-- updating until a human fixes it. rate_limit and error retry on their own.
+StateStore.BROKEN_BOARD = { no_credits = true, no_key = true, auth = true }
+
+-- The bridge link: "offline" when there is no frame yet (sinceFrame nil) or none for
+-- Config.bridgeStaleSeconds, when arm_age is null or over that, or when the board reader is broken
+-- (boardState in BROKEN_BOARD). blocks_age is NOT a staleness signal: the board is read by a vision
+-- model 2 s after each gripper release and republished unchanged between reads, so 30 s is healthy.
+-- Otherwise "mock" for hello source "mock" and "live" for any other source (teleop, follower, auto,
+-- anything new, or none).
+function StateStore.linkStatus(helloSource, sinceFrame, armAge, boardState)
 	local stale = Config.bridgeStaleSeconds
-	blocksAge, armAge = tonumber(blocksAge), tonumber(armAge)
-	if type(sinceFrame) ~= "number" or sinceFrame > stale or blocksAge == nil or blocksAge > stale or armAge == nil then
+	armAge = tonumber(armAge)
+	if type(sinceFrame) ~= "number" or sinceFrame > stale or armAge == nil or armAge > stale
+		or StateStore.BROKEN_BOARD[boardState] then
 		return "offline"
 	end
 	return helloSource == "mock" and "mock" or "live"
@@ -97,7 +104,7 @@ function StateStore.status()
 		return "offline"
 	end
 	return StateStore.linkStatus(helloFrame and helloFrame.source, lastFrameAt and os.clock() - lastFrameAt,
-		state.blocks_age, state.arm_age)
+		state.arm_age, state.board and state.board.state)
 end
 
 function StateStore.sendEvent(name, intensity, duration)
@@ -119,11 +126,16 @@ local unknownColors = {} -- protocol color names with no Config.colors entry, wa
 
 -- A perception color name as a Config.colors name, through Config.perceptionColors ("light blue" ->
 -- "skyblue"). Any other name is a misread (our kit has only the six): it is kept as sent, so the LiveBoard
--- draws it gray and Target.compare counts it as a wrong block (Target.isMisread).
+-- draws it gray and Target.compare counts it as a wrong block (Target.isMisread). "grey" is expected (the
+-- lower cube of a stack, whose colour the camera can't see; Target.compare lets it match), so it isn't
+-- warned about.
 function StateStore.colorName(name)
 	local mapped = Config.perceptionColors[name]
 	if mapped then
 		return mapped
+	end
+	if name == "grey" then
+		return name
 	end
 	if not unknownColors[name] then
 		unknownColors[name] = true
@@ -136,9 +148,8 @@ end
 function StateStore.fromFrame(frame)
 	local blocks = {}
 	for _, b in ipairs(frame.blocks or {}) do
-		local block = table.clone(b)
-		-- A held block reports "grey" (PROTOCOL.md). It never counts, so it isn't mapped or warned about.
-		block.color = b.held and b.color or StateStore.colorName(b.color)
+		local block = table.clone(b) -- cell (the printed cell the vision model read) comes along as is
+		block.color = StateStore.colorName(b.color)
 		table.insert(blocks, block)
 	end
 	local arm = frame.arm
@@ -148,6 +159,7 @@ function StateStore.fromFrame(frame)
 	return {
 		t = "state", seq = frame.seq, ts = frame.ts,
 		arm = arm, arm_age = frame.arm_age, blocks = blocks, blocks_age = frame.blocks_age, effects = frame.effects,
+		board = type(frame.notes) == "table" and type(frame.notes.board) == "table" and frame.notes.board or nil,
 	}
 end
 
