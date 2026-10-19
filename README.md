@@ -27,7 +27,7 @@ The lobby is a robotics workshop with four game bays:
 | Robo Obby | The arm places blocks so a player can cross a course |
 | Sewer Surge | Water rises and players climb while the arm builds the way up |
 | Pattern Match | Orders arrive as tickets and the arm builds the pattern before time runs out |
-| Dragon Arena | The arm is a dragon and up to 12 players dodge it. Locked until you have 3 wins |
+| Dragon Arena | The arm is a dragon and up to 12 players dodge it. |
 
 ## What you need
 
