@@ -1,5 +1,31 @@
 local Config = {}
 
+-- TWO MODES, and exactly one of them owns the crates at a time (robot-link.md).
+--
+--   "solo"  one player doing both jobs. You place blocks on the on-screen 4x3 grid and the
+--           Sky Arm carries them in, so you are the operator as well as the runner. Nothing
+--           is connected and nothing is scripted.
+--   "live"  the real SO-101 on the other end of the socket. Your hands are the only thing
+--           that places a block.
+--
+-- There is deliberately no third "play back a recording" mode. A feed that places blocks by
+-- itself is indistinguishable from the game doing it, which is alarming and was.
+Config.FeedMode = "solo"
+
+-- The robot laptop. localhost only when the Python process is on this machine.
+Config.BridgeUrl = "ws://127.0.0.1:8765"
+-- Which bay the mat currently maps to. Hardcoded until ActiveBayTracker picks it from where
+-- player 1 is standing -- that module is what makes one physical mat serve nine bays.
+Config.LiveBay = 1
+
+-- How the real arm is drawn. "gantry" is the Sky Arm proper: it hangs from the ceiling rails,
+-- slides along the roof between bays, and is sized to the room. The real arm drives it by the
+-- tip, so it reaches where the real arm reaches.
+-- "mirror" is the literal stick-figure mirror -- joint for joint, true SO-101 proportions. It
+-- is honest but it is a 43 stud tower that stands at the door and pokes through the roof,
+-- which needs WallHeight ~50 and BayGap >= 12 to house (robot-link.md section 4).
+Config.ArmStyle = "gantry"
+
 Config.DebugMode = true
 
 -- Grid / world layout (Section 7)
@@ -10,7 +36,10 @@ Config.BayGap = 6          -- catwalk studs between bays
 Config.BayWidth = Config.CellSize * Config.BayCols   -- 32
 Config.BayDepth = Config.CellSize * Config.BayRows   -- 24
 Config.BayPitch = Config.BayDepth + Config.BayGap    -- 30, Z distance from one bay's start to the next
-Config.NumBays = 9
+-- SCOPE: four obstacles -- Saw, Void, LaserWalk, DarkZone. BayData keeps the rest past this
+-- index so nothing builds them. Raise this and re-run build/scope_course.lua to bring the
+-- parked bays and their geometry back.
+Config.NumBays = 4
 
 -- Transport (Section 7, 12)
 Config.PollRateHz = 3.5
@@ -43,7 +72,9 @@ Config.CrateRemoveDelay = 0.4
 -- queue serializes them, so this bay's three placements cost ~17s before the player has climbed
 -- anything. 30 played too fast once the no-place band went in, since stalling is no longer
 -- available to buy that time back.
-Config.SawWallSeconds = 60
+-- 60 -> 75: the wall is no longer vaultable, so every crossing has to be earned by
+-- actually solving it, and the extra 15 s is the room that costs.
+Config.SawWallSeconds = 75
 Config.SawWallBrakeEnabled = true
 
 -- You cannot drop a crate in front of live blades to stall the wall: a cell within this many
@@ -59,10 +90,34 @@ Config.SawWallStallSeconds = 10
 
 Config.SawLeverHoldSeconds = 1 -- how long E is held to throw a lever
 
+-- Bay 2 void -- the shaft is presentation plus a kill plane; the obstacle is the gap itself,
+-- and that is sized by BayData[2].coverRows, not from here. Worth writing down why no tunable
+-- is needed for the width: rows 0-1 span 16 studs and a running jump covers 8.67 (stock
+-- JumpHeight 7.2, WalkSpeed 16, Gravity 196.2), so one row of void is already unjumpable and
+-- two is well clear of it.
+Config.VoidShaftDepth = 48    -- studs from floor level down to the kill plane
+Config.VoidLightSpacing = 14  -- spacing of the red warning lights going down the shaft
+
+-- Bay 3 laser walk -- one crate walked ahead of the player across a lethal grid.
+--
+-- The cooldown is counted from the moment the crate SEATS in its new cell, not from when it
+-- was lifted, which is what lets this number be about the player's hop instead of the arm's
+-- speed: one reachAndPlace is ~5.5s and a move is a remove plus a place, so a cooldown started
+-- at lift would be gone before the crate even landed.
+-- 6 was not enough to move a real cube and then walk the step. Swapping a block is a physical
+-- action on a physical table, and the clock does not start until the NEW tile is live.
+Config.LaserCooldownSeconds = 10    -- how long the vacated cell stays safe once the crate lands
+Config.LaserRearmWarnSeconds = 2    -- the pad pulses fast, and counts in tenths, for this long
+Config.LaserRouteMin = 6            -- steps in a generated route, inclusive
+Config.LaserRouteMax = 8
+
 -- Full playspace shell (Section 3.1, 7)
 Config.EntranceBuffer = 10   -- buffer studs before Bay 1, holds the spawn
 Config.FinaleBuffer = 10     -- buffer studs after Bay 9, holds the finale area
-Config.WallHeight = 28   -- tall enough that the gantry doesn't feel cramped overhead
+-- Raised from 28. Purely the room: nothing reads WallHeight at runtime, it records what the
+-- baked geometry is -- so changing it means re-running build/fit_shell.lua, which is what
+-- makes the shell follow it again.
+Config.WallHeight = 48
 Config.GantryHeight = 18 -- where the SkyArm rails/trolley ride; kept well below the ceiling
 -- so there's open air above the arm. Deliberately separate from WallHeight: room height and
 -- gantry height are different concerns, and the arm's reach math depends only on this one.
